@@ -1,0 +1,39 @@
+{
+  "name": "agent-trellis",
+  "version": "0.0.0",
+  "description": "A single source of capability for every coding agent — skills, MCP, subagents, memory, and secret policy, adapted natively into Claude Code, Codex, Kiro, and pi.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "trellis": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paul-leo/Trellis.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "kiro",
+    "agent-skills",
+    "agents.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

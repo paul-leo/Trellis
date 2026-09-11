@@ -1,0 +1,37 @@
+# .trellis/mcp/servers.yaml — canonical MCP server definitions.
+#
+# Rules (see docs/architecture.md and docs/research.md §"Secrets"):
+#   - `env` values are variable NAMES only. Never a literal secret.
+#   - Real values come from whatever already populates process env
+#     (a plain `.env`-style file, 1Password's `op run`, etc.) — Trellis
+#     does not store or transport secret values itself.
+#   - A server name that a host environment is known to inject at runtime
+#     (see `known_host_injected` below) must not be redefined here — on
+#     Codex this causes the entire process to fail to start, not just that
+#     server. See docs/research.md §"Codex — three hard constraints".
+
+servers:
+  tanka:
+    transport: stdio
+    command: tanka-mcp
+    env: [TANKA_EMAIL, TANKA_ENV]
+
+  gitlab:
+    transport: stdio
+    command: npx
+    args: ["-y", "@zereight/mcp-gitlab"]
+    env: [GITLAB_PERSONAL_ACCESS_TOKEN, GITLAB_API_URL]
+
+  figma:
+    transport: http
+    url: "https://mcp.figma.com/mcp"
+    auth: oauth
+
+# Names a known host (e.g. mirasim) may inject into an agent process at
+# runtime, independent of this file. Trellis's collision check refuses to
+# generate a local definition under any of these names.
+known_host_injected:
+  - atlassian
+  - sentry
+  - memory
+  - mirasim
