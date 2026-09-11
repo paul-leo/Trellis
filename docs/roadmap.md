@@ -4,6 +4,16 @@ Each phase must ship with a `trellis doctor` check that verifies its own
 claim — no phase is "done" on the strength of a config file existing, only
 on the strength of a passing verification against the real running agent.
 
+See [`implementation-plan.md`](implementation-plan.md) for P1–P4 broken down
+to file/function level.
+
+**P0 has moved to OpenSpec** (`openspec/changes/trellis-doctor-p0/`) as the
+authoritative proposal/design/specs/tasks — that's the format future phases
+use going forward, one `openspec/changes/<phase>/` directory per phase, run
+through `/opsx:propose` → `/opsx:apply` → `/opsx:archive`. `implementation-
+plan.md`'s P0 section is kept only as a historical note; don't edit it
+further once a phase has its own OpenSpec change.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | `trellis doctor` — read-only scan of all four agents' current skills/MCP/instructions state, report drift and duplicates | nothing |
