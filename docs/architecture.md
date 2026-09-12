@@ -138,7 +138,17 @@ nothing else defined locally for it to collide with.
 `~/.kiro/steering/CLAUDE.md` symlink, `~/.kiro/settings/mcp.json` patched
 like Claude's. Same hub-mode simplification applies.
 
-**pi** — instructions and skills need no adapter (native discovery). MCP
+**pi** — same symlink shape as Claude Code/Kiro after all: `~/.pi/agent/skills`
+symlink, instructions symlinked to whichever of `AGENTS.override.md` /
+`AGENTS.md` / `CLAUDE.md` pi checks first (`~/.pi/agent/`, confirmed by
+direct source read — see `openspec/specs/agent-state-probing/spec.md`'s pi
+scenario). Pi *reads* these natively without any Trellis-specific parsing,
+but the files still have to physically exist at that path — nothing
+populates `~/.pi/agent/skills` on its own. (This corrects an earlier,
+pre-P0 assumption that pi needed "no adapter" for skills/instructions;
+that was written before pi's actual global discovery directory was
+confirmed, when it wasn't yet known whether canonical skills would ever
+reach it without one.) MCP is the one place pi is genuinely different: it
 needs a real bridge either way, but which shape depends on `mcp.hub`:
 without it, the bridge extension opens N `@modelcontextprotocol/sdk` stdio
 clients (one per server) and registers each one's tools through pi's

@@ -160,9 +160,15 @@ adds the *write* path.
   no workspace merge; don't build toward the `.agents Protocol` draft's
   global+workspace precedence model until that's an explicit decision, not
   a default carried over from the draft.
-- `src/adapters/claude-code.ts`, `src/adapters/codex.ts`, `src/adapters/kiro.ts`
-  each implement `TrellisAdapter` (`src/core/adapter.ts`) for skills +
-  instructions only — MCP is P2, deliberately kept out of this phase's scope.
+- `src/adapters/claude-code.ts`, `src/adapters/codex.ts`, `src/adapters/kiro.ts`,
+  `src/adapters/pi.ts` each implement `TrellisAdapter` (`src/core/adapter.ts`)
+  for skills + instructions only — MCP is P2/P4, deliberately kept out of
+  this phase's scope. Pi's adapter is the same symlink shape as the other
+  three (`~/.pi/agent/skills`, `~/.pi/agent/AGENTS.md` — confirmed real,
+  persistent paths per design.md D5 in the archived P0 change; see
+  docs/architecture.md's corrected pi adapter notes) — P4 is only pi's MCP
+  bridge, not its skills/instructions, which need nothing more than what
+  every other agent here needs.
   `plan()` filters skills/subagent profiles through `isInScope` before
   producing any plan item — a skill scoped away from that adapter's `id`
   must produce zero plan items for it, not a plan item that apply() later
@@ -263,28 +269,28 @@ MCP entry regardless of how many servers are defined.
   literal-value regex) and a literal token value embedded directly in a
   generated config (the regex case).
 
-## P4 — pi bridge extension
+## P4 — pi MCP bridge extension
 
-Design is gated on P0's pi skill-path investigation (§0.2). Two candidate
-shapes depending on what that finds:
+**MCP only** — pi's skills/instructions adapter is P1's `src/adapters/pi.ts`
+(same symlink shape as every other agent, see P1 above); P4 is exclusively
+the MCP bridge, since pi has no native MCP client at all (docs/research.md).
 
-- **If pi has a real discovery directory**: a pi extension package,
-  installed once, that on startup reads `.trellis/mcp/servers.yaml`. If
-  `mcp.hub` is unset, it opens an `@modelcontextprotocol/sdk`
-  `StdioClientTransport` per server and calls pi's `registerTool` for each
-  tool the server reports; if `mcp.hub.url` is set, it instead opens a
-  single `StreamableHTTPClientTransport` to that URL — one connection
-  instead of N processes to keep alive, see `docs/architecture.md` "MCP
-  hub mode".
-- **If pi is strictly `--skill`/`--extension`-flag driven per invocation**:
-  Trellis instead ships a thin `pi` wrapper script/alias that reads the
-  canonical source and injects the right flags — functionally equivalent,
-  different mechanism, and the roadmap should say so explicitly once known
-  rather than assume the first shape.
+§0.2's investigation resolved during P0 (design.md D5 in the archived
+`trellis-doctor-p0` change): pi has a real discovery directory
+(`~/.pi/agent/skills`), settling which of the two candidate shapes below
+applies — the first one:
 
-Either way this is the one adapter that is genuine runtime code, not a
-config generator — budget real testing time against a live pi session, not
-just unit tests of the bridging logic in isolation.
+- A pi extension package, installed once, that on startup reads
+  `.trellis/mcp/servers.yaml`. If `mcp.hub` is unset, it opens an
+  `@modelcontextprotocol/sdk` `StdioClientTransport` per server and calls
+  pi's `registerTool` for each tool the server reports; if `mcp.hub.url` is
+  set, it instead opens a single `StreamableHTTPClientTransport` to that
+  URL — one connection instead of N processes to keep alive, see
+  `docs/architecture.md` "MCP hub mode".
+
+This is the one adapter that is genuine runtime code, not a config
+generator — budget real testing time against a live pi session, not just
+unit tests of the bridging logic in isolation.
 
 ---
 
