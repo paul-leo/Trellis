@@ -448,6 +448,25 @@ nothing exercised directly:
   `trellis.lock.json` with no "not built yet" annotation, unlike every
   other not-yet-built thing described in the same document — annotated.
 
+**A near-miss caught by re-running the real installed-tarball check, not
+by the test suite:** the first fix for `parseSyncArgs`'s test coverage
+gap put the pure function in `src/cli.ts` itself and guarded that
+file's top-level `main()` call with `import.meta.url ===
+file://${process.argv[1]}` so importing the function for a test
+wouldn't run the whole CLI as a side effect. That guard is not
+symlink-safe: npm's `bin` entry is a symlink, and a symlink's
+`import.meta.url` (resolved) never equals its own symlink path
+(`process.argv[1]`, unresolved) — so the real, installed `trellis`
+binary silently did nothing and exited 0 on every invocation. `npm
+test` stayed green throughout, because nothing in the unit suite runs
+through an actual symlinked bin — only `scripts/verify-cli-install.sh`
+does, and it caught this immediately on the very next run. Fixed
+properly by moving `parseSyncArgs` to its own zero-side-effect module
+(`src/lib/syncArgs.ts`) instead of trying to make the entrypoint guard
+symlink-safe — the reminder here: a real installed-package check is
+not a redundant formality alongside the unit suite, it's the only
+thing in this project that exercises the actual `bin` symlink at all.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |

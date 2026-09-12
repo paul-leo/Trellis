@@ -1,14 +1,14 @@
 /**
- * cli.ts's own argv parsing, pulled out for direct unit testing —
- * previously only exercisable through a real process invocation, which is
- * exactly how `trellis sync --dry-run` shipped broken (only `rest[0]` was
- * ever checked as a candidate target, so a flag placed first was
- * mistaken for an unknown target) with no test catching it.
+ * `trellis sync`'s argv target parsing (src/lib/syncArgs.ts) — this
+ * exact class of bug (only `rest[0]` was ever checked as a candidate
+ * target, so a flag placed first was mistaken for an unknown target,
+ * breaking `trellis sync --dry-run`) had no test coverage before it was
+ * found by manual review, not a failing test.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseSyncArgs } from "../../src/cli.js";
+import { parseSyncArgs } from "../../src/lib/syncArgs.js";
 
 test("no args: no target, no unknown arg", () => {
   assert.deepEqual(parseSyncArgs([]), { target: undefined, unknownArg: undefined });
