@@ -181,3 +181,21 @@ test("sync: re-scoping an already-synced, previously-unscoped skill removes it f
   const claudeReport = report.reports.find((r) => r.agent === "claude-code");
   assert.ok(!claudeReport?.items.some((i) => i.action === "remove"), "claude-code's own copy must not be touched");
 });
+
+test("sync: never touches MCP even when canonical has servers configured (regression — mcp is trellis-mcp-sync's own command)", async () => {
+  const home = scratchHome();
+  initCanonical(home);
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    "servers:\n  sample:\n    transport: stdio\n    command: node\n    args: [server.js]\n",
+  );
+
+  const report = await collectSyncReport({ homeDir: home });
+  for (const agentReport of report.reports) {
+    assert.ok(!agentReport.items.some((i) => i.kind === "mcp"), `${agentReport.agent} must have no mcp items from bare sync`);
+  }
+  assert.equal(existsSync(join(home, ".claude.json")), true);
+  const claudeConfig = await import("node:fs/promises").then((fs) => fs.readFile(join(home, ".claude.json"), "utf-8"));
+  assert.equal(claudeConfig, "{}", "bare sync must not write mcpServers into .claude.json");
+});

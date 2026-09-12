@@ -7,6 +7,7 @@
 
 import { runDoctor } from "./commands/doctor.js";
 import { runSync } from "./commands/sync.js";
+import { runMcpSync } from "./commands/mcp.js";
 
 const KNOWN_COMMANDS = ["doctor", "sync", "mcp", "secrets"] as const;
 
@@ -25,7 +26,9 @@ Commands:
   sync [skills|instructions]
             Distribute skills/instructions to each agent (omit target for both)
               --json    machine-readable output, no report text
-  mcp       Manage the canonical MCP server list (not yet implemented)
+  mcp sync  Distribute MCP servers to each agent's native config
+              (create/repair only — no automatic removal, see docs/roadmap.md)
+              --json    machine-readable output, no report text
   secrets   Audit adapter output for leaked credentials (not yet implemented)
 
 See docs/roadmap.md for what's built vs. planned.`);
@@ -62,6 +65,18 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     const { exitCode } = await runSync({ target, json: rest.includes("--json") });
+    process.exitCode = exitCode;
+    return;
+  }
+
+  if (command === "mcp") {
+    const [subcommand] = rest;
+    if (subcommand !== "sync") {
+      console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const { exitCode } = await runMcpSync({ json: rest.includes("--json") });
     process.exitCode = exitCode;
     return;
   }

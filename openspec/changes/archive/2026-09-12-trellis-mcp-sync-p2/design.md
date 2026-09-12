@@ -143,6 +143,31 @@ per server in `canonical.mcp.servers`. The collision check runs against
 this single name instead of every server name, since there's nothing else
 locally defined to collide with (`docs/architecture.md` "MCP hub mode").
 
+### D7 — Automatic MCP removal is deferred: no ownership marker exists yet
+
+Found while actually implementing the shared plan logic, not anticipated
+in proposal.md's first draft: P1's skill removal is safe *because* a
+symlink's realpath proves Trellis created it (docs/architecture.md,
+`src/adapters/symlinkPlan.ts`) — a stale, Trellis-managed symlink is
+unambiguously identifiable. An MCP server entry is a plain key in a JSON
+object or a TOML table with no equivalent marker. "This name isn't in
+canonical anymore" is indistinguishable from "the user configured this
+server directly and Trellis has never been involved" — proven concretely
+on this very machine, whose real `~/.codex/config.toml` has entries like
+`chrome-devtools`, `harness-gui` that are entirely the user's own, never
+Trellis's.
+
+Auto-removing on that basis risks deleting a user's real, independently-
+configured MCP server — a meaningfully worse failure mode than anything
+in P1 (an MCP server often represents real setup effort and live
+credentials, unlike a skill symlink). This change does **not** implement
+automatic MCP removal. It's deferred until a lock file
+(`trellis.lock.json` — named in `docs/architecture.md`'s schema tree
+since the beginning, never designed) records what Trellis itself wrote on
+the last sync, at which point "in the lock file but not in canonical
+anymore" becomes a provably-safe removal signal, the same way realpath is
+for symlinks. Until then, `trellis mcp sync` only creates and repairs.
+
 ## Risks / Trade-offs
 
 - **[Risk]** The line-based section scanner is hand-rolled, not a

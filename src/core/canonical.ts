@@ -9,13 +9,19 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { AgentId, AgentProfile, CanonicalSource, MemoryEntry, Scope, SkillRef } from "./types.js";
+import type { AgentId, AgentProfile, CanonicalSource, McpConfig, McpServerDef, MemoryEntry, Scope, SkillRef } from "./types.js";
 import { ALL_AGENTS } from "./types.js";
 
 interface ScopeYaml {
   skills?: Record<string, AgentId[]>;
   agents?: Record<string, AgentId[]>;
   memories?: Record<string, AgentId[]>;
+}
+
+interface ServersYaml {
+  servers?: Record<string, McpServerDef>;
+  known_host_injected?: string[];
+  hub?: { url: string };
 }
 
 function trellisRoot(homeDir: string): string {
@@ -61,6 +67,18 @@ function loadScopeYaml(path: string): ScopeYaml {
   }
   const parsed = parseYaml(readFileSync(path, "utf-8"));
   return (parsed ?? {}) as ScopeYaml;
+}
+
+function loadServersYaml(path: string): McpConfig {
+  if (!existsSync(path)) {
+    return { servers: {}, knownHostInjected: [] };
+  }
+  const parsed = (parseYaml(readFileSync(path, "utf-8")) ?? {}) as ServersYaml;
+  return {
+    servers: parsed.servers ?? {},
+    knownHostInjected: parsed.known_host_injected ?? [],
+    hub: parsed.hub,
+  };
 }
 
 /** `undefined` if the name has no entry in scope.yaml's map — "shared with
@@ -134,9 +152,10 @@ export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSourc
     skills,
     agents,
     memories,
-    // Not read yet — P2 (mcp/servers.yaml) and P3 (secrets.policy.yaml)
-    // own parsing these; P1 only syncs skills/instructions.
-    mcp: { servers: {}, knownHostInjected: [] },
+    mcp: loadServersYaml(join(root, "mcp", "servers.yaml")),
+    // Not read yet — P3 (secrets.policy.yaml) owns parsing this; P2's
+    // pre-write guard uses its own narrow, hardcoded floor instead
+    // (src/adapters/secretsGuard.ts), not this field.
     secretsPolicy: { allowedVars: [], rejectPatterns: [] },
     diagnostics,
   };

@@ -55,7 +55,10 @@ export async function collectSyncReport(opts: RunSyncOptions = {}): Promise<Sync
       continue;
     }
 
-    let items = await adapter.plan(canonical);
+    // adapter.plan() also returns "mcp" items now (trellis-mcp-sync-p2) —
+    // `trellis sync` never touches MCP, that's `trellis mcp sync`'s own
+    // command, so exclude it unconditionally before any target filter.
+    let items = (await adapter.plan(canonical)).filter((item) => item.kind !== "mcp");
     if (opts.target) {
       // CLI/option vocabulary is plural ("skills"/"instructions",
       // matching `trellis sync skills`); AdapterPlanItem.kind is singular

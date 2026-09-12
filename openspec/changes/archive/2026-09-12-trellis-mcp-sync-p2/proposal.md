@@ -51,11 +51,15 @@ actually running both against a fixture, not assumed. Neither is safe for
 
 ### New Capabilities
 
-- `mcp-server-sync`: create/repair/remove/refuse semantics for MCP server
-  definitions across Claude Code, Codex, and Kiro — collision detection,
-  scope filtering via each server's inline `agents:` field, the pre-write
-  secrets guard, and hub-mode's N-vs-one-entry branching. pi is out of
-  scope (no native MCP client — that's P4's bridge, a different problem).
+- `mcp-server-sync`: create/repair semantics for MCP server definitions
+  across Claude Code, Codex, and Kiro — collision detection, scope
+  filtering via each server's inline `agents:` field, the pre-write
+  secrets guard, and hub-mode's N-vs-one-entry branching. Automatic
+  *removal* is explicitly deferred (design.md D7 — a TOML/JSON key-value
+  entry has no ownership marker the way a skill's symlink does, so
+  "gone from canonical" can't yet be distinguished from "the user
+  configured this directly"). pi is out of scope (no native MCP client —
+  that's P4's bridge, a different problem).
 
 ### Modified Capabilities
 

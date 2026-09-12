@@ -3,8 +3,13 @@
  * skill, `~/.claude/CLAUDE.md` symlinked to canonical `agents.md`. Builds
  * out the create/repair/remove/refuse shape end-to-end (tasks.md 3.1)
  * before the other three adapters commit to reusing `symlinkPlan.ts`.
+ *
+ * MCP servers: plain JSON parse → merge under `mcpServers` → stringify
+ * (trellis-mcp-sync-p2 design.md D4) — create/repair only, no automatic
+ * removal (D7).
  */
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
@@ -12,6 +17,7 @@ import { isInScope } from "../core/adapter.js";
 import type { CanonicalSource } from "../core/types.js";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
+import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
 
 export class ClaudeCodeAdapter implements TrellisAdapter {
   readonly name = "Claude Code";
@@ -46,11 +52,28 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
       kind: "instructions",
     });
 
-    return [...skillItems, ...instructionsItems];
+    const mcpItems = this.planMcp(canonical);
+
+    return [...skillItems, ...instructionsItems, ...mcpItems];
+  }
+
+  private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
+    const configPath = join(this.homeDir, ".claude.json");
+    const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
+    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id });
   }
 
   async apply(plan: AdapterPlanItem[]): Promise<void> {
-    await applySymlinkPlan(plan);
+    await applySymlinkPlan(plan.filter((item) => item.kind !== "mcp"));
+
+    const mcpCreates = plan.filter((item) => item.kind === "mcp" && item.action === "create" && item.mcpWrite);
+    if (mcpCreates.length === 0) {
+      return;
+    }
+    const configPath = mcpCreates[0].target;
+    const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
+    const merged = applyJsonMcp(parsed, mcpCreates);
+    writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}\n`);
   }
 
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {

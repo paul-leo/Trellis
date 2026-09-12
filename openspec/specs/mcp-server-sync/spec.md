@@ -1,5 +1,8 @@
-## ADDED Requirements
+# mcp-server-sync Specification
 
+## Purpose
+TBD - created by archiving change trellis-mcp-sync-p2. Update Purpose after archive.
+## Requirements
 ### Requirement: TOML section patching never touches bytes outside the target section
 The system SHALL locate and modify only the exact line span of a single
 `[mcp_servers.<name>]` table in Codex's `config.toml`, leaving every byte
@@ -23,13 +26,17 @@ byte-for-byte unchanged.
   immediately preceding blank line, if any) is deleted; nothing else in
   the file changes
 
-### Requirement: MCP server sync follows create/repair/remove/refuse semantics
-The system SHALL apply the same create/repair/remove/refuse contract
-established for skills/instructions (P1) to MCP server definitions:
-create a server definition that doesn't exist, repair one that differs
-from canonical, remove a Trellis-managed one whose canonical entry is
-gone or scoped away, and refuse (report-only, never overwrite) anything
-Trellis cannot prove it manages.
+### Requirement: MCP server sync supports create and repair, not automatic removal
+The system SHALL create a server definition that doesn't exist on an
+in-scope agent and repair one whose current value differs from canonical.
+The system SHALL NOT automatically remove an MCP server entry from an
+agent's config when it disappears from canonical — unlike a skill's
+symlink (whose realpath proves Trellis created it), a TOML/JSON
+key-value entry carries no ownership marker, so "not in canonical
+anymore" is indistinguishable from "the user configured this directly and
+Trellis has never touched it." Automatic MCP removal is deferred until an
+ownership-tracking mechanism (a lock file recording what Trellis itself
+last wrote) exists to make it provably safe — see design.md D7.
 
 #### Scenario: A new canonical server is created on every in-scope agent
 - **WHEN** a server is added to `mcp/servers.yaml` with no `agents:`
@@ -37,9 +44,18 @@ Trellis cannot prove it manages.
 - **THEN** it is written to Claude Code's, Codex's, and Kiro's native MCP
   config
 
-#### Scenario: A deleted canonical server is removed everywhere it reached
+#### Scenario: An existing server whose canonical definition changed is repaired
+- **WHEN** a previously-synced server's `command`/`args`/`env` changes in
+  `mcp/servers.yaml`
+- **THEN** the corresponding entry in each in-scope agent's config is
+  updated to match
+
+#### Scenario: A server removed from canonical is left in place, not deleted
 - **WHEN** a previously-synced server is deleted from `mcp/servers.yaml`
-- **THEN** its entry is removed from every agent's config it had reached
+  and `trellis mcp sync` runs again
+- **THEN** its entry remains untouched in every agent's config — no
+  automatic removal, since Trellis cannot yet prove it (rather than the
+  user) is the one who put it there
 
 ### Requirement: Collision against known_host_injected is refused, not written
 The system SHALL refuse to write a server definition whose name also
@@ -88,3 +104,4 @@ run the collision check against only that one name.
 - **WHEN** `mcp.hub.url` is set and `mcp.servers` defines five servers
 - **THEN** each agent's generated config contains exactly one MCP entry,
   named `trellis-hub`, pointing at `hub.url`
+

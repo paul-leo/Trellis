@@ -9,7 +9,7 @@
  * the contract they'll be built against.
  */
 
-import type { AgentId, CanonicalSource } from "./types.js";
+import type { AgentId, CanonicalSource, McpServerDef } from "./types.js";
 import { resolveScope } from "./types.js";
 
 export interface AdapterProbeResult {
@@ -20,28 +20,41 @@ export interface AdapterProbeResult {
 
 export interface AdapterPlanItem {
   /**
-   * "create" also covers repair (wrong symlink target); "remove" is the
-   * delete half — a Trellis-managed symlink whose canonical entry is gone
-   * or was just scoped away from this agent. "conflict" is a real,
-   * non-symlink path occupying a spot Trellis would otherwise
-   * create/remove at — reported, never acted on. See `plan()`'s doc below.
+   * "create" also covers repair (wrong symlink target, or an MCP server
+   * definition that differs from canonical); "remove" is the delete half
+   * for skills/instructions — a Trellis-managed symlink whose canonical
+   * entry is gone or was just scoped away from this agent. MCP server
+   * items never use "remove" (see `kind: "mcp"` below — no ownership
+   * marker exists yet to make that provably safe, trellis-mcp-sync-p2
+   * design.md D7). "conflict" is either a real, non-symlink path
+   * occupying a spot Trellis would otherwise touch, or an MCP server
+   * refused for a collision/secrets-guard reason — reported, never acted
+   * on. See `plan()`'s doc below.
    */
   action: "create" | "remove" | "conflict";
-  /** Lets `trellis sync skills` / `trellis sync instructions` filter a
-   * full plan without changing `plan()`'s signature — every adapter
-   * produces both kinds in one pass; the CLI subcommand decides which to
-   * apply, not the adapter. */
-  kind: "skill" | "instructions";
+  /** Lets `trellis sync skills` / `trellis sync instructions` /
+   * `trellis mcp sync` filter a full plan without changing `plan()`'s
+   * signature — every adapter produces every kind it's responsible for in
+   * one pass; the CLI subcommand decides which to apply, not the adapter. */
+  kind: "skill" | "instructions" | "mcp";
   /** Human-readable description of one change this adapter would make
    * ("create" / "remove") or why it refused to ("conflict"). */
   description: string;
-  /** What's being touched, for the collision/audit checks to reason about. */
+  /** What's being touched, for the collision/audit checks to reason
+   * about. For `kind: "mcp"`, the config file being modified (e.g.
+   * `~/.codex/config.toml`), not a per-server path — there isn't one. */
   target: string;
-  /** Only set (and only meaningful) when `action === "create"`: the
-   * absolute path `target` should be symlinked to. Kept as a real field
-   * rather than embedded in `description` — `apply()` must never have to
-   * parse prose back into structured data. */
+  /** Only set (and only meaningful) when `kind` is `"skill"` or
+   * `"instructions"` and `action === "create"`: the absolute path
+   * `target` should be symlinked to. Kept as a real field rather than
+   * embedded in `description` — `apply()` must never have to parse prose
+   * back into structured data. */
   linkTarget?: string;
+  /** Only set (and only meaningful) when `kind === "mcp"` and
+   * `action === "create"`: the server name and definition to write into
+   * `target` (the config file) via that agent's own mechanism (JSON
+   * merge or, for Codex, `src/lib/tomlSection.ts`'s splice). */
+  mcpWrite?: { name: string; def: McpServerDef };
 }
 
 export interface AdapterVerifyResult {

@@ -213,6 +213,19 @@ not Codex's, Kiro's, or pi's.
 
 ## P2 — `trellis mcp sync`
 
+> **Done and archived** (`openspec/changes/archive/2026-09-12-trellis-mcp-sync-p2/`).
+> Section kept as a historical note only — see `docs/roadmap.md` for the
+> actual outcome. Two corrections against this plan's own assumptions,
+> found before/while implementing: neither `@iarna/toml` nor `smol-toml`
+> survives a round-trip (both drop comments, reformat arrays) — Codex is
+> patched by a hand-rolled line-based section locator/splicer instead
+> (`src/lib/tomlSection.ts`), no library dependency at all; and automatic
+> MCP removal turned out to be unsafe without an ownership marker a bare
+> TOML/JSON key has no equivalent of (a symlink's realpath proves it for
+> skills) — deferred until a lock-file mechanism exists, `plan()` only
+> ever produces create/repair + conflict for MCP. Don't edit this section
+> further.
+
 The highest-risk phase — this is where `docs/research.md`'s hardest-won
 constraint applies directly: **Codex's adapter must patch a TOML section in
 place, never regenerate the whole file**, because Codex's own `config.toml`

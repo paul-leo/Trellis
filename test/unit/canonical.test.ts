@@ -52,3 +52,41 @@ test("loadCanonicalSource: a scope.yaml entry naming a nonexistent skill is a di
   assert.equal(source.diagnostics.length, 1);
   assert.match(source.diagnostics[0], /typo-name/);
 });
+
+test("loadCanonicalSource: a populated mcp/servers.yaml populates canonical.mcp", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  writeFileSync(
+    join(root, "mcp", "servers.yaml"),
+    [
+      "servers:",
+      "  tanka:",
+      "    transport: stdio",
+      "    command: tanka-mcp",
+      "    env: [TANKA_EMAIL]",
+      "  claude-only:",
+      "    transport: stdio",
+      "    command: node",
+      "    agents: [claude-code]",
+      "known_host_injected: [sentry, memory]",
+      "hub:",
+      '  url: "http://127.0.0.1:37373/mcp"',
+      "",
+    ].join("\n"),
+  );
+
+  const source = loadCanonicalSource(home);
+  assert.equal(Object.keys(source.mcp.servers).length, 2);
+  assert.deepEqual(source.mcp.servers.tanka.env, ["TANKA_EMAIL"]);
+  assert.deepEqual(source.mcp.servers["claude-only"].agents, ["claude-code"]);
+  assert.deepEqual(source.mcp.knownHostInjected, ["sentry", "memory"]);
+  assert.equal(source.mcp.hub?.url, "http://127.0.0.1:37373/mcp");
+});
+
+test("loadCanonicalSource: a missing mcp/servers.yaml yields an empty, valid mcp config", () => {
+  const home = tmpHome();
+  mkdirSync(join(home, ".trellis"), { recursive: true });
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp, { servers: {}, knownHostInjected: [] });
+});

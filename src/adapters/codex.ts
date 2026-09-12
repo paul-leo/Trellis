@@ -5,8 +5,15 @@
  * sync targets whatever `config.toml`'s `instructions` key names; if unset,
  * this is a no-op with a diagnostic — Trellis never guesses or writes a
  * path Codex itself didn't declare (design.md Risks, trellis-sync-p1).
+ *
+ * MCP servers are written via `src/lib/tomlSection.ts`'s line-based
+ * section splicer, never a TOML library (trellis-mcp-sync-p2 design.md
+ * D1/D2 — both rejected with evidence) — create/repair only, no
+ * automatic removal (D7: no ownership marker exists for a bare TOML key
+ * the way a symlink's realpath provides for skills).
  */
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
@@ -15,6 +22,8 @@ import type { CanonicalSource } from "../core/types.js";
 import * as codexProbe from "../probes/codex.js";
 import { readInstructionsPath } from "../probes/codex.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
+import { resolveMcpPlan } from "./mcpPlan.js";
+import { currentServerSectionText, renderServerSection, upsertSection } from "../lib/tomlSection.js";
 
 export class CodexAdapter implements TrellisAdapter {
   readonly name = "Codex";
@@ -42,10 +51,13 @@ export class CodexAdapter implements TrellisAdapter {
       kind: "skill",
     });
 
+    const mcpItems = this.planMcp(canonical);
+
     const configuredInstructionsPath = readInstructionsPath(join(this.homeDir, ".codex", "config.toml"));
     if (!configuredInstructionsPath) {
       // Codex has no `instructions` key set — not Trellis's to decide.
-      return skillItems;
+      // MCP planning is independent of this and must still run.
+      return [...skillItems, ...mcpItems];
     }
 
     const instructionsItems = planSymlinks({
@@ -55,11 +67,48 @@ export class CodexAdapter implements TrellisAdapter {
       kind: "instructions",
     });
 
-    return [...skillItems, ...instructionsItems];
+    return [...skillItems, ...instructionsItems, ...mcpItems];
+  }
+
+  private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
+    const configTomlPath = join(this.homeDir, ".codex", "config.toml");
+    const content = existsSync(configTomlPath) ? readFileSync(configTomlPath, "utf-8") : "";
+    const { desired, conflicts } = resolveMcpPlan(this.id, canonical.mcp);
+
+    const items: AdapterPlanItem[] = [];
+    for (const { name, def } of desired) {
+      const current = currentServerSectionText(content, name);
+      const rendered = renderServerSection(name, def);
+      if (current === rendered) {
+        continue; // already correct — no-op
+      }
+      items.push({
+        action: "create",
+        kind: "mcp",
+        target: configTomlPath,
+        mcpWrite: { name, def },
+        description: `MCP server "${name}" ${current === null ? "created" : "updated"} in ${configTomlPath}`,
+      });
+    }
+    for (const conflict of conflicts) {
+      items.push({ action: "conflict", kind: "mcp", target: configTomlPath, description: conflict.message });
+    }
+    return items;
   }
 
   async apply(plan: AdapterPlanItem[]): Promise<void> {
-    await applySymlinkPlan(plan);
+    await applySymlinkPlan(plan.filter((item) => item.kind !== "mcp"));
+
+    const mcpCreates = plan.filter((item) => item.kind === "mcp" && item.action === "create" && item.mcpWrite);
+    if (mcpCreates.length === 0) {
+      return;
+    }
+    const configTomlPath = mcpCreates[0].target;
+    let content = existsSync(configTomlPath) ? readFileSync(configTomlPath, "utf-8") : "";
+    for (const item of mcpCreates) {
+      content = upsertSection(content, item.mcpWrite!.name, item.mcpWrite!.def);
+    }
+    writeFileSync(configTomlPath, content);
   }
 
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {

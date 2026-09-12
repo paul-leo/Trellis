@@ -1,0 +1,39 @@
+# Sandbox-only fixture (trellis-mcp-sync-p2 tasks.md 5.1). Exercises, in
+# one real `trellis mcp sync` run against the sandbox container:
+#   - "sample-server": already correctly present in every fixture agent
+#     config (.claude.json, .codex/config.toml, .kiro/settings/mcp.json) —
+#     must be a true no-op, proving idempotency against real files, not
+#     just in-memory structures.
+#   - "new-tool": missing everywhere — must be created in every MCP-capable
+#     agent (not pi, which has no native MCP client).
+#   - "claude-only-tool": scoped — must be created only for claude-code.
+#   - "sentry": collides with `known_host_injected` below (and with the
+#     pre-existing `[mcp_servers.sentry]` fixture already hand-placed in
+#     .codex/config.toml to model the incident class this guards against,
+#     see that file's own comment) — must produce a conflict, never a
+#     write, and must leave the existing config.toml section untouched.
+servers:
+  sample-server:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+    env: [SAMPLE_TOKEN]
+
+  new-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+
+  claude-only-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+    agents: [claude-code]
+
+  sentry:
+    transport: stdio
+    command: node
+    args: ["/fixtures/fake-sentry-stdio.js"]
+
+known_host_injected:
+  - sentry
