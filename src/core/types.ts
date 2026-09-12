@@ -114,6 +114,14 @@ export interface MemoryEntry {
 export interface SecretsPolicy {
   allowedVars: string[];
   rejectPatterns: RegExp[];
+  /**
+   * Absolute path to a dotenv-format file. When set, it is the SOLE
+   * source `resolveSecretEnv` consults for a declared name — never
+   * merged with `process.env` (src/lib/secretEnv.ts). Unset preserves
+   * ambient-`process.env` resolution, the only behavior that existed
+   * before this field did.
+   */
+  envFile?: string;
 }
 
 /**

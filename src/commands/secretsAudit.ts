@@ -3,19 +3,25 @@
  * config file (never the canonical source) and checks it against
  * `CanonicalSource.secretsPolicy`: a literal-value scan against
  * `rejectPatterns`, and a declared-env-var-name check against
- * `allowedVars`. Read-only — never writes anything. Fails non-zero on any
- * finding (trellis-secrets-audit-p3).
+ * `allowedVars`. Also checks, agent-agnostically, whether every env var
+ * name declared across canonical `mcp.servers[*].env` actually resolves
+ * to a value via the same `resolveSecretEnv` the pi bridge uses
+ * (trellis-secrets-env-management) — authoritative for pi, a best-effort
+ * proxy for the other three (design.md D3 in that change). Read-only —
+ * never writes anything. Fails non-zero on any finding
+ * (trellis-secrets-audit-p3).
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadCanonicalSource } from "../core/canonical.js";
-import type { AgentId, SecretsPolicy } from "../core/types.js";
+import type { AgentId, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
 import { extractJsonEnvVarNames, extractTomlEnvVarNames } from "../lib/envVarNames.js";
+import { resolveSecretEnv } from "../lib/secretEnv.js";
 
 export interface RunSecretsAuditOptions {
   json?: boolean;
@@ -25,9 +31,11 @@ export interface RunSecretsAuditOptions {
 }
 
 export interface SecretsFinding {
-  agent: AgentId;
+  /** "environment" for `missing-env-value` — that check isn't scoped to
+   * any single agent's config file (see module doc comment). */
+  agent: AgentId | "environment";
   file: string;
-  kind: "literal-secret" | "unexpected-var-name";
+  kind: "literal-secret" | "unexpected-var-name" | "missing-env-value";
   detail: string;
 }
 
@@ -51,6 +59,30 @@ function auditedAgents(homeDir: string): AuditedAgent[] {
     // reads mcp/servers.yaml directly at its own runtime (P4). See
     // design.md Non-Goals in trellis-secrets-audit-p3.
   ];
+}
+
+/**
+ * Not scoped to any agent, present or not — a name that can't resolve is
+ * a problem regardless of which agents' `servers.yaml` `agents:` field
+ * would route it to (trellis-secrets-env-management design.md D3).
+ */
+function findMissingEnvValues(servers: Record<string, McpServerDef>, policy: SecretsPolicy): SecretsFinding[] {
+  const names = new Set<string>();
+  for (const def of Object.values(servers)) {
+    for (const name of def.env ?? []) names.add(name);
+  }
+  if (names.size === 0) return [];
+
+  const resolved = resolveSecretEnv([...names], policy);
+  const source = policy.envFile ?? "process environment";
+  return [...names]
+    .filter((name) => !resolved[name])
+    .map((name) => ({
+      agent: "environment" as const,
+      file: source,
+      kind: "missing-env-value" as const,
+      detail: `"${name}" is declared by a canonical MCP server's env but has no resolvable value`,
+    }));
 }
 
 function auditFile(agent: AgentId, file: string, content: string, policy: SecretsPolicy, extractNames: (content: string) => string[]): SecretsFinding[] {
@@ -88,6 +120,8 @@ export async function collectSecretsAuditReport(opts: RunSecretsAuditOptions = {
     findings.push(...auditFile(agent.id, file, content, canonical.secretsPolicy, agent.extractNames));
   }
 
+  findings.push(...findMissingEnvValues(canonical.mcp.servers, canonical.secretsPolicy));
+
   return { findings };
 }
 
@@ -111,7 +145,7 @@ export async function runSecretsAudit(opts: RunSecretsAuditOptions = {}): Promis
 
 function printReport(report: SecretsAuditReport): void {
   if (report.findings.length === 0) {
-    console.log("✅ no findings — every present agent's real config passed both checks");
+    console.log("✅ no findings — every present agent's real config and every declared env var passed all checks");
     return;
   }
   console.log(`⚠️  ${report.findings.length} finding(s):`);

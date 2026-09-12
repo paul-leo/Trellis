@@ -122,3 +122,23 @@ test("loadCanonicalSource: a missing secrets.policy.yaml yields an empty, valid 
   const source = loadCanonicalSource(home);
   assert.deepEqual(source.secretsPolicy, { allowedVars: [], rejectPatterns: [] });
 });
+
+test("loadCanonicalSource: env_file's leading ~ resolves against homeDir, not left literal", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\nenv_file: ~/.config/agent-env/secrets.env\n");
+
+  const source = loadCanonicalSource(home);
+  assert.equal(source.secretsPolicy.envFile, join(home, ".config", "agent-env", "secrets.env"));
+});
+
+test("loadCanonicalSource: an already-absolute env_file path is left untouched", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\nenv_file: /opt/secrets/trellis.env\n");
+
+  const source = loadCanonicalSource(home);
+  assert.equal(source.secretsPolicy.envFile, "/opt/secrets/trellis.env");
+});

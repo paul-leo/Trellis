@@ -1,0 +1,96 @@
+/**
+ * pi bridge (trellis-secrets-env-management): proves the bridge's stdio
+ * connection actually receives values through `resolveSecretEnv`, not
+ * raw ambient `process.env` — by spawning the real fixture server and
+ * reading back its own env via a real "env" tool call, not a mock.
+ */
+
+import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import trellisMcpBridge from "../../src/pi-bridge/index.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fixtureServer = join(here, "..", "fixtures", "sample-mcp-server.js");
+
+interface CapturedTool {
+  name: string;
+  execute(toolCallId: string, params: Record<string, unknown>): Promise<{ content: Array<{ type: string; text?: string }> }>;
+}
+
+function fakePi(): { registerTool: (tool: CapturedTool) => void; tools: CapturedTool[] } {
+  const tools: CapturedTool[] = [];
+  return { registerTool: (tool) => tools.push(tool), tools };
+}
+
+function scratchHome(): string {
+  return mkdtempSync(join(tmpdir(), "trellis-pibridge-"));
+}
+
+function initCanonical(home: string, secretsPolicyYaml: string): void {
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), secretsPolicyYaml);
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    // `home` (a fresh mkdtemp path) doubles as a per-test-unique argv marker
+    // for killFixtureChildren — the bridge never closes the MCP client it
+    // opens (correct for a long-lived pi process; see this test's own
+    // comment on why that's out of scope here), so without a targeted kill
+    // the spawned fixture subprocess outlives the test and this file never
+    // exits.
+    `servers:\n  fixture:\n    transport: stdio\n    command: node\n    args:\n      - ${fixtureServer}\n      - ${home}\n    env:\n      - PI_BRIDGE_TEST_VAR\n`,
+  );
+}
+
+function killFixtureChildren(marker: string): void {
+  try {
+    execSync(`pkill -f ${JSON.stringify(marker)}`);
+  } catch {
+    // pkill exits non-zero when nothing matched — not an error here
+  }
+}
+
+test("pi bridge: with env_file set, the spawned server receives the file's value, never the ambient one", async () => {
+  const home = scratchHome();
+  const envFile = join(home, "secrets.env");
+  writeFileSync(envFile, "PI_BRIDGE_TEST_VAR=from-env-file\n");
+  initCanonical(home, `allowed_vars: []\nreject_patterns: []\nenv_file: ${envFile}\n`);
+
+  process.env.PI_BRIDGE_TEST_VAR = "ambient-value-should-not-be-used";
+  try {
+    const pi = fakePi();
+    await trellisMcpBridge(pi as never, home);
+
+    const envTool = pi.tools.find((t) => t.name === "fixture__env");
+    assert.ok(envTool, "expected fixture__env to be registered");
+    const result = await envTool!.execute("call-1", { name: "PI_BRIDGE_TEST_VAR" });
+    assert.equal(result.content[0]?.text, "from-env-file");
+  } finally {
+    delete process.env.PI_BRIDGE_TEST_VAR;
+    killFixtureChildren(home);
+  }
+});
+
+test("pi bridge: with no env_file, the spawned server receives the ambient process.env value (pre-existing behavior, unchanged)", async () => {
+  const home = scratchHome();
+  initCanonical(home, "allowed_vars: []\nreject_patterns: []\n");
+
+  process.env.PI_BRIDGE_TEST_VAR = "ambient-value";
+  try {
+    const pi = fakePi();
+    await trellisMcpBridge(pi as never, home);
+
+    const envTool = pi.tools.find((t) => t.name === "fixture__env");
+    assert.ok(envTool, "expected fixture__env to be registered");
+    const result = await envTool!.execute("call-1", { name: "PI_BRIDGE_TEST_VAR" });
+    assert.equal(result.content[0]?.text, "ambient-value");
+  } finally {
+    delete process.env.PI_BRIDGE_TEST_VAR;
+    killFixtureChildren(home);
+  }
+});

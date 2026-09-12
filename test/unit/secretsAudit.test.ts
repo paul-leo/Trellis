@@ -95,3 +95,47 @@ test("secrets audit: never modifies any file it reads", async () => {
   const after = await fs.readFile(join(home, ".codex", "config.toml"), "utf-8");
   assert.equal(after, configContent);
 });
+
+function writeServersYaml(home: string, yaml: string): void {
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), yaml);
+}
+
+test("secrets audit: a canonical env name with no resolvable value is a missing-env-value finding", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeServersYaml(home, "servers:\n  gitlab:\n    transport: stdio\n    command: npx\n    env:\n      - GITLAB_PERSONAL_ACCESS_TOKEN\n");
+  delete process.env.GITLAB_PERSONAL_ACCESS_TOKEN;
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  const finding = report.findings.find((f) => f.kind === "missing-env-value");
+  assert.ok(finding, "expected a missing-env-value finding");
+  assert.equal(finding!.agent, "environment");
+  assert.ok(finding!.detail.includes("GITLAB_PERSONAL_ACCESS_TOKEN"));
+});
+
+test("secrets audit: a canonical env name that resolves via env_file yields no missing-env-value finding", async () => {
+  const home = scratchHome();
+  const envFile = join(home, "secrets.env");
+  writeFileSync(envFile, "GITLAB_PERSONAL_ACCESS_TOKEN=glpat-real-value\n");
+  initCanonical(home, `${CLEAN_POLICY}env_file: ${envFile}\n`);
+  writeServersYaml(home, "servers:\n  gitlab:\n    transport: stdio\n    command: npx\n    env:\n      - GITLAB_PERSONAL_ACCESS_TOKEN\n");
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  assert.deepEqual(
+    report.findings.filter((f) => f.kind === "missing-env-value"),
+    [],
+  );
+});
+
+test("secrets audit: no canonical MCP servers means zero missing-env-value findings", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  // No mcp/servers.yaml written at all.
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  assert.deepEqual(
+    report.findings.filter((f) => f.kind === "missing-env-value"),
+    [],
+  );
+});

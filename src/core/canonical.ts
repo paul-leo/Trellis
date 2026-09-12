@@ -27,6 +27,7 @@ interface ServersYaml {
 interface SecretsPolicyYaml {
   allowed_vars?: string[];
   reject_patterns?: string[];
+  env_file?: string;
 }
 
 function trellisRoot(homeDir: string): string {
@@ -86,7 +87,7 @@ function loadServersYaml(path: string): McpConfig {
   };
 }
 
-function loadSecretsPolicyYaml(path: string): SecretsPolicy {
+function loadSecretsPolicyYaml(path: string, homeDir: string): SecretsPolicy {
   if (!existsSync(path)) {
     return { allowedVars: [], rejectPatterns: [] };
   }
@@ -94,6 +95,7 @@ function loadSecretsPolicyYaml(path: string): SecretsPolicy {
   return {
     allowedVars: parsed.allowed_vars ?? [],
     rejectPatterns: (parsed.reject_patterns ?? []).map((pattern) => new RegExp(pattern)),
+    envFile: parsed.env_file ? parsed.env_file.replace(/^~(?=$|\/)/, homeDir) : undefined,
   };
 }
 
@@ -172,7 +174,7 @@ export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSourc
     // P2's pre-write guard (src/adapters/mcpPlan.ts) uses its own narrow,
     // hardcoded floor instead of this field — see design.md D1 in
     // trellis-secrets-audit-p3.
-    secretsPolicy: loadSecretsPolicyYaml(join(root, "secrets.policy.yaml")),
+    secretsPolicy: loadSecretsPolicyYaml(join(root, "secrets.policy.yaml"), homeDir),
     diagnostics,
   };
 }

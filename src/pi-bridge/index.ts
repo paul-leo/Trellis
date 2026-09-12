@@ -20,7 +20,8 @@ import type { TSchema } from "typebox";
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveMcpPlan } from "../adapters/mcpPlan.js";
-import type { McpServerDef } from "../core/types.js";
+import { resolveSecretEnv } from "../lib/secretEnv.js";
+import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 import { bridgedToolName, toParametersSchema, toPiContent, type McpContentItem } from "./schemaTranslate.js";
 
 interface PiToolResult {
@@ -42,9 +43,10 @@ interface PiExtensionAPI {
 
 const CLIENT_INFO = { name: "trellis-mcp-bridge", version: "0.0.0" };
 
-async function connectStdio(def: McpServerDef): Promise<Client> {
+async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Client> {
   const client = new Client(CLIENT_INFO, { capabilities: {} });
-  const namedEnv = Object.fromEntries((def.env ?? []).map((name) => [name, process.env[name] ?? ""]));
+  const resolved = resolveSecretEnv(def.env ?? [], secretsPolicy);
+  const namedEnv = Object.fromEntries((def.env ?? []).map((name) => [name, resolved[name] ?? ""]));
   const transport = new StdioClientTransport({
     command: def.command!,
     args: def.args,
@@ -94,7 +96,7 @@ export default async function trellisMcpBridge(pi: PiExtensionAPI, homeDir: stri
     desired.map(async ({ name, def }) => {
       let client: Client;
       try {
-        client = def.transport === "http" ? await connectHttp(def.url!) : await connectStdio(def);
+        client = def.transport === "http" ? await connectHttp(def.url!) : await connectStdio(def, canonical.secretsPolicy);
       } catch (err) {
         // One unreachable/misconfigured server must never prevent every
         // other server's tools from registering (tasks.md 3.2).

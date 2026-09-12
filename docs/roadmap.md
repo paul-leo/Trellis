@@ -140,6 +140,40 @@ Trellis's own guard. Deliberately out of scope: auto-ingesting
 store — a real, separate problem left as an open question, not silently
 resolved.
 
+**P7 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-secrets-env-management-p7/`;
+living specs at `openspec/specs/secret-env-resolution/`, plus
+modifications to `pi-mcp-bridge` and `secrets-audit`). Two real gaps
+found testing the pi bridge against this real machine, not assumed: (1)
+`secrets audit` only ever checked declared env var *names* against an
+allow-list, never whether a name actually resolves to a value — a
+machine migration could carry every name across while every value stayed
+unset, silently, until some agent's tool call 401'd; (2) the pi bridge's
+`connectStdio` already read real secret values (unavoidable — it's
+Trellis's own code spawning the MCP subprocess, unlike Claude Code/
+Codex/Kiro's own native clients resolving `${VAR}` in their own process),
+but did so unconditionally from ambient `process.env` — every credential
+the parent `pi` process's shell exported, not just the one or two names
+the active server declared. Fixed with one shared, dependency-free
+resolver (`src/lib/secretEnv.ts`) both the bridge and the audit call, and
+one new optional `secrets.policy.yaml` field, `env_file`: when set, it's
+the *sole* source for a declared name (no fallback to ambient — a silent
+fallback would defeat the isolation this exists to offer), read via a
+narrow hand-rolled `KEY=VALUE` parser, same "no new dependency" reasoning
+as P3's `envVarNames.ts`. Verified with a real spawned MCP subprocess
+(not a mock) reading back its own env by name
+(`test/unit/piBridge.test.ts`), proving `env_file`'s value wins even when
+ambient holds a different one — and separately in the real (non-pi)
+Docker sandbox, `trellis secrets audit` correctly reporting
+`missing-env-value` and exiting non-zero. Deliberately scoped down from
+the original plan: no second `pi`-sandbox rebuild, since the bridge's own
+unit test already exercises the exact changed code path with the same
+rigor, and P4's own sandbox pass already covers the pi-extension-loading
+surface this change never touches (tasks.md 5.1 records the reasoning,
+not a silent skip). Honestly scoped non-goal, stated rather than
+discovered later: `missing-env-value` is authoritative for pi, but only a
+best-effort proxy for Claude Code/Codex/Kiro — those three resolve
+`${VAR}` in their own process, which this audit cannot observe directly.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
@@ -149,6 +183,7 @@ resolved.
 | P4 | ✅ pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |
 | P5 | ✅ `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
 | P6 | ✅ Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
-| P7 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P6 |
+| P7 | ✅ Secrets/env management: shared `resolveSecretEnv` + `secrets.policy.yaml`'s `env_file`, pi bridge stops reading raw ambient env, `secrets audit` gains a `missing-env-value` check | P3, P4 |
+| P8 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P7 |
 
 No dates. This is scoped by verification milestones, not calendar time.
