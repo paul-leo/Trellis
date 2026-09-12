@@ -102,14 +102,18 @@ Every adapter must implement:
 - `plan(canonical)` — diffs canonical against this agent's current on-disk
   state (read-only, but it does read — create/remove/no-op/conflict can't
   be decided from canonical alone) and produces `AdapterPlanItem[]`, each
-  tagged `"create"` or `"remove"`. **Must emit `"remove"` items**, not just
-  `"create"`: a Trellis-managed symlink (realpath resolves inside the
-  canonical source) whose entry was deleted from canonical or scoped away
-  from this agent is stale and belongs in the plan — see
-  `src/core/adapter.ts`'s `plan()` doc and the P1 acceptance test in
-  `docs/implementation-plan.md`.
+  tagged `"create"`, `"remove"`, or `"conflict"`. **Must emit `"remove"`
+  items**, not just `"create"`: a Trellis-managed symlink (realpath
+  resolves inside the canonical source) whose entry was deleted from
+  canonical or scoped away from this agent is stale and belongs in the
+  plan — see `src/core/adapter.ts`'s `plan()` doc. A real, non-symlink path
+  occupying a spot Trellis would otherwise touch is a `"conflict"` item,
+  not a thrown error — it must show up in the same report as everything
+  else, not abort the whole run over one unrelated item.
 - `apply(plan)` — perform the diff; must be idempotent and re-runnable for
-  both actions
+  "create"/"remove", and must treat "conflict" as report-only (no I/O,
+  never throws) — see `src/core/adapter.ts`'s `apply()` doc for why this
+  responsibility sits with the caller (`trellis sync`), not per-item
 - `verify()` — re-read the agent's own state and confirm it matches
   canonical; this is what `trellis doctor` calls
 

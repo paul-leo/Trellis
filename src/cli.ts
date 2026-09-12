@@ -6,6 +6,7 @@
  */
 
 import { runDoctor } from "./commands/doctor.js";
+import { runSync } from "./commands/sync.js";
 
 const KNOWN_COMMANDS = ["doctor", "sync", "mcp", "secrets"] as const;
 
@@ -21,7 +22,9 @@ Commands:
               --probe-mcp    also handshake every configured MCP server
                              (off by default — spawns real processes,
                              some reaching real external services)
-  sync      Distribute skills/instructions to each agent (not yet implemented)
+  sync [skills|instructions]
+            Distribute skills/instructions to each agent (omit target for both)
+              --json    machine-readable output, no report text
   mcp       Manage the canonical MCP server list (not yet implemented)
   secrets   Audit adapter output for leaked credentials (not yet implemented)
 
@@ -45,6 +48,20 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "doctor") {
     const { exitCode } = await runDoctor({ json: rest.includes("--json"), probeMcp: rest.includes("--probe-mcp") });
+    process.exitCode = exitCode;
+    return;
+  }
+
+  if (command === "sync") {
+    const [maybeTarget] = rest;
+    const target = maybeTarget === "skills" || maybeTarget === "instructions" ? maybeTarget : undefined;
+    if (maybeTarget && !target && maybeTarget !== "--json") {
+      console.error(`Unknown sync target: ${maybeTarget}\n`);
+      printUsage();
+      process.exitCode = 1;
+      return;
+    }
+    const { exitCode } = await runSync({ target, json: rest.includes("--json") });
     process.exitCode = exitCode;
     return;
   }

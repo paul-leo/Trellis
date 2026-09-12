@@ -19,14 +19,29 @@ export interface AdapterProbeResult {
 }
 
 export interface AdapterPlanItem {
-  /** "create" also covers repair (wrong symlink target); "remove" is the
+  /**
+   * "create" also covers repair (wrong symlink target); "remove" is the
    * delete half — a Trellis-managed symlink whose canonical entry is gone
-   * or was just scoped away from this agent. See `plan()`'s doc below. */
-  action: "create" | "remove";
-  /** Human-readable description of one change this adapter would make. */
+   * or was just scoped away from this agent. "conflict" is a real,
+   * non-symlink path occupying a spot Trellis would otherwise
+   * create/remove at — reported, never acted on. See `plan()`'s doc below.
+   */
+  action: "create" | "remove" | "conflict";
+  /** Lets `trellis sync skills` / `trellis sync instructions` filter a
+   * full plan without changing `plan()`'s signature — every adapter
+   * produces both kinds in one pass; the CLI subcommand decides which to
+   * apply, not the adapter. */
+  kind: "skill" | "instructions";
+  /** Human-readable description of one change this adapter would make
+   * ("create" / "remove") or why it refused to ("conflict"). */
   description: string;
   /** What's being touched, for the collision/audit checks to reason about. */
   target: string;
+  /** Only set (and only meaningful) when `action === "create"`: the
+   * absolute path `target` should be symlinked to. Kept as a real field
+   * rather than embedded in `description` — `apply()` must never have to
+   * parse prose back into structured data. */
+  linkTarget?: string;
 }
 
 export interface AdapterVerifyResult {
@@ -68,14 +83,24 @@ export interface TrellisAdapter {
    *
    * MUST NOT plan removal of a path that isn't a symlink Trellis can prove
    * it created (realpath outside the canonical source) — that's a real
-   * conflict, not a stale entry, and belongs in a thrown error `apply()`
-   * surfaces, never in a "remove" plan item.
+   * conflict, not a stale entry, and MUST instead produce a "conflict"
+   * plan item so it's visible in the same report as everything else,
+   * rather than only surfacing when `apply()` gets to it.
    */
   plan(canonical: CanonicalSource): Promise<AdapterPlanItem[]>;
 
-  /** Perform the diff. Must be idempotent and safely re-runnable: applying
+  /**
+   * Perform the diff. Must be idempotent and safely re-runnable: applying
    * a "create" item against an already-correct symlink is a no-op, and
-   * applying a "remove" item against an already-gone path is a no-op. */
+   * applying a "remove" item against an already-gone path is a no-op.
+   *
+   * MUST treat every "conflict" item as report-only: no filesystem
+   * operation, and MUST NOT throw or abort the rest of the plan because
+   * of it — a conflict on one item must never prevent every other, unrelated
+   * item in the same plan from being applied. The caller (e.g. `trellis
+   * sync`) is responsible for surfacing conflicts and failing the overall
+   * command (non-zero exit), not `apply()` per item.
+   */
   apply(plan: AdapterPlanItem[]): Promise<void>;
 
   /** Re-read the agent's own state and confirm it matches canonical. */

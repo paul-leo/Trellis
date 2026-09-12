@@ -21,13 +21,31 @@ had a much larger blast radius than "read-only" should mean.
 
 This is the format every later phase uses: one `openspec/changes/<phase>/`
 directory per phase, `openspec new change <name>` → tasks implemented →
-`openspec archive <name>`. `implementation-plan.md`'s P0 section is kept
-only as a historical note; don't edit it further.
+`openspec archive <name>`. `implementation-plan.md`'s P0/P1 sections are
+kept only as historical notes; don't edit them further.
+
+**P1 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-sync-p1/`;
+living spec at `openspec/specs/canonical-source-loading/` and
+`openspec/specs/skill-instructions-sync/`). Covers all four agents,
+including pi — a corrected assumption found while starting this change
+(pi previously assumed to need "no adapter"; it needs the same symlink
+treatment as the other three once its real global directory,
+`~/.pi/agent/skills`, was confirmed in P0). Verified against a scratch
+`$HOME` and `scripts/sandbox.sh`'s real container, never this developer's
+actual dotfiles. The acceptance pass itself caught two real bugs before
+they'd have shipped: a removal check that used `realpathSync` and
+silently never fired on a symlink whose canonical target had just been
+deleted (exactly the case it existed to catch — broken symlinks throw on
+realpath), and a plural/singular string mismatch between the CLI's
+`target` option and `AdapterPlanItem.kind` that made `trellis sync skills`
+silently apply nothing while reporting "already in sync." Both were only
+found because the sandbox was actually run end-to-end, not just unit
+tests of the pieces — see docs/architecture.md's testing philosophy.
 
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
-| P1 | `trellis sync skills` / `trellis sync instructions` — symlink-based distribution to Claude Code, Codex, Kiro | P0 |
+| P1 | ✅ `trellis sync skills` / `trellis sync instructions` — symlink-based distribution to Claude Code, Codex, Kiro, and pi | P0 |
 | P2 | `trellis mcp sync` — incremental, in-place adapters for Claude Code (JSON merge), Codex (TOML section patch), Kiro (JSON merge); collision check against known host-injected server names | P1 |
 | P3 | `trellis secrets audit` — scans every adapter's output for literal credential patterns, fails non-zero on any hit | P2 |
 | P4 | pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |

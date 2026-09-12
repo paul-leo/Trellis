@@ -96,6 +96,25 @@ valid skill from syncing. Mirrors P0's own "surface a diagnostic, don't
 silently swallow, don't let one bad input block everything else" pattern
 (`docs/research.md`'s D2 risk mitigation).
 
+### D6 — `AdapterPlanItem` gains a `"conflict"` action (fixes an inconsistency in the existing contract)
+
+`src/core/adapter.ts`'s contract (extended in a prior change, before P1
+implementation started) said a conflict "belongs in a thrown error
+`apply()` surfaces" — but `apply()` only ever sees what `plan()` gives it,
+and the same doc said `plan()` must not produce a plan item for a
+conflict. Those two statements can't both be true: `apply()` can't throw
+about something it was never told about. Implementing against it
+surfaced this immediately.
+
+Resolved by adding `"conflict"` as a third `action` value: `plan()`
+detects it (it already has to `lstat` every candidate path to decide
+create/remove/no-op anyway) and includes it as a report-only item;
+`apply()` skips it (no I/O, never throws) so one conflicting item never
+blocks every other, unrelated item in the same run from being applied.
+The caller (`trellis sync`) surfaces conflicts and fails the command
+overall. This matches the "don't let one bad input block everything
+else" pattern already used for P0's diagnostics and this document's D5.
+
 ## Risks / Trade-offs
 
 - **[Risk]** Codex's `instructions` key in `config.toml` might be unset

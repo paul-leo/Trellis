@@ -1,0 +1,143 @@
+/**
+ * Loads `~/.trellis/` into a `CanonicalSource`. Global only — no `root`
+ * parameter, no workspace merge (docs/architecture.md "Global vs.
+ * workspace scope"). See openspec/changes/trellis-sync-p1/specs/
+ * canonical-source-loading/spec.md for the exact contract this implements.
+ */
+
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+import { parse as parseYaml } from "yaml";
+import type { AgentId, AgentProfile, CanonicalSource, MemoryEntry, Scope, SkillRef } from "./types.js";
+import { ALL_AGENTS } from "./types.js";
+
+interface ScopeYaml {
+  skills?: Record<string, AgentId[]>;
+  agents?: Record<string, AgentId[]>;
+  memories?: Record<string, AgentId[]>;
+}
+
+function trellisRoot(homeDir: string): string {
+  return join(homeDir, ".trellis");
+}
+
+function listMarkdownFiles(dir: string): { name: string; file: string }[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => ({ name: basename(name, ".md"), file: join(dir, name) }));
+}
+
+function listSkillDirs(dir: string): { name: string; dir: string }[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const skills: { name: string; dir: string }[] = [];
+  for (const name of entries) {
+    const skillDir = join(dir, name);
+    try {
+      if (statSync(skillDir).isDirectory()) {
+        skills.push({ name, dir: skillDir });
+      }
+    } catch {
+      // unreadable/broken entry — skip, not a load failure
+    }
+  }
+  return skills;
+}
+
+function loadScopeYaml(path: string): ScopeYaml {
+  if (!existsSync(path)) {
+    return {};
+  }
+  const parsed = parseYaml(readFileSync(path, "utf-8"));
+  return (parsed ?? {}) as ScopeYaml;
+}
+
+/** `undefined` if the name has no entry in scope.yaml's map — "shared with
+ * all four agents," the default. A recognized but empty list is left as
+ * authored (an explicitly agent-less scope), not coerced to "all". */
+function scopeFor(map: Record<string, AgentId[]> | undefined, name: string): Scope {
+  return map?.[name];
+}
+
+function validAgentIds(scope: AgentId[] | undefined): scope is AgentId[] {
+  if (!scope) return true;
+  return scope.every((id) => (ALL_AGENTS as readonly string[]).includes(id));
+}
+
+/**
+ * `homeDir` defaults to the real `~` and is only ever overridden for tests
+ * and `scripts/sandbox.sh` — the same seam P0's probes use
+ * (src/probes/*.ts) and for the same reason: never touch a developer's
+ * real dotfiles from a test. It is not a workspace/project root — see
+ * specs/canonical-source-loading's global-only requirement, which this
+ * parameter does not weaken.
+ */
+export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSource {
+  const root = trellisRoot(homeDir);
+  if (!existsSync(root)) {
+    throw new Error(
+      `No canonical source at ${root}. Create it before running trellis sync — see docs/architecture.md's canonical schema.`,
+    );
+  }
+
+  const diagnostics: string[] = [];
+  const scopeYaml = loadScopeYaml(join(root, "scope.yaml"));
+
+  const skillDirs = listSkillDirs(join(root, "skills"));
+  const knownSkillNames = new Set(skillDirs.map((s) => s.name));
+  const skills: SkillRef[] = skillDirs.map(({ name, dir }) => ({ name, dir, scope: scopeFor(scopeYaml.skills, name) }));
+
+  const agentFiles = listMarkdownFiles(join(root, "agents"));
+  const knownAgentProfileNames = new Set(agentFiles.map((a) => a.name));
+  const agents: AgentProfile[] = agentFiles.map(({ name, file }) => ({
+    name,
+    file,
+    scope: scopeFor(scopeYaml.agents, name),
+  }));
+
+  const memoryFiles = listMarkdownFiles(join(root, "memories"));
+  const knownMemoryNames = new Set(memoryFiles.map((m) => m.name));
+  const memories: MemoryEntry[] = memoryFiles.map(({ name, file }) => ({
+    name,
+    file,
+    scope: scopeFor(scopeYaml.memories, name),
+  }));
+
+  for (const [section, known] of [
+    ["skills", knownSkillNames],
+    ["agents", knownAgentProfileNames],
+    ["memories", knownMemoryNames],
+  ] as const) {
+    const map = scopeYaml[section];
+    for (const name of Object.keys(map ?? {})) {
+      if (!known.has(name)) {
+        diagnostics.push(`scope.yaml: "${section}.${name}" does not match any known ${section.slice(0, -1)} — ignored`);
+      } else if (!validAgentIds(map?.[name])) {
+        diagnostics.push(`scope.yaml: "${section}.${name}" lists an unrecognized agent id — ignored`);
+      }
+    }
+  }
+
+  return {
+    instructionsFile: join(root, "agents.md"),
+    skills,
+    agents,
+    memories,
+    // Not read yet — P2 (mcp/servers.yaml) and P3 (secrets.policy.yaml)
+    // own parsing these; P1 only syncs skills/instructions.
+    mcp: { servers: {}, knownHostInjected: [] },
+    secretsPolicy: { allowedVars: [], rejectPatterns: [] },
+    diagnostics,
+  };
+}

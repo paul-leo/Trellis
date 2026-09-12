@@ -201,4 +201,7 @@ export interface CanonicalSource {
   memories: MemoryEntry[];
   mcp: McpConfig;
   secretsPolicy: SecretsPolicy;
+  /** e.g. a `scope.yaml` entry naming a skill/agent/memory that doesn't
+   * exist — recorded, not a load failure. See `loadCanonicalSource`. */
+  diagnostics: string[];
 }

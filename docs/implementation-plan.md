@@ -149,6 +149,11 @@ hardcoded checks doesn't count.
 
 ## P1 — `trellis sync skills` / `trellis sync instructions`
 
+> **Done and archived** (`openspec/changes/archive/2026-09-12-trellis-sync-p1/`).
+> Section kept as a historical note only — see `docs/roadmap.md` for the
+> actual outcome and the two real bugs the acceptance pass caught. Don't
+> edit this section further.
+
 Depends on P0's `AgentSnapshot` to decide *what* needs syncing; this phase
 adds the *write* path.
 

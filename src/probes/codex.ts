@@ -34,7 +34,7 @@ interface CodexMcpEntry {
  * real TOML library (docs/research.md "Codex — three hard constraints" #3);
  * this exists purely to display where Codex's instructions file lives.
  */
-function readInstructionsPath(configTomlPath: string): string | undefined {
+export function readInstructionsPath(configTomlPath: string): string | undefined {
   let content: string;
   try {
     content = readFileSync(configTomlPath, "utf-8");
