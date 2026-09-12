@@ -166,10 +166,23 @@ adds the *write* path.
   `plan()` filters skills/subagent profiles through `isInScope` before
   producing any plan item — a skill scoped away from that adapter's `id`
   must produce zero plan items for it, not a plan item that apply() later
-  skips. `apply()` creates/repairs symlinks; it must be safe to run against
-  a directory that already has the *correct* symlink (no-op) and must refuse
-  to silently delete a directory that turns out to hold real content instead
-  of a symlink (surface it as a conflict, do not overwrite).
+  skips. `apply()` handles three cases, not just creation:
+  - **create/repair**: no symlink, or a symlink pointing at the wrong
+    target — safe to (re)write.
+  - **remove**: an agent's skill directory has a Trellis-managed symlink
+    (its realpath resolves inside the canonical `skills/` root) whose
+    corresponding skill either no longer exists in canonical or was just
+    scoped away from this agent — this is the "delete" half of "add once,
+    remove once, reaches every agent," and it's easy to build only the
+    create path and quietly never finish this half.
+  - **refuse**: the path exists as a *real* directory, not a symlink at
+    all — this is not Trellis's to touch. Surface it as a conflict and
+    stop; never delete something that might be a user's own content just
+    because its name matches a skill Trellis also knows about.
+
+  The realpath check in the remove case is not optional: it's what makes
+  removal safe. Only ever delete a symlink Trellis can prove it created
+  (points inside the canonical source), never a same-named real directory.
 - `verify()` re-runs the relevant P0 probe and diffs against canonical —
   this is why P0's probes are written as reusable functions, not
   doctor-command-only logic.
@@ -218,6 +231,13 @@ because mirasim writes to the same file independently.
   *before* the write happens, not just audited after (P3 audits adapter
   *output*; this is a pre-write guard specific to the MCP adapter, cheaper
   to catch here than after the fact).
+- **Hub mode branch** (`docs/architecture.md` "MCP hub mode"): every
+  adapter checks `canonical.mcp.hub` first. If set, skip the whole
+  N-server merge/patch logic above and instead ensure exactly one static
+  entry (name TBD, e.g. `trellis-hub`) pointing at `hub.url` exists —
+  Codex still patches in place, Claude/Kiro still JSON-merge, just one
+  entry instead of N. The collision check still runs, just against that
+  one name instead of every server name.
 
 ### P2 acceptance
 
@@ -225,7 +245,9 @@ Reproduce the exact Codex incident from `docs/research.md` in a sandboxed
 `config.toml` (a stdio server statically defined, then a same-name `url`
 server "injected" via `-c` the way mirasim does) and confirm Trellis's
 collision check refuses the write *before* attempting it, rather than
-letting Codex fail to start.
+letting Codex fail to start. Separately, with `hub.url` set in the fixture's
+`servers.yaml`, confirm each agent's generated config contains exactly one
+MCP entry regardless of how many servers are defined.
 
 ---
 
@@ -247,9 +269,13 @@ Design is gated on P0's pi skill-path investigation (§0.2). Two candidate
 shapes depending on what that finds:
 
 - **If pi has a real discovery directory**: a pi extension package,
-  installed once, that on startup reads `.trellis/mcp/servers.yaml`,
-  opens an `@modelcontextprotocol/sdk` `StdioClientTransport` per server,
-  and calls pi's `registerTool` for each tool the server reports.
+  installed once, that on startup reads `.trellis/mcp/servers.yaml`. If
+  `mcp.hub` is unset, it opens an `@modelcontextprotocol/sdk`
+  `StdioClientTransport` per server and calls pi's `registerTool` for each
+  tool the server reports; if `mcp.hub.url` is set, it instead opens a
+  single `StreamableHTTPClientTransport` to that URL — one connection
+  instead of N processes to keep alive, see `docs/architecture.md` "MCP
+  hub mode".
 - **If pi is strictly `--skill`/`--extension`-flag driven per invocation**:
   Trellis instead ships a thin `pi` wrapper script/alias that reads the
   canonical source and injects the right flags — functionally equivalent,

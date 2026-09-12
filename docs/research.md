@@ -46,14 +46,25 @@ specifies).
 | Project | Stars | Model | Notes |
 |---|---|---|---|
 | [MetaMCP](https://github.com/metatool-ai/metamcp) | 2.6k, MIT | Docker + Postgres, namespaces, OAuth | Heaviest, most complete; remote-only endpoints need a local stdio bridge for desktop clients |
-| [mcp-hub](https://github.com/ravitemer/mcp-hub) | 457 | Plain Node process, no Docker | Lightest, editor-integration focused (Neovim) |
-| [mcp-router](https://github.com/mcp-router/mcp-router) | — | Desktop app + CLI, Sustainable Use License | Already deployed in this environment; token-based, has a GUI |
+| [mcp-hub](https://github.com/ravitemer/mcp-hub) | 516★, 227 commits, MIT | Plain Node process, no Docker, single HTTP endpoint (`/mcp`), JSON config with `command`/`args`/`env` (stdio) or `url`/`headers` (remote) — matches Trellis's own `servers.yaml` fields almost 1:1 | Dynamic add/remove without client restart — SSE-pushes `servers_updated`/`tool_list_changed` to already-connected agents |
+| [mcp-router](https://github.com/mcp-router/mcp-router) | — | Desktop app + CLI, Sustainable Use License | Already deployed in this environment; token-based, has a GUI. **First-hand incident**: its `MCPR_TOKEN` existed in three different values across `secrets.env`/`config.toml`/`kiro/mcp.json` simultaneously, one silently invalid — see below |
 
-Decision: Trellis does not ship its own aggregator. It generates native MCP
-config for each agent directly (this is what actually needed solving — none
-of these three touch Kiro/pi/Codex's TOML format), and documents mcp-hub as
-the optional runtime aggregation layer for users who want tool-subset
-filtering across many servers.
+Decision: Trellis still does not implement aggregation/routing logic
+itself. It generates native MCP config for each agent directly — that's
+what actually needed solving, since none of the above touch Kiro/pi/Codex's
+TOML format. But it now natively *supports* routing every agent through a
+single external endpoint instead of N direct definitions ("hub mode," see
+`docs/architecture.md`) — not a product integration, just an optional
+`hub.url` field every adapter checks. What runs behind that URL (mcp-hub,
+mcp-router, anything else) is the user's choice, not Trellis's; the type
+(`HubConfig`) deliberately has no engine/product field to keep in sync.
+
+The mcp-router incident above is the concrete argument for preferring a
+self-hosted hub whose config Trellis generates from the same
+`servers.yaml` over one managed through an external dashboard: the latter
+becomes a second place "what servers exist" is defined, outside `.trellis/`
+entirely, and this project hit real drift from exactly that shape of setup
+before hub mode existed as a documented option.
 
 ## Shared memory (reuse)
 

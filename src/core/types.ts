@@ -46,15 +46,32 @@ export interface McpServerDef {
   agents?: Scope;
 }
 
+/**
+ * If set, every agent's adapter writes exactly ONE entry — this URL —
+ * instead of all N server definitions. What runs behind the URL (a
+ * self-hosted mcp-hub, a hosted mcp-router account, anything else
+ * speaking MCP over HTTP) is not Trellis's concern and not something
+ * adapter code branches on — there is no "engine" switch to maintain.
+ * See docs/architecture.md "MCP hub mode".
+ */
+export interface HubConfig {
+  url: string;
+}
+
 export interface McpConfig {
   servers: Record<string, McpServerDef>;
   /**
    * Server names a host environment (e.g. mirasim) is known to inject at
-   * runtime. An adapter must refuse to define a local server under any of
-   * these names — see docs/research.md "Codex — three hard constraints" for
-   * why a same-name collision is not a soft failure on every agent.
+   * runtime. Checked against every server name Trellis would write per
+   * agent when `hub` is unset; against the single hub entry name only when
+   * `hub` is set (there's nothing else to collide) — see docs/research.md
+   * "Codex — three hard constraints" for why a same-name collision is not
+   * a soft failure on every agent.
    */
   knownHostInjected: string[];
+  /** Omit for direct mode (today's default: every agent gets all N server
+   * definitions written into its native config). See `HubConfig`. */
+  hub?: HubConfig;
 }
 
 export interface SkillRef {

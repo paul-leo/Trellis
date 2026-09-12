@@ -99,8 +99,17 @@ documented on `plan()` itself.
 Every adapter must implement:
 
 - `probe()` — does this agent exist on this machine, what version
-- `plan(canonical)` — pure function, canonical state → diff to apply, no I/O
-- `apply(plan)` — perform the diff; must be idempotent and re-runnable
+- `plan(canonical)` — diffs canonical against this agent's current on-disk
+  state (read-only, but it does read — create/remove/no-op/conflict can't
+  be decided from canonical alone) and produces `AdapterPlanItem[]`, each
+  tagged `"create"` or `"remove"`. **Must emit `"remove"` items**, not just
+  `"create"`: a Trellis-managed symlink (realpath resolves inside the
+  canonical source) whose entry was deleted from canonical or scoped away
+  from this agent is stale and belongs in the plan — see
+  `src/core/adapter.ts`'s `plan()` doc and the P1 acceptance test in
+  `docs/implementation-plan.md`.
+- `apply(plan)` — perform the diff; must be idempotent and re-runnable for
+  both actions
 - `verify()` — re-read the agent's own state and confirm it matches
   canonical; this is what `trellis doctor` calls
 
@@ -115,28 +124,78 @@ Codex's own `config.toml` also holds mirasim-independent user settings
 **Claude Code** — `~/.claude/skills`, `~/.claude/agents` become symlinks into
 the canonical source. `~/.claude.json`'s `mcpServers` is patched in place
 (JSON, so this is a simple merge). Values are always `${VAR}` references.
+When `mcp.hub` is set, this becomes one entry (the hub URL) instead of N.
 
 **Codex** — skills via `~/.agents/skills` symlink (Codex's own built-in
 convention, requires no Trellis-specific path). MCP via `codex mcp add`
 where possible; for env passthrough use `env_vars`, never `--env` with a
 literal secret value. Must check for name collisions against any host-
 injected servers (mirasim connectors) before writing — see research.md §3.
+When `mcp.hub` is set, only the single hub entry needs this check — there's
+nothing else defined locally for it to collide with.
 
 **Kiro** — same shape as Claude Code: `~/.kiro/skills` symlink,
 `~/.kiro/steering/CLAUDE.md` symlink, `~/.kiro/settings/mcp.json` patched
-like Claude's.
+like Claude's. Same hub-mode simplification applies.
 
 **pi** — instructions and skills need no adapter (native discovery). MCP
-needs a real bridge: a pi extension, shipped by Trellis, that reads
-`mcp/servers.yaml` at pi startup and registers each server's tools through
-pi's `registerTool` API by running a real `@modelcontextprotocol/sdk` stdio
-client per server. This is the one piece of the project that is an agent
-runtime extension, not a config generator.
+needs a real bridge either way, but which shape depends on `mcp.hub`:
+without it, the bridge extension opens N `@modelcontextprotocol/sdk` stdio
+clients (one per server) and registers each one's tools through pi's
+`registerTool` API; with `mcp.hub` set, it opens exactly one HTTP client to
+the hub instead — meaningfully less code and one fewer class of failure
+(N processes to keep alive vs. one connection). This is the one piece of
+the project that is an agent runtime extension, not a config generator,
+regardless of hub mode.
+
+## MCP hub mode
+
+Every agent's MCP surface can be either N direct server definitions
+(default) or one static entry pointing at a single HTTP endpoint — set
+`mcp.hub.url` in `mcp/servers.yaml` to switch (see
+`schema/servers.example.yaml`). Nothing about *what* runs behind that URL
+is part of Trellis's design: a self-hosted
+[mcp-hub](https://github.com/ravitemer/mcp-hub) instance, a hosted
+mcp-router account, anything else speaking MCP over HTTP all look
+identical to every adapter — a URL. There is deliberately no "engine"
+switch in the type (`HubConfig` is just `{ url: string }`) or in adapter
+code — building one was tried and reverted as unneeded complexity for a
+distinction (self-hosted vs. hosted, generated-config vs.
+externally-managed) that only matters to the human choosing a hub, never
+to the code writing one entry that points at it.
+
+**What actually changes when `hub` is set:**
+- Every adapter writes ONE entry instead of N. This is most of the value:
+  adding a new backend server means editing wherever the hub's own config
+  lives (this project doesn't prescribe that either) and never touching
+  any of the four agents' configs or restarting them, if the hub supports
+  live reload (mcp-hub does, via SSE).
+- The collision check against `known_host_injected` (docs/research.md
+  §"Codex — three hard constraints") shrinks to checking one name instead
+  of N, since there's nothing else locally defined to collide with.
+- pi's bridge (P4) becomes one HTTP client instead of N stdio clients.
+
+**What doesn't change:** the boundary with mirasim (docs/research.md §3)
+is unaffected — `mcp.hub`, self-hosted or not, only ever carries the
+servers Trellis's own `servers.yaml` defines (local stdio, per that
+boundary); mirasim's remote-OAuth connectors are injected at the agent's
+own process level regardless of whether hub mode is on.
+
+**The trade-off, stated plainly:** self-hosting a hub (or paying for a
+hosted one) adds a moving part that direct mode doesn't have — if it's
+down, every agent loses MCP capability at once, not just one server. And
+if you point at a hub you manage outside Trellis (rather than one Trellis
+generates config for), that hub's own dashboard/config becomes a second
+place "what servers exist" is defined, outside `.trellis/` — this project
+hit that exact problem first-hand with a token going stale across three
+different values before `mcp.hub` existed as a concept (docs/research.md).
+Direct mode remains fully supported for anyone who'd rather not take that
+trade.
 
 ## What Trellis explicitly does not build
 
-- An MCP aggregator/gateway (use mcp-hub if you want tool-subset filtering
-  across many servers; Trellis's adapters talk to servers directly)
+- An MCP aggregator/gateway's actual routing/proxy logic (hub mode above
+  lets you point every agent at one, but Trellis doesn't implement one)
 - A memory backend (defaults to `@modelcontextprotocol/server-memory`;
   mem0/OpenMemory documented as an opt-in upgrade)
 - A secret vault (reads `${VAR}` from whatever the environment already
