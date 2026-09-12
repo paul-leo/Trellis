@@ -288,6 +288,22 @@ development, not in CI, not for a "quick manual check." A bug in an adapter
 that patches TOML in place is exactly the kind of thing that corrupts a
 real config file if it's tested against one.
 
+**Exception: pi.** This rule protects real state a person depends on — the
+other three agents' adapters patch that state in place (symlinks over real
+directories, in-place TOML/JSON edits). pi's adapter never does: skills/
+instructions are the same symlink-or-noop regardless of machine, and the
+MCP bridge (P4) is a single already-symlinked extension file that reads a
+separate, Trellis-owned `servers.yaml` rather than writing into anything pi
+itself depends on. A temporary, narrowly-scoped `~/.trellis/mcp/servers.yaml`
+(deleted afterward) plus a real `pi -p` run therefore carries none of the
+corruption risk this section exists to prevent, and it's the only way to
+observe pi's actual extension-loading behavior on *this* installed pi/jiti
+version — `docker/pi-sandbox.Dockerfile` verifies the same jiti-tolerance in
+general (P4's own acceptance criteria), but doesn't stand in for a
+spot-check against a specific real installation. Real-machine verification
+of pi specifically is therefore permitted, not a hard-rule violation — the
+other three agents are not exempted.
+
 Verification happens against an isolated environment instead: a scratch
 `$HOME` (or a container with one mounted) populated with synthetic
 per-agent config that looks like the real thing but is expendable — created
