@@ -100,6 +100,20 @@ ${patternLines}
 `;
 }
 
+/**
+ * Trellis never spawns an installer itself (global package installs are
+ * exactly the kind of irreversible, system-wide action that needs the
+ * user's own explicit "yes", not a silent trellis-init side effect) —
+ * these are printed as a pointer only. Verified against each project's
+ * own current install docs, same discipline as everything else here.
+ */
+const INSTALL_HINTS: Record<AgentId, string> = {
+  "claude-code": "npm install -g @anthropic-ai/claude-code",
+  codex: "npm install -g @openai/codex",
+  kiro: "https://kiro.dev/downloads/",
+  pi: "npm install -g @earendil-works/pi-coding-agent",
+};
+
 function ensureFile(path: string, template: string): InitFileResult {
   if (existsSync(path)) {
     return { path, action: "already-present" };
@@ -134,7 +148,7 @@ export async function collectInitReport(homeDir: string = homedir()): Promise<In
     const present = result.status === "fulfilled" && result.value.present;
     const message = present
       ? `${agent} is present — run \`trellis migrate --from ${agent}\` to import its skills and instructions`
-      : `${agent} — not detected on this machine`;
+      : `${agent} — not detected on this machine. Install: ${INSTALL_HINTS[agent]}`;
     return { agent, present, message };
   });
 

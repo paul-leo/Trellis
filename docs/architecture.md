@@ -1,5 +1,11 @@
 # Architecture
 
+This document is for contributors and anyone evaluating Trellis's internals
+— how adapters are built, why they're built the way they are, and the
+testing discipline behind that. If you just want to *use* Trellis, see
+[`docs/getting-started.md`](getting-started.md) instead; nothing below is
+required reading for that.
+
 ## Layers and who owns each one
 
 ```

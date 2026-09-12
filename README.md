@@ -34,6 +34,10 @@ npm install -g agent-trellis
 
 ## Quick start
 
+See [`docs/getting-started.md`](docs/getting-started.md) for the detailed
+walkthrough — example output for each command, what each `migrate`/`sync`
+conflict action means, and troubleshooting. Short version:
+
 **Already using Claude Code, Codex, Kiro, or pi and want to migrate what you
 already have?**
 

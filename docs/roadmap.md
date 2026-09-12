@@ -352,6 +352,18 @@ correctly reporting conflicts — not overwriting — on claude-code and
 codex, since both already have their own real, non-canonical
 `sample-skill` at that exact path.
 
+**Agent auto-install scope decision, addendum to `trellis-cli-migrate`:**
+`trellis init` prints each undetected agent's real, currently-correct
+install command/URL (`npm install -g @anthropic-ai/claude-code`,
+`npm install -g @openai/codex`, `npm install -g
+@earendil-works/pi-coding-agent`, and `https://kiro.dev/downloads/`
+for Kiro — a desktop IDE with no CLI package) — never spawns an
+installer itself. A global package install or IDE download is exactly
+the kind of system-wide, hard-to-reverse action this project's own
+safety discipline requires an explicit human "yes" for, not a silent
+side effect of running `trellis init`; a detect-and-print pointer
+delivers "help me install the agents you support" without that risk.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
