@@ -7,6 +7,15 @@
   "bin": {
     "trellis": "./dist/cli.js"
   },
+  "main": "./dist/sdk.js",
+  "types": "./dist/sdk.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist"
   ],

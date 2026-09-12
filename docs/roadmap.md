@@ -104,6 +104,22 @@ same sandbox check: the bridge loaded cleanly (no more "Failed to load
 extension"), reaching pi's own unrelated "no API key configured" failure
 instead — proof positive without ever spending a real model call.
 
+**P5 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-sdk-p5/`;
+living spec at `openspec/specs/trellis-sdk/`). `agent-trellis` now has a
+real `"exports"` map: `import { loadCanonicalSource } from "agent-trellis"`
+resolves without touching the CLI at all. Deliberately narrow (a curated
+`src/sdk.ts` barrel — canonical-source loading and its types only, never
+`src/adapters/*`/`src/commands/*`) and deliberately one package, not a
+separately-published `@trellis/sdk` — the roadmap's naming was a working
+label, not a monorepo commitment, and there is no second consumer yet to
+justify that cost. Verified with a real package-resolution check
+(`scripts/verify-sdk-export.sh`: pack the actual tarball, install it into
+a throwaway scratch project, import via the bare `"agent-trellis"`
+specifier), not just a source-relative `tsx` import — the two use
+different resolution algorithms, and only the former would have caught an
+`"exports"` map that looked right but didn't actually resolve for a real
+consumer.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
@@ -111,7 +127,7 @@ instead — proof positive without ever spending a real model call.
 | P2 | ✅ `trellis mcp sync` — incremental, in-place adapters for Claude Code (JSON merge), Codex (TOML section patch), Kiro (JSON merge); collision check against known host-injected server names | P1 |
 | P3 | ✅ `trellis secrets audit` — scans every adapter's output for literal credential patterns and unexpected env var names, fails non-zero on any hit | P2 |
 | P4 | ✅ pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |
-| P5 | `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
+| P5 | ✅ `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
 | P6 | Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
 | P7 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P6 |
 
