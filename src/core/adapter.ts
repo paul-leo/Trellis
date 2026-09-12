@@ -39,8 +39,12 @@ export interface AdapterPlanItem {
    * `"extension"` is pi-only: the MCP bridge file itself
    * (trellis-pi-mcp-bridge-p4) — Trellis's own packaged code, not a
    * user-authored capability from `~/.trellis/`, delivered via the same
-   * symlink create/repair/remove semantics as skills/instructions. */
-  kind: "skill" | "instructions" | "mcp" | "extension";
+   * symlink create/repair/remove semantics as skills/instructions.
+   * `"kiro-approved-env-vars"` is Kiro-only (trellis-kiro-approved-env-vars):
+   * a completely different target file and merge mechanism (see
+   * `approvedEnvVars` below) from `"mcp"`, not something the other
+   * three agents have an equivalent of. */
+  kind: "skill" | "instructions" | "mcp" | "extension" | "kiro-approved-env-vars";
   /** Human-readable description of one change this adapter would make
    * ("create" / "remove") or why it refused to ("conflict"). */
   description: string;
@@ -59,6 +63,13 @@ export interface AdapterPlanItem {
    * `target` (the config file) via that agent's own mechanism (JSON
    * merge or, for Codex, `src/lib/tomlSection.ts`'s splice). */
   mcpWrite?: { name: string; def: McpServerDef };
+  /** Only set (and only meaningful) when `kind === "kiro-approved-env-vars"`
+   * and `action === "create"`: the full, already-deduplicated array to
+   * write as `kiroAgent.mcpApprovedEnvVars` — a union of whatever was
+   * already there plus every name Trellis's canonical MCP config needs
+   * for Kiro, never a subtraction (trellis-kiro-approved-env-vars
+   * design.md D3/D4). */
+  approvedEnvVars?: string[];
 }
 
 export interface AdapterVerifyResult {

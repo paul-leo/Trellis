@@ -174,6 +174,32 @@ discovered later: `missing-env-value` is authoritative for pi, but only a
 best-effort proxy for Claude Code/Codex/Kiro — those three resolve
 `${VAR}` in their own process, which this audit cannot observe directly.
 
+**P8 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-kiro-approved-env-vars/`;
+living spec at `openspec/specs/kiro-env-var-approval/`). A real,
+already-shipped correctness gap, found by reading Kiro's own installed
+extension source directly
+(`kiro.kiro-agent/dist/extension.js`'s `expandEnvironmentVariables`):
+Kiro's `${VAR}` substitution is gated by a workspace/user setting,
+`kiroAgent.mcpApprovedEnvVars` — a name absent from that list is
+silently left as the literal, unresolved string, no error. On this real
+machine that list was entirely empty, which is exactly why the one real
+Kiro server needing a secret (`mcp-router`) held a literal token instead
+of a `${VAR}` reference. Every Kiro MCP server Trellis had ever
+generated with a `${VAR}` reference was, by default, silently broken —
+P2 never knew this second gate existed. Fixed: the Kiro adapter now
+also ensures every env name it references is present in
+`kiroAgent.mcpApprovedEnvVars`, in Kiro's own global, VS-Code-style
+`settings.json` (a different file from `~/.kiro/settings/mcp.json`,
+shared with hundreds of unrelated editor preferences) — additive only,
+parses the whole file and preserves every other key, refuses to touch a
+file it can't parse. Verified in the real sandbox twice: a clean machine
+gets the file created with exactly the needed name; an already-correct,
+pre-seeded machine (including an unrelated key) produces zero writes and
+comes out byte-identical. Deliberately narrow: only covers `env` names
+(not the not-yet-built `headers` field), and only macOS's settings path
+(Linux/Windows equivalents are the well-known convention but unverified
+against a real install, stated as an open question).
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
@@ -184,6 +210,8 @@ best-effort proxy for Claude Code/Codex/Kiro — those three resolve
 | P5 | ✅ `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
 | P6 | ✅ Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
 | P7 | ✅ Secrets/env management: shared `resolveSecretEnv` + `secrets.policy.yaml`'s `env_file`, pi bridge stops reading raw ambient env, `secrets audit` gains a `missing-env-value` check | P3, P4 |
-| P8 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P7 |
+| P8 | ✅ Kiro `${VAR}` fix: adapter also manages `kiroAgent.mcpApprovedEnvVars`, without which Kiro silently never substitutes any env reference Trellis writes | P2 |
+| P9 | MCP transport/auth expansion: `headers` field for static bearer/API-key remote auth (Claude Code/Codex/Kiro/pi bridge, each via its own real schema), `sse` transport; real OAuth flows explicitly delegated to each agent's own native support, not reimplemented | P2, P4, P8 |
+| P10 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P9 |
 
 No dates. This is scoped by verification milestones, not calendar time.
