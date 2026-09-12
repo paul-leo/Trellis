@@ -8,11 +8,12 @@
 import { runDoctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
 import { runMigrate } from "./commands/migrate.js";
+import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync } from "./commands/mcp.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 
-const KNOWN_COMMANDS = ["init", "migrate", "doctor", "sync", "mcp", "secrets"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "secrets"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -21,6 +22,13 @@ Usage:
   trellis <command>
 
 Commands:
+  onboard   Guided flow: init -> detect agents -> pick a base agent ->
+            migrate -> sync, in one command
+              --agent <agent>    non-interactive base-agent choice
+                                 (required with 2+ agents present and
+                                 no terminal to prompt in, e.g. --json)
+              --dry-run          preview the whole flow, write nothing
+              --json             machine-readable output, no report text
   init      Create ~/.trellis/ with a minimal valid skeleton if missing
               (never overwrites an existing file — fills in only what's
               missing) and prints which agents are present
@@ -65,6 +73,14 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "onboard") {
+    const agentIndex = rest.indexOf("--agent");
+    const agent = agentIndex >= 0 ? rest[agentIndex + 1] : undefined;
+    const { exitCode } = await runOnboard({ agent, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
+    process.exitCode = exitCode;
+    return;
+  }
+
   if (command === "init") {
     const { exitCode } = await runInit({ json: rest.includes("--json") });
     process.exitCode = exitCode;
@@ -94,7 +110,7 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const { exitCode } = await runSync({ target, json: rest.includes("--json") });
+    const { exitCode } = await runSync({ target, json: rest.includes("--json"), dryRun: rest.includes("--dry-run") });
     process.exitCode = exitCode;
     return;
   }

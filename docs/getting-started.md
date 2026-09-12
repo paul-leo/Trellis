@@ -9,6 +9,51 @@ This is the detailed walkthrough. For the short version see the
 npm install -g agent-trellis
 ```
 
+## `trellis onboard` — the one-command path
+
+```
+$ trellis onboard
+```
+
+Runs `init`, detects which of Claude Code/Codex/Kiro/pi are on this machine,
+picks one as the migration base, then runs `migrate` and `sync` against it.
+
+- **No agent detected**: prints each agent's real install command/URL and
+  stops. Never installs anything itself — that's your call.
+- **Exactly one agent detected**: auto-selected as the base, no prompt.
+- **Two or more detected**: prompts you to pick one (if you're at a real
+  terminal), or pass `--agent <id>` to skip the prompt — useful in scripts,
+  CI, or when running with `--json`, which never prompts.
+
+```
+$ trellis onboard --agent claude-code
+Using claude-code as the migration base (--agent).
+
+migrate --from claude-code
+  [create] skill "my-skill" — will copy from /Users/you/.claude/skills/my-skill
+  ...
+
+sync
+  ✅ codex — 1 created, 0 removed, 0 conflict(s)
+  ...
+
+Next: `trellis mcp sync` to distribute MCP servers, `trellis secrets audit` to check for leaked credentials.
+```
+
+Add `--dry-run` to preview the entire chain — init/migrate/sync — with zero
+writes anywhere.
+
+**Picking a base agent only picks one.** If you use two or more agents with
+genuinely different real content, onboard migrates from the one you (or it)
+chose; the others' own differing content is untouched, exactly as `migrate`
+would report it if run against them directly (see the conflict table
+below). Merging differing content across multiple agents into one result
+isn't built yet — see [README's Status](../README.md#status).
+
+The rest of this page is the same flow broken into its individual steps —
+useful if you want more control over any one part, or just want to
+understand what `onboard` did.
+
 ## Two starting points
 
 **You already use one or more of Claude Code, Codex, Kiro, or pi** and have

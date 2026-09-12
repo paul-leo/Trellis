@@ -36,7 +36,23 @@ npm install -g agent-trellis
 
 See [`docs/getting-started.md`](docs/getting-started.md) for the detailed
 walkthrough — example output for each command, what each `migrate`/`sync`
-conflict action means, and troubleshooting. Short version:
+conflict action means, and troubleshooting.
+
+**One command:**
+
+```
+trellis onboard
+```
+
+Creates canonical source, detects which of Claude Code/Codex/Kiro/pi are on
+this machine, picks a base agent to migrate from (auto-selected if only one
+is present; prompts if more than one — pass `--agent <id>` to skip the
+prompt), then runs `migrate` and `sync`. If no agent is detected, it prints
+each supported agent's real install command/URL and stops — it never
+installs anything itself. Add `--dry-run` to preview the whole thing with
+zero writes.
+
+**Or step by step** (what `onboard` is actually doing under the hood):
 
 **Already using Claude Code, Codex, Kiro, or pi and want to migrate what you
 already have?**
@@ -64,12 +80,15 @@ already have?**
 
 ## Status
 
-**Early, pre-1.0.** All six CLI commands above (`init`, `migrate`, `doctor`,
-`sync`, `mcp sync`, `secrets audit`) are implemented, unit-tested, and verified
-end-to-end against real Docker containers (never a developer's own dotfiles
-during development — see [`docs/architecture.md`](docs/architecture.md)'s
-testing philosophy). See [`docs/roadmap.md`](docs/roadmap.md) for what's
-shipped (P0–P6) vs. planned (P7, a GUI).
+**Early, pre-1.0.** All seven CLI commands above (`onboard`, `init`,
+`migrate`, `doctor`, `sync`, `mcp sync`, `secrets audit`) are implemented,
+unit-tested, and verified end-to-end against real Docker containers (never a
+developer's own dotfiles during development — see
+[`docs/architecture.md`](docs/architecture.md)'s testing philosophy). See
+[`docs/roadmap.md`](docs/roadmap.md) for what's shipped (P0–P6) vs. planned
+(P7, a GUI). `onboard` picks one agent as the migration base when more than
+one is present — merging differing content across multiple agents into one
+result is named future work, not built yet.
 
 **Known limitations, honestly stated rather than discovered the hard way:**
 - MCP servers are never spawned/handshake-tested by `trellis mcp sync` or

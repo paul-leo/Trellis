@@ -107,7 +107,7 @@ ${patternLines}
  * these are printed as a pointer only. Verified against each project's
  * own current install docs, same discipline as everything else here.
  */
-const INSTALL_HINTS: Record<AgentId, string> = {
+export const INSTALL_HINTS: Record<AgentId, string> = {
   "claude-code": "npm install -g @anthropic-ai/claude-code",
   codex: "npm install -g @openai/codex",
   kiro: "https://kiro.dev/downloads/",

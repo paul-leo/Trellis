@@ -27,6 +27,8 @@ export interface RunSyncOptions {
    * philosophy). Not a CLI flag — there is no product reason for an end
    * user to ever point `trellis sync` at a fake home. */
   homeDir?: string;
+  /** Compute and report the plan without calling adapter.apply(). */
+  dryRun?: boolean;
 }
 
 export interface AgentSyncReport {
@@ -71,7 +73,9 @@ export async function collectSyncReport(opts: RunSyncOptions = {}): Promise<Sync
       items = items.filter((item) => item.kind === kind);
     }
 
-    await adapter.apply(items);
+    if (!opts.dryRun) {
+      await adapter.apply(items);
+    }
     reports.push({ agent: adapter.id, present: true, items });
   }
 
@@ -90,14 +94,15 @@ export async function runSync(opts: RunSyncOptions = {}): Promise<{ exitCode: nu
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    printReport(report);
+    printReport(report, opts.dryRun ?? false);
   }
 
   const hasConflict = report.reports.some((r) => r.items.some((i) => i.action === "conflict"));
   return { exitCode: hasConflict ? 1 : 0 };
 }
 
-function printReport(report: SyncReport): void {
+function printReport(report: SyncReport, dryRun: boolean): void {
+  if (dryRun) console.log("[dry run]");
   for (const { agent, present, items } of report.reports) {
     if (!present) {
       console.log(`—  ${agent} (not installed)`);

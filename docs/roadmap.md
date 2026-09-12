@@ -364,6 +364,48 @@ safety discipline requires an explicit human "yes" for, not a silent
 side effect of running `trellis init`; a detect-and-print pointer
 delivers "help me install the agents you support" without that risk.
 
+**`trellis-cli-onboard`, done and archived**
+(`openspec/changes/archive/2026-09-12-trellis-cli-onboard/`; adds
+`onboarding-flow`). `trellis onboard` chains `init` → detect all four
+agents (skill names/count, real-instructions presence — the exact
+subset `migrate` can act on, nothing about MCP) → resolve a single base
+agent → `migrate --from <base>` → `sync`, purely by calling each
+command's own already-tested plan/apply functions — no new skill-copy,
+symlink, or conflict-detection judgment exists in `onboard.ts` itself.
+Base-agent resolution: zero present prints every agent's install
+hint and stops (exit 0 — not a failure, a correct stopping point);
+exactly one present auto-selects with no prompt; two or more resolve
+via `--agent <id>` (the scriptable/sandbox/`--json` path) or an
+interactive `node:readline/promises` prompt when stdin is a real
+terminal, refusing cleanly with the present-agent list rather than
+guessing when neither is available. `--json` never prompts even if
+stdin happens to be a TTY, matching the same principle
+`scripts/sandbox.sh` already uses for its own `-it`/`-i` branching.
+Found and fixed alongside it: `trellis sync` itself had no dry-run
+mode at all before this change (`collectSyncReport` always called
+`adapter.apply()` unconditionally) — added as `RunSyncOptions.dryRun`,
+independently useful on its own (`trellis sync --dry-run`) and a
+prerequisite for `onboard --dry-run`'s own true-no-writes guarantee
+across the whole chain. Verified in the real Docker sandbox: `trellis
+onboard --agent claude-code` against the fixture home (which has
+multiple present agents) produced the identical real result to running
+`migrate --from claude-code` then `sync` by hand — same canonical
+`sample-skill` created, same instructions conflict correctly reported
+and left untouched, same real distribution of the migrated skill out
+to kiro and pi.
+
+**Merge mode — named future work, not a silent gap:** today, two or
+more present agents with genuinely *different* real content still
+resolves to "pick one as the base"; the others' own differing content
+stays exactly as `migrate`/`sync` already report it (conflict,
+untouched — never silently dropped or overwritten). Actually merging
+differing skills/instructions from more than one agent into one
+canonical result is real, separate design work (whose content wins per
+file? per skill? does the user review a diff before it's written?) —
+deliberately out of scope for `trellis-cli-onboard`, tracked here as an
+explicit next step rather than something a user has to discover is
+missing.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
