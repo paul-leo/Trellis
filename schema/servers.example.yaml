@@ -9,6 +9,12 @@
 #     (see `known_host_injected` below) must not be redefined here — on
 #     Codex this causes the entire process to fail to start, not just that
 #     server. See docs/research.md §"Codex — three hard constraints".
+#   - `agents:` is optional and restricts a server to specific agents; omit
+#     it and the server goes to all four (the default). Unlike skills/
+#     subagents/memories, this scoping lives inline here rather than in
+#     `scope.yaml` — this file is Trellis's own format, never handed to an
+#     agent directly, so there's no risk of an agent rejecting an unknown
+#     field the way Codex does with SKILL.md frontmatter.
 
 servers:
   tanka:
@@ -26,6 +32,14 @@ servers:
     transport: http
     url: "https://mcp.figma.com/mcp"
     auth: oauth
+
+  # Example of a private/agent-specific server: only Claude Code has a use
+  # for this one, so the other three agents never see it defined at all.
+  claude-only-tool:
+    transport: stdio
+    command: node
+    args: ["/path/to/claude-specific-server.js"]
+    agents: [claude-code]
 
 # Names a known host (e.g. mirasim) may inject into an agent process at
 # runtime, independent of this file. Trellis's collision check refuses to

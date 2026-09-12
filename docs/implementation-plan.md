@@ -153,16 +153,21 @@ Depends on P0's `AgentSnapshot` to decide *what* needs syncing; this phase
 adds the *write* path.
 
 - `.trellis/` canonical source becomes real for the first time here — not
-  before. `src/core/canonical.ts`: `loadCanonicalSource(root?: string): CanonicalSource`
-  reads `.trellis/skills/*/SKILL.md`, `.trellis/agents/*.md`,
-  `.trellis/agents.md`, resolving global (`~/.trellis`) then workspace
-  (`./.trellis`) with workspace taking precedence per the `.agents Protocol`
-  draft's merge rule (see `docs/research.md`).
+  before. `src/core/canonical.ts`: `loadCanonicalSource(): CanonicalSource`
+  reads `~/.trellis/skills/*/SKILL.md`, `~/.trellis/agents/*.md`,
+  `~/.trellis/agents.md`, `~/.trellis/scope.yaml`. **Global only** — see
+  `docs/architecture.md` "Global vs. workspace scope". No `root` parameter,
+  no workspace merge; don't build toward the `.agents Protocol` draft's
+  global+workspace precedence model until that's an explicit decision, not
+  a default carried over from the draft.
 - `src/adapters/claude-code.ts`, `src/adapters/codex.ts`, `src/adapters/kiro.ts`
   each implement `TrellisAdapter` (`src/core/adapter.ts`) for skills +
   instructions only — MCP is P2, deliberately kept out of this phase's scope.
-  `apply()` creates/repairs symlinks; it must be safe to run against a
-  directory that already has the *correct* symlink (no-op) and must refuse
+  `plan()` filters skills/subagent profiles through `isInScope` before
+  producing any plan item — a skill scoped away from that adapter's `id`
+  must produce zero plan items for it, not a plan item that apply() later
+  skips. `apply()` creates/repairs symlinks; it must be safe to run against
+  a directory that already has the *correct* symlink (no-op) and must refuse
   to silently delete a directory that turns out to hold real content instead
   of a symlink (surface it as a conflict, do not overwrite).
 - `verify()` re-runs the relevant P0 probe and diffs against canonical —
@@ -175,7 +180,10 @@ Point at a scratch `$HOME` (or a container) with none of the four agents'
 skill directories populated, run `trellis sync skills`, then run `trellis
 doctor` and confirm zero findings. Then manually corrupt one symlink
 (point it somewhere wrong) and confirm `doctor` catches it before re-running
-sync to confirm `apply()` repairs it idempotently.
+sync to confirm `apply()` repairs it idempotently. Separately: add one
+skill scoped to `[claude-code]` only in `scope.yaml`, run `trellis sync
+skills`, and confirm it appears only in Claude Code's skills directory —
+not Codex's, Kiro's, or pi's.
 
 ---
 
@@ -200,6 +208,10 @@ because mirasim writes to the same file independently.
   (`url is not supported for stdio`) quoted in the failure message so a user
   hitting this via Trellis gets the real cause immediately instead of
   rediscovering it as a mysterious Codex crash.
+- Every adapter's `plan()` filters servers through `isInScope` using each
+  server's inline `agents:` field (not `scope.yaml` — see
+  `docs/architecture.md` "Private / agent-specific capabilities" for why
+  MCP scoping is inline) before generating anything for that agent.
 - `src/adapters/claude-code.ts` / `kiro.ts` (extended): plain JSON deep-merge
   under `mcpServers`, values always emitted as `${VAR}` — never a literal,
   enforced by a check against `secrets.policy.yaml`'s `reject_patterns`

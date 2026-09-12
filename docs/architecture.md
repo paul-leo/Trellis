@@ -4,7 +4,8 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Trellis canonical source  (~/.trellis or project .trellis) │
+│  Trellis canonical source  (~/.trellis — global only, see  │
+│  "Global vs. workspace scope" below)                        │
 │  instructions · skills · agents · mcp/servers.yaml ·      │
 │  memories · secrets policy                                 │
 └───────────────┬─────────────────────────────────────────┘
@@ -36,9 +37,62 @@ Aligned to the `.agents Protocol` draft, extended where the draft is silent:
 ├── mcp/servers.yaml          # single MCP source, values are var-name
 │                             # references only, never literals
 ├── memories/*.md             # shared memory entries (server-memory backed)
+├── scope.yaml                 # exceptions to "shared with all agents" —
+│                             # see "Private / agent-specific capabilities"
 ├── secrets.policy.yaml       # which var names are allowed, nothing else
 └── trellis.lock.json         # per-agent adapter state, for drift detection
 ```
+
+## Global vs. workspace scope
+
+**Global only, for now.** Trellis manages `~/.trellis` — one canonical
+source per machine, applied to that machine's four agents. It does not yet
+read or merge a project-local `.trellis/` in a specific repo.
+
+The `.agents Protocol` draft (see `research.md`) describes a two-layer
+merge — global defaults, workspace overrides on top, closest wins. That
+model is a reasonable target eventually, but it's explicitly **out of
+scope until a later phase**: it adds real complexity (merge precedence,
+per-project drift, a second place secrets policy has to be checked) that
+isn't justified before the single-layer global case is solid. Don't build
+workspace resolution ahead of that decision — if you find yourself adding
+a `root?: string` parameter or precedence logic to `loadCanonicalSource`,
+that's scope creep against this section, not a natural extension.
+
+## Private / agent-specific capabilities
+
+Not everything belongs to all four agents. A skill built around Claude
+Code's Task-based subagent delegation has no equivalent to delegate to on
+Codex; an MCP server might only make sense for one agent's workflow. Every
+scopable item — skill, subagent profile, memory entry, MCP server —
+defaults to "shared with all four," and can be restricted with an explicit
+`scope` (skills/agents/memories) or inline `agents:` (MCP servers, see
+below). Restriction is the exception you declare, not something you
+configure for the common case.
+
+**Skills, subagent profiles, and memory entries declare scope in
+`.trellis/scope.yaml`, never inside the artifact file itself.** This
+isn't a style preference: Codex validates `SKILL.md` frontmatter against
+an allow-list of recognized keys and rejects files with unknown ones (see
+`research.md`) — a Trellis-only `scope:` field written into a skill's own
+frontmatter would break that skill specifically on Codex. Keeping scope
+declarations in a separate manifest means every artifact stays a clean,
+portable file exactly as its target agent's own spec expects; Trellis's
+own bookkeeping lives next to it, not inside it. See
+`schema/scope.example.yaml`.
+
+**MCP servers are the one exception** — `agents:` is declared inline per
+server in `mcp/servers.yaml` (see `schema/servers.example.yaml`), because
+that file is Trellis's own format and is never handed to an agent
+directly; every adapter translates it into that agent's native shape, so
+there's no risk of an agent choking on an unrecognized field the way Codex
+does with SKILL.md.
+
+Every `TrellisAdapter.plan()` implementation must filter the canonical
+source through scope before producing any plan item for it — an item
+scoped away from that adapter's agent must never appear in its plan at
+all. See `src/core/adapter.ts`'s `isInScope` helper and the obligation
+documented on `plan()` itself.
 
 ## Adapter contract
 

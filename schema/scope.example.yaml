@@ -1,0 +1,33 @@
+# .trellis/scope.yaml — exceptions only. Anything NOT listed here is
+# shared with all four agents — that's the default Trellis exists for.
+# Only write an entry when a capability should NOT go everywhere.
+#
+# Why this lives in its own file instead of inside each SKILL.md/agent.md:
+# Codex validates SKILL.md frontmatter against an allow-list of known keys
+# and rejects unrecognized ones (see docs/research.md). A Trellis-only
+# `scope:` field embedded in SKILL.md's own frontmatter would break that
+# skill specifically on Codex. Scope declarations stay outside every file
+# an agent itself parses.
+#
+# MCP servers are the one exception: `mcp/servers.yaml` is Trellis's own
+# format, never handed to an agent directly (always translated by an
+# adapter), so its per-server `agents:` field is declared inline there
+# instead of here — see schema/servers.example.yaml.
+
+skills:
+  # This skill only makes sense for Claude Code's tool surface (e.g. it
+  # references the Task tool for subagent delegation, which the other
+  # three agents don't have an equivalent of).
+  claude-subagent-dispatch: [claude-code]
+
+agents:
+  # Subagent profiles are implicitly Claude-Code-only today — Codex has no
+  # persistent subagent concept, Kiro/pi unconfirmed (see docs/research.md).
+  # No entries needed here until another agent gains an equivalent
+  # mechanism and a specific profile should NOT go to all of them.
+
+memories:
+  # A memory entry that only makes sense in the context of one agent's
+  # own quirks (e.g. a note about Codex's TOML in-place-patch behavior)
+  # rather than something every agent's context should carry.
+  codex-toml-patch-gotcha: [codex]

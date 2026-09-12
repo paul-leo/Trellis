@@ -7,6 +7,28 @@
 
 export type Transport = "stdio" | "http";
 
+export type AgentId = "claude-code" | "codex" | "kiro" | "pi";
+
+export const ALL_AGENTS: readonly AgentId[] = [
+  "claude-code",
+  "codex",
+  "kiro",
+  "pi",
+];
+
+/**
+ * Every scopable item (skill, subagent, memory entry, MCP server) defaults
+ * to "all four agents" when `scope` is omitted — sharing everywhere is the
+ * common case Trellis exists for; restricting to specific agents is the
+ * exception and must be declared explicitly. See docs/architecture.md
+ * "Private / agent-specific capabilities".
+ */
+export type Scope = AgentId[] | undefined;
+
+export function resolveScope(scope: Scope): readonly AgentId[] {
+  return scope ?? ALL_AGENTS;
+}
+
 export interface McpServerDef {
   transport: Transport;
   /** stdio only */
@@ -20,6 +42,8 @@ export interface McpServerDef {
    * docs/research.md "Secrets" and schema/secrets.policy.example.yaml.
    */
   env?: string[];
+  /** Omit for "all agents" (the default). See `Scope`. */
+  agents?: Scope;
 }
 
 export interface McpConfig {
@@ -38,12 +62,36 @@ export interface SkillRef {
   /** Absolute path to the skill's directory. Must contain `SKILL.md` — the
    * filename is case-sensitive on at least one target agent (Codex). */
   dir: string;
+  /**
+   * Omit for "all agents" (the default). Deliberately NOT read from
+   * SKILL.md's own frontmatter — Codex validates SKILL.md frontmatter
+   * against an allow-list of known keys and rejects unknown ones (see
+   * docs/research.md), so a Trellis-only field embedded there would break
+   * the skill on Codex specifically. Scope lives in `scope.yaml` instead,
+   * outside every artifact the agents themselves parse.
+   */
+  scope?: Scope;
 }
 
 export interface AgentProfile {
   name: string;
   /** Path to the profile's markdown file (Claude-style frontmatter today). */
   file: string;
+  /**
+   * Omit for "all agents that support subagents" — today that's
+   * Claude Code only (see docs/research.md: Codex has no persistent
+   * subagent concept, Kiro/pi unconfirmed), so this is normally implicit,
+   * not something you write. Only set explicitly once more than one agent
+   * supports subagents and a profile should NOT go to all of them.
+   */
+  scope?: Scope;
+}
+
+export interface MemoryEntry {
+  name: string;
+  file: string;
+  /** Omit for "all agents" (the default). See `Scope`. */
+  scope?: Scope;
 }
 
 export interface SecretsPolicy {
@@ -52,9 +100,16 @@ export interface SecretsPolicy {
 }
 
 export interface CanonicalSource {
+  /**
+   * Global (`~/.trellis`) only for now. Project-local `.trellis/` and its
+   * merge-over-global precedence are an explicit non-goal until a later
+   * phase — see docs/roadmap.md. Don't build workspace resolution ahead of
+   * that decision.
+   */
   instructionsFile: string;
   skills: SkillRef[];
   agents: AgentProfile[];
+  memories: MemoryEntry[];
   mcp: McpConfig;
   secretsPolicy: SecretsPolicy;
 }
