@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
  * Minimal fake MCP server for sandboxed tests: responds to `initialize`
- * with a fixed serverInfo, so probeMcpServer (see docs/implementation-plan.md
- * §0.1) has something real and deterministic to handshake against without
- * spawning a real npm package inside the container.
+ * with a fixed serverInfo (see docs/implementation-plan.md §0.1's
+ * probeMcpServer), and to `tools/list`/`tools/call` with one trivial
+ * "echo" tool (trellis-pi-mcp-bridge-p4's sandbox verification — a real,
+ * deterministic round trip for the bridge extension to register and call,
+ * without a real npm package inside the container). Purely additive:
+ * every existing caller only ever sent `initialize`.
  */
 process.stdin.setEncoding("utf8");
 let buf = "";
@@ -26,11 +29,37 @@ process.stdin.on("data", (chunk) => {
           id: msg.id,
           result: {
             protocolVersion: "2024-11-05",
-            capabilities: {},
+            capabilities: { tools: {} },
             serverInfo: { name: "trellis-fixture-server", version: "0.0.1" },
           },
         }) + "\n",
       );
+    } else if (msg.method === "tools/list") {
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: {
+            tools: [
+              {
+                name: "echo",
+                description: "Echoes back its input message",
+                inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+              },
+            ],
+          },
+        }) + "\n",
+      );
+    } else if (msg.method === "tools/call") {
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: { content: [{ type: "text", text: `echo: ${msg.params?.arguments?.message ?? ""}` }] },
+        }) + "\n",
+      );
+    } else if (msg.method?.startsWith("notifications/")) {
+      // no response expected for notifications
     }
   }
 });

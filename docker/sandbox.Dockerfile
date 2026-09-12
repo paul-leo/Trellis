@@ -10,7 +10,14 @@ COPY package.json package-lock.json tsconfig.json ./
 RUN npm install
 
 COPY src ./src
+COPY scripts ./scripts
 COPY test/fixtures/sample-mcp-server.js /fixtures/sample-mcp-server.js
+
+# Bundles the pi bridge extension (dist/pi-bridge/bundle.js) — see
+# scripts/build-pi-bridge.mjs for why this must be a self-contained
+# bundle, not the raw src/pi-bridge/index.ts, before any adapter symlinks
+# to it.
+RUN node scripts/build-pi-bridge.mjs
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

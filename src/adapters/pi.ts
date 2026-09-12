@@ -3,18 +3,49 @@
  * symlinked to canonical `agents.md` — specifically `AGENTS.md`, not
  * `AGENTS.override.md` (design.md D3, trellis-sync-p1: pi checks the
  * override name first, and Trellis's managed file is the baseline, not an
- * override of something else). MCP is out of scope here entirely — pi has
- * no native MCP client (docs/research.md); that's P4's bridge extension,
- * a different problem from this adapter's skills/instructions symlinks.
+ * override of something else). pi has no native MCP client (docs/research.md),
+ * so MCP access is delivered as a single symlinked bridge extension
+ * instead of native config (trellis-pi-mcp-bridge-p4) — a different
+ * mechanism from every other agent's config-generation adapter, but the
+ * same symlink create/repair/remove machinery as skills/instructions.
  */
 
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
 import { isInScope } from "../core/adapter.js";
 import type { CanonicalSource } from "../core/types.js";
 import * as piProbe from "../probes/pi.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
+
+const BRIDGE_SYMLINK_NAME = "trellis-mcp-bridge.js";
+
+/**
+ * The bundled bridge file's location — always `<repo-root>/dist/pi-bridge/
+ * bundle.js`, never `~/.trellis/` (it's Trellis's own packaged code, not a
+ * user-authored capability — design.md D2). Resolved relative to *this
+ * currently executing module* rather than assumed: both `src/adapters/
+ * pi.ts` (dev, via tsx) and `dist/adapters/pi.js` (published) sit exactly
+ * two directories below the repo root, so `../../dist/pi-bridge/bundle.js`
+ * resolves correctly from either.
+ *
+ * Always the *bundled* output, in dev too — never the raw
+ * `src/pi-bridge/index.ts` source. Node's loader resolves a symlinked
+ * file's own bare-specifier imports relative to the *symlink's path*
+ * (`~/.pi/agent/extensions/...`), not its realpath, so an unbundled file
+ * can never resolve `typebox`/`@modelcontextprotocol/sdk` once symlinked
+ * into an arbitrary user's home directory — confirmed empirically in the
+ * real sandbox (design.md D6). `scripts/build-pi-bridge.mjs` must have run
+ * (part of `npm run build`) before this symlink is of any use to pi.
+ */
+function resolveBridgeFile(): { file: string; symlinkName: string } {
+  const currentFile = fileURLToPath(import.meta.url);
+  return {
+    file: join(dirname(currentFile), "..", "..", "dist", "pi-bridge", "bundle.js"),
+    symlinkName: BRIDGE_SYMLINK_NAME,
+  };
+}
 
 export class PiAdapter implements TrellisAdapter {
   readonly name = "pi";
@@ -49,7 +80,18 @@ export class PiAdapter implements TrellisAdapter {
       kind: "instructions",
     });
 
-    return [...skillItems, ...instructionsItems];
+    const { file: bridgeFile, symlinkName } = resolveBridgeFile();
+    const extensionItems = planSymlinks({
+      rootDir: join(agentDir, "extensions"),
+      desired: [{ name: symlinkName, target: bridgeFile }],
+      // The bridge file's own parent directory, not `~/.trellis/` —
+      // proves ownership for removal against Trellis's own install path
+      // (design.md D2), same role `canonicalRoot` plays for skills.
+      canonicalRoot: dirname(bridgeFile),
+      kind: "extension",
+    });
+
+    return [...skillItems, ...instructionsItems, ...extensionItems];
   }
 
   async apply(plan: AdapterPlanItem[]): Promise<void> {

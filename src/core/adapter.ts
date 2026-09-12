@@ -35,8 +35,12 @@ export interface AdapterPlanItem {
   /** Lets `trellis sync skills` / `trellis sync instructions` /
    * `trellis mcp sync` filter a full plan without changing `plan()`'s
    * signature — every adapter produces every kind it's responsible for in
-   * one pass; the CLI subcommand decides which to apply, not the adapter. */
-  kind: "skill" | "instructions" | "mcp";
+   * one pass; the CLI subcommand decides which to apply, not the adapter.
+   * `"extension"` is pi-only: the MCP bridge file itself
+   * (trellis-pi-mcp-bridge-p4) — Trellis's own packaged code, not a
+   * user-authored capability from `~/.trellis/`, delivered via the same
+   * symlink create/repair/remove semantics as skills/instructions. */
+  kind: "skill" | "instructions" | "mcp" | "extension";
   /** Human-readable description of one change this adapter would make
    * ("create" / "remove") or why it refused to ("conflict"). */
   description: string;

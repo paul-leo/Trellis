@@ -296,6 +296,18 @@ MCP entry regardless of how many servers are defined.
 
 ## P4 — pi MCP bridge extension
 
+> **Done and archived** (`openspec/changes/archive/2026-09-12-trellis-pi-mcp-bridge-p4/`).
+> Section kept as a historical note only — see `docs/roadmap.md` for the
+> actual outcome. Built largely as sketched (a symlinked extension, no
+> settings.json write, `registerTool` per MCP tool), but the delivered
+> file had to become a fully bundled, dependency-free build output
+> (`dist/pi-bridge/bundle.js` via `esbuild`) rather than raw TypeScript
+> source — a real sandbox run against the actual `pi` binary showed a
+> symlinked file's own imports resolve relative to the symlink's path,
+> not its target, so an unbundled file could never resolve its
+> dependencies once placed in a real user's home directory. Don't edit
+> this section further.
+
 **MCP only** — pi's skills/instructions adapter is P1's `src/adapters/pi.ts`
 (same symlink shape as every other agent, see P1 above); P4 is exclusively
 the MCP bridge, since pi has no native MCP client at all (docs/research.md).

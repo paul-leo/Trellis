@@ -84,13 +84,33 @@ doesn't apply to a read-only linter, but a full parser is still more than
 this one narrow extraction needs). Both real incidents on record were
 reproduced and caught live in the sandbox, not just in unit tests.
 
+**P4 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-pi-mcp-bridge-p4/`;
+living spec at `openspec/specs/pi-mcp-bridge/`). pi's MCP access is a
+single symlinked extension (`~/.pi/agent/extensions/trellis-mcp-bridge.js`),
+not a settings.json entry — found by reading pi's own extension-loader
+source directly (same technique as P0's D5): `~/.pi/agent/extensions/`
+is auto-discovered on every startup, including symlinks, with zero
+configuration. The genuinely hard problem, found only by actually running
+the real `pi` binary against the real symlink in a dedicated sandbox
+(`docker/pi-sandbox.Dockerfile`) rather than trusting the design on paper:
+a symlinked file's own bare-specifier imports (`@modelcontextprotocol/sdk`,
+`typebox`) resolve relative to the *symlink's own path*, not its
+target — the reverse of the initial assumption — so no dependency
+declared in Trellis's own `package.json` could ever make an unbundled
+bridge file resolve once placed in an arbitrary user's home directory.
+Fixed by bundling the whole bridge into one dependency-free
+`dist/pi-bridge/bundle.js` via `esbuild`, confirmed by re-running the
+same sandbox check: the bridge loaded cleanly (no more "Failed to load
+extension"), reaching pi's own unrelated "no API key configured" failure
+instead — proof positive without ever spending a real model call.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
 | P1 | ✅ `trellis sync skills` / `trellis sync instructions` — symlink-based distribution to Claude Code, Codex, Kiro, and pi | P0 |
 | P2 | ✅ `trellis mcp sync` — incremental, in-place adapters for Claude Code (JSON merge), Codex (TOML section patch), Kiro (JSON merge); collision check against known host-injected server names | P1 |
 | P3 | ✅ `trellis secrets audit` — scans every adapter's output for literal credential patterns and unexpected env var names, fails non-zero on any hit | P2 |
-| P4 | pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |
+| P4 | ✅ pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |
 | P5 | `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
 | P6 | Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
 | P7 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P6 |

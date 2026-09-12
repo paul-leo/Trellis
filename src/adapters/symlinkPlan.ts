@@ -41,7 +41,7 @@ export function planSymlinks(opts: {
   rootDir: string;
   desired: DesiredSymlink[];
   canonicalRoot: string;
-  kind: "skill" | "instructions";
+  kind: "skill" | "instructions" | "extension";
 }): AdapterPlanItem[] {
   const { rootDir, desired, kind } = opts;
   const items: AdapterPlanItem[] = [];
