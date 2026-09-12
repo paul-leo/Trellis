@@ -14,6 +14,7 @@
 
 import { isInScope } from "../core/adapter.js";
 import type { AgentId, McpConfig, McpServerDef } from "../core/types.js";
+import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
 
 export const HUB_ENTRY_NAME = "trellis-hub";
 
@@ -52,7 +53,7 @@ const DANGEROUS_LITERAL_PATTERNS: { label: string; pattern: RegExp }[] = [
 ];
 
 function findLiteralSecret(def: McpServerDef): string | undefined {
-  const candidates = [def.command, def.url, ...(def.args ?? [])].filter((v): v is string => typeof v === "string");
+  const candidates = [def.command, def.url, ...(def.args ?? []), ...Object.values(def.headers ?? {})].filter((v): v is string => typeof v === "string");
   for (const candidate of candidates) {
     for (const { label, pattern } of DANGEROUS_LITERAL_PATTERNS) {
       if (pattern.test(candidate)) {
@@ -89,6 +90,19 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig): McpPlanResult 
       conflicts.push({
         name,
         message: `refusing to write MCP server "${name}": a value matches a known-dangerous literal pattern (${secretLabel}) — configs must hold variable NAMES only, never real values (docs/research.md "Secrets")`,
+      });
+      continue;
+    }
+
+    // Codex has no generic headers concept — only the single
+    // Authorization-bearer-token shape is expressible there
+    // (trellis-mcp-transport-auth design.md D4). Any other shape is
+    // refused for Codex specifically; every other in-scope agent for
+    // the same server is unaffected (this loop runs once per agentId).
+    if (agentId === "codex" && def.headers && Object.keys(def.headers).length > 0 && !codexBearerTokenEnvVar(def)) {
+      conflicts.push({
+        name,
+        message: `refusing to write MCP server "${name}" for codex: its "headers" field isn't the single { Authorization: "Bearer \${VAR}" } shape Codex's own config format can express — Codex has no generic headers concept, only \`bearer_token_env_var\`. Still written normally for every other in-scope agent.`,
       });
       continue;
     }

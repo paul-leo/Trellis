@@ -200,6 +200,40 @@ comes out byte-identical. Deliberately narrow: only covers `env` names
 (Linux/Windows equivalents are the well-known convention but unverified
 against a real install, stated as an open question).
 
+**P9 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-mcp-transport-auth/`;
+living specs at modifications to `mcp-server-sync`, `pi-mcp-bridge`,
+`secrets-audit`, and `kiro-env-var-approval`). `McpServerDef` gains
+`headers?: Record<string,string>` (`${VAR}` references, same discipline
+as `env`) and `Transport` gains `"sse"`; the dead `auth?: "oauth" |
+"bearer-env"` field — never read anywhere in the codebase — is removed.
+Four real, verified per-agent schemas (CLI `--help` output, Kiro's own
+installed extension source, the MCP SDK's real `.d.ts`) converged on:
+Claude Code and Kiro accept the identical plain headers map, rendered
+verbatim; Codex has no generic headers concept at all, only a single
+purpose-built `bearer_token_env_var` field (matching what its own `mcp
+add --bearer-token-env-var` generates) — a server needing more than one
+header is refused for Codex specifically (a real conflict, not a silent
+drop or lossy approximation) while still reaching every other agent; the
+pi bridge passes resolved headers into both `connectHttp` and a new
+`connectSse` via the SDK's `requestInit.headers`. Real OAuth (browser
+redirect, token refresh) is explicitly not built anywhere — all three
+native-config agents already have their own working flow (`claude mcp
+add --client-id`, `codex mcp login`, Kiro's own `oauth` schema fields);
+pi has none and gains none here, a stated limitation. A cross-cutting
+fix shipped alongside the feature rather than after: both P7's
+`missing-env-value` check and P8's Kiro approved-env-vars list now see
+names embedded in `headers` values too, via one shared
+`declaredEnvNames` helper — shipping `headers` without teaching both of
+them about it would have reproduced P8's own root cause for a new
+field. Verified with a real, unmocked network test (a plain `node:http`
+server capturing the bridge's actual outbound request headers) and in
+the real Docker sandbox: both a bearer-token-shaped and a
+two-header-shaped fixture server, confirming Claude Code/Kiro render
+`headers` verbatim, Codex renders `bearer_token_env_var` or refuses with
+the exact expected conflict message, and `secrets audit` catches a
+headers-embedded name both on the canonical side and in a real,
+already-written agent config file.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
@@ -211,7 +245,7 @@ against a real install, stated as an open question).
 | P6 | ✅ Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
 | P7 | ✅ Secrets/env management: shared `resolveSecretEnv` + `secrets.policy.yaml`'s `env_file`, pi bridge stops reading raw ambient env, `secrets audit` gains a `missing-env-value` check | P3, P4 |
 | P8 | ✅ Kiro `${VAR}` fix: adapter also manages `kiroAgent.mcpApprovedEnvVars`, without which Kiro silently never substitutes any env reference Trellis writes | P2 |
-| P9 | MCP transport/auth expansion: `headers` field for static bearer/API-key remote auth (Claude Code/Codex/Kiro/pi bridge, each via its own real schema), `sse` transport; real OAuth flows explicitly delegated to each agent's own native support, not reimplemented | P2, P4, P8 |
+| P9 | ✅ MCP transport/auth expansion: `headers` field for static bearer/API-key remote auth (Claude Code/Codex/Kiro/pi bridge, each via its own real schema), `sse` transport; real OAuth flows explicitly delegated to each agent's own native support, not reimplemented | P2, P4, P8 |
 | P10 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P9 |
 
 No dates. This is scoped by verification milestones, not calendar time.

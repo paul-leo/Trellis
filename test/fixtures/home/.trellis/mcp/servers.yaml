@@ -19,6 +19,12 @@
 #     pipeline handles this specific real server correctly end-to-end.
 #     Never actually spawned here — `trellis mcp sync` only writes
 #     config, so no network access to the real npm registry is needed.
+#   - "remote-bearer" (trellis-mcp-transport-auth): a single-bearer-token
+#     `headers` shape — Claude Code/Kiro get the `headers` map verbatim;
+#     Codex gets `bearer_token_env_var` instead, not `headers` at all.
+#   - "remote-multi-header" (trellis-mcp-transport-auth): a `headers`
+#     shape Codex cannot express (two headers) — must be a Codex-only
+#     conflict while Claude Code/Kiro still receive it in full.
 servers:
   sample-server:
     transport: stdio
@@ -46,6 +52,19 @@ servers:
     transport: stdio
     command: npx
     args: ["-y", "@modelcontextprotocol/server-memory"]
+
+  remote-bearer:
+    transport: http
+    url: "https://example.com/mcp"
+    headers:
+      Authorization: "Bearer ${REMOTE_BEARER_TOKEN}"
+
+  remote-multi-header:
+    transport: http
+    url: "https://example.com/mcp2"
+    headers:
+      Authorization: "Bearer ${REMOTE_MULTI_TOKEN}"
+      X-Api-Key: "${REMOTE_MULTI_KEY}"
 
 known_host_injected:
   - sentry

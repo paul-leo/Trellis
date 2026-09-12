@@ -116,6 +116,22 @@ test("kiro approved env vars: a malformed settings.json yields a conflict, never
   assert.equal(readFileSync(settingsPath(home), "utf-8"), "{ not valid json");
 });
 
+test("kiro approved env vars: a headers-only (no env) server contributes its embedded name", async () => {
+  const home = scratchHome();
+  initCanonical(
+    home,
+    'servers:\n  remote:\n    transport: http\n    url: "https://example.com/mcp"\n    headers:\n      Authorization: "Bearer ${HEADER_TOKEN}"\n',
+  );
+  writeKiroSettings(home, {});
+
+  const adapter = new KiroAdapter(home);
+  const canonical = loadCanonicalSource(home);
+  const plan = await adapter.plan(canonical);
+  const item = plan.find((i) => i.kind === "kiro-approved-env-vars");
+  assert.ok(item, "expected a kiro-approved-env-vars plan item");
+  assert.deepEqual(item!.approvedEnvVars, ["HEADER_TOKEN"]);
+});
+
 test("kiro approved env vars: applying preserves every unrelated top-level key", async () => {
   const home = scratchHome();
   initCanonical(home, "servers:\n  sample:\n    transport: stdio\n    command: node\n    env: [SOME_TOKEN]\n");

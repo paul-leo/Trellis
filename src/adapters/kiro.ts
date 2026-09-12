@@ -25,6 +25,7 @@ import * as kiroProbe from "../probes/kiro.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
 import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
 import { resolveMcpPlan } from "./mcpPlan.js";
+import { declaredEnvNames } from "../lib/envVarNames.js";
 
 /** VS-Code-family global settings path. macOS only — see
  * trellis-kiro-approved-env-vars proposal.md Non-Goals: Linux/Windows
@@ -88,7 +89,7 @@ export class KiroAdapter implements TrellisAdapter {
     const { desired } = resolveMcpPlan(this.id, canonical.mcp);
     const names = new Set<string>();
     for (const { def } of desired) {
-      for (const name of def.env ?? []) names.add(name);
+      for (const name of declaredEnvNames(def)) names.add(name);
     }
     return [...names];
   }

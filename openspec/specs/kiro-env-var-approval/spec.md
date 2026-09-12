@@ -5,31 +5,21 @@ TBD - created by archiving change trellis-kiro-approved-env-vars. Update Purpose
 ## Requirements
 ### Requirement: Every env var name Trellis writes for Kiro is added to Kiro's own approval list
 
-The Kiro adapter SHALL ensure every env var name declared across the
-MCP servers `resolveMcpPlan("kiro", canonical.mcp)` would write into
-Kiro's config is present in `kiroAgent.mcpApprovedEnvVars`, in Kiro's
-global `settings.json` (`~/Library/Application Support/Kiro/User/settings.json`
-on macOS) — additive only, never removing an existing entry.
+The Kiro adapter SHALL ensure every env var name declared across the MCP
+servers `resolveMcpPlan("kiro", canonical.mcp)` would write into Kiro's
+config — both `env` entries and names embedded in `${VAR}`-style
+`headers` values — is present in `kiroAgent.mcpApprovedEnvVars`, in
+Kiro's global `settings.json` — additive only, never removing an
+existing entry. Kiro's own `${VAR}` substitution recurses into `headers`
+the same as `env` (verified against its real installed source), so a
+header-embedded name needs the identical approval-list entry an `env`
+name does.
 
-#### Scenario: A new env name is appended to an existing approval list
-- **WHEN** canonical declares a server (in scope for Kiro) with
-  `env: ["NEW_TOKEN"]`, and Kiro's `settings.json` already has
-  `kiroAgent.mcpApprovedEnvVars: ["EXISTING_TOKEN"]`
-- **THEN** the adapter's plan includes a `"kiro-approved-env-vars"` item
-  whose `approvedEnvVars` is `["EXISTING_TOKEN", "NEW_TOKEN"]` — the
-  existing entry is preserved, the new one appended
-
-#### Scenario: A server scoped away from Kiro contributes no approved name
-- **WHEN** a canonical server's `agents` field is set and does not
-  include `"kiro"`
-- **THEN** its declared `env` names never appear in the computed
-  approved-vars set for Kiro
-
-#### Scenario: A server refused as a known_host_injected collision contributes no approved name
-- **WHEN** a canonical server name collides with `known_host_injected`
-  (refused by `resolveMcpPlan`, per trellis-mcp-sync-p2)
-- **THEN** its declared `env` names never appear in the computed
-  approved-vars set for Kiro either
+#### Scenario: A name embedded only in a headers value is approved the same way
+- **WHEN** a canonical server (in scope for Kiro) declares
+  `headers: { Authorization: "Bearer ${NEW_TOKEN}" }` and no `env` field
+- **THEN** `NEW_TOKEN` appears in the computed approved-vars set for
+  Kiro, identical to how an `env`-declared name would
 
 ### Requirement: The settings.json write preserves every unrelated key
 

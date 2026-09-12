@@ -72,6 +72,45 @@ test("resolveMcpPlan: env variable NAMES (not values) never trigger the secrets 
   assert.deepEqual(result.conflicts, []);
 });
 
+test("resolveMcpPlan: a bearer-token-shaped headers field is desired for Codex", () => {
+  const config = mcp({
+    servers: {
+      remote: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${TOKEN}" } },
+    },
+  });
+  const result = resolveMcpPlan("codex", config);
+  assert.equal(result.desired.length, 1);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test("resolveMcpPlan: a non-bearer-token headers shape is a Codex-only conflict", () => {
+  const config = mcp({
+    servers: {
+      remote: { transport: "http", url: "https://example.com/mcp", headers: { "X-Api-Key": "${KEY}" } },
+    },
+  });
+  const codexResult = resolveMcpPlan("codex", config);
+  assert.deepEqual(codexResult.desired, []);
+  assert.equal(codexResult.conflicts.length, 1);
+  assert.match(codexResult.conflicts[0].message, /no generic headers concept/);
+
+  const claudeResult = resolveMcpPlan("claude-code", config);
+  assert.equal(claudeResult.desired.length, 1);
+  assert.deepEqual(claudeResult.conflicts, []);
+});
+
+test("resolveMcpPlan: a literal secret in a headers value is refused, not desired", () => {
+  const config = mcp({
+    servers: {
+      leaky: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "glpat-abc123def456" } },
+    },
+  });
+  const result = resolveMcpPlan("claude-code", config);
+  assert.deepEqual(result.desired, []);
+  assert.equal(result.conflicts.length, 1);
+  assert.match(result.conflicts[0].message, /GitLab personal access token/);
+});
+
 test("resolveMcpPlan: hub mode collapses every server to one trellis-hub entry", () => {
   const config = mcp({
     servers: {

@@ -12,9 +12,27 @@ test("renderJsonServerEntry: stdio def renders command/args/env, env values are 
   assert.deepEqual(entry, { type: "stdio", command: "npx", args: ["-y", "pkg"], env: { API_TOKEN: "${API_TOKEN}" } });
 });
 
-test("renderJsonServerEntry: http def renders only type/url", () => {
+test("renderJsonServerEntry: http def renders only type/url when there's no headers field", () => {
   const entry = renderJsonServerEntry({ transport: "http", url: "https://mcp.figma.com/mcp" });
   assert.deepEqual(entry, { type: "http", url: "https://mcp.figma.com/mcp" });
+});
+
+test("renderJsonServerEntry: http def with headers renders them verbatim", () => {
+  const entry = renderJsonServerEntry({
+    transport: "http",
+    url: "https://example.com/mcp",
+    headers: { Authorization: "Bearer ${TOKEN}" },
+  });
+  assert.deepEqual(entry, { type: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${TOKEN}" } });
+});
+
+test("renderJsonServerEntry: sse def renders type sse, headers verbatim", () => {
+  const entry = renderJsonServerEntry({
+    transport: "sse",
+    url: "https://example.com/sse",
+    headers: { "X-Api-Key": "${KEY}" },
+  });
+  assert.deepEqual(entry, { type: "sse", url: "https://example.com/sse", headers: { "X-Api-Key": "${KEY}" } });
 });
 
 test("planJsonMcp: a server missing from the existing config produces one create item", () => {

@@ -128,6 +128,35 @@ test("secrets audit: a canonical env name that resolves via env_file yields no m
   );
 });
 
+test("secrets audit: a name embedded in a real config's headers value outside allowed_vars is caught", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeFileSync(
+    join(home, ".claude.json"),
+    JSON.stringify({ mcpServers: { remote: { type: "http", url: "https://x", headers: { Authorization: "Bearer ${UNAPPROVED_TOKEN}" } } } }),
+  );
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  const finding = report.findings.find((f) => f.kind === "unexpected-var-name");
+  assert.ok(finding, "expected an unexpected-var-name finding");
+  assert.ok(finding!.detail.includes("UNAPPROVED_TOKEN"));
+});
+
+test("secrets audit: a headers-only canonical server (no env field) with an unresolvable name is a missing-env-value finding", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeServersYaml(
+    home,
+    'servers:\n  remote:\n    transport: http\n    url: "https://example.com/mcp"\n    headers:\n      Authorization: "Bearer ${HEADER_ONLY_TOKEN}"\n',
+  );
+  delete process.env.HEADER_ONLY_TOKEN;
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  const finding = report.findings.find((f) => f.kind === "missing-env-value");
+  assert.ok(finding, "expected a missing-env-value finding");
+  assert.ok(finding!.detail.includes("HEADER_ONLY_TOKEN"));
+});
+
 test("secrets audit: no canonical MCP servers means zero missing-env-value findings", async () => {
   const home = scratchHome();
   initCanonical(home, CLEAN_POLICY);

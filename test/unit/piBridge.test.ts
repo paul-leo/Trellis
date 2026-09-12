@@ -7,6 +7,8 @@
 
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
+import { createServer } from "node:http";
+import type { IncomingHttpHeaders } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -92,5 +94,36 @@ test("pi bridge: with no env_file, the spawned server receives the ambient proce
   } finally {
     delete process.env.PI_BRIDGE_TEST_VAR;
     killFixtureChildren(home);
+  }
+});
+
+test("pi bridge: a resolved header actually reaches the outbound HTTP request to a remote server", async () => {
+  let capturedHeaders: IncomingHttpHeaders | undefined;
+  const server = createServer((req, res) => {
+    capturedHeaders ??= req.headers;
+    res.writeHead(500).end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("expected a real TCP address");
+  const url = `http://127.0.0.1:${address.port}/mcp`;
+
+  const home = scratchHome();
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    `servers:\n  remote:\n    transport: http\n    url: "${url}"\n    headers:\n      Authorization: "Bearer \${HTTP_HEADER_TEST_VAR}"\n`,
+  );
+
+  process.env.HTTP_HEADER_TEST_VAR = "resolved-header-value";
+  try {
+    const pi = fakePi();
+    await trellisMcpBridge(pi as never, home); // the server doesn't speak MCP and 500s — the bridge logs and continues, never throws
+    assert.equal(capturedHeaders?.authorization, "Bearer resolved-header-value");
+  } finally {
+    delete process.env.HTTP_HEADER_TEST_VAR;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

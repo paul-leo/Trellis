@@ -15,12 +15,14 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TSchema } from "typebox";
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
+import { extractTemplateVarNames } from "../lib/envVarNames.js";
 import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 import { bridgedToolName, toParametersSchema, toPiContent, type McpContentItem } from "./schemaTranslate.js";
 
@@ -56,9 +58,30 @@ async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy): Pr
   return client;
 }
 
-async function connectHttp(url: string): Promise<Client> {
+function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Record<string, string> | undefined {
+  if (!def.headers || Object.keys(def.headers).length === 0) return undefined;
+  const names = Object.keys(def.headers).flatMap((key) => extractTemplateVarNames(def.headers![key]));
+  const resolved = resolveSecretEnv(names, secretsPolicy);
+  const result: Record<string, string> = {};
+  for (const [key, template] of Object.entries(def.headers)) {
+    result[key] = template.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name) => resolved[name] ?? "");
+  }
+  return result;
+}
+
+async function connectHttp(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Client> {
   const client = new Client(CLIENT_INFO, { capabilities: {} });
-  await client.connect(new StreamableHTTPClientTransport(new URL(url)) as Transport);
+  const headers = resolveHeaders(def, secretsPolicy);
+  const opts = headers ? { requestInit: { headers } } : undefined;
+  await client.connect(new StreamableHTTPClientTransport(new URL(def.url!), opts) as Transport);
+  return client;
+}
+
+async function connectSse(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Client> {
+  const client = new Client(CLIENT_INFO, { capabilities: {} });
+  const headers = resolveHeaders(def, secretsPolicy);
+  const opts = headers ? { requestInit: { headers } } : undefined;
+  await client.connect(new SSEClientTransport(new URL(def.url!), opts) as Transport);
   return client;
 }
 
@@ -96,7 +119,13 @@ export default async function trellisMcpBridge(pi: PiExtensionAPI, homeDir: stri
     desired.map(async ({ name, def }) => {
       let client: Client;
       try {
-        client = def.transport === "http" ? await connectHttp(def.url!) : await connectStdio(def, canonical.secretsPolicy);
+        if (def.transport === "http") {
+          client = await connectHttp(def, canonical.secretsPolicy);
+        } else if (def.transport === "sse") {
+          client = await connectSse(def, canonical.secretsPolicy);
+        } else {
+          client = await connectStdio(def, canonical.secretsPolicy);
+        }
       } catch (err) {
         // One unreachable/misconfigured server must never prevent every
         // other server's tools from registering (tasks.md 3.2).

@@ -31,8 +31,12 @@ function deepEqual(a: unknown, b: unknown): boolean {
  * expects — `env` values are always `${VAR}` references, never literals
  * (docs/research.md "Secrets"). */
 export function renderJsonServerEntry(def: McpServerDef): Record<string, unknown> {
-  if (def.transport === "http") {
-    return { type: "http", url: def.url };
+  if (def.transport === "http" || def.transport === "sse") {
+    const entry: Record<string, unknown> = { type: def.transport, url: def.url };
+    if (def.headers && Object.keys(def.headers).length > 0) {
+      entry.headers = def.headers;
+    }
+    return entry;
   }
   const entry: Record<string, unknown> = { type: "stdio", command: def.command, args: def.args ?? [] };
   if (def.env && def.env.length > 0) {

@@ -206,10 +206,45 @@ different values before `mcp.hub` existed as a concept (docs/research.md).
 Direct mode remains fully supported for anyone who'd rather not take that
 trade.
 
+## Static header auth vs. real OAuth for remote MCP servers
+
+A remote (`http`/`sse`-transport) MCP server needing a credential comes
+in two real shapes, and Trellis only ever builds for one of them.
+
+**Static header auth** (a bearer token or API key that doesn't expire on
+its own) is exactly like `env` for stdio servers: `McpServerDef.headers`
+holds `${VAR}` references, never a value, and each adapter renders it
+through its own real, verified schema — Claude Code and Kiro accept the
+identical plain `Record<string,string>` map; Codex has no generic
+headers concept at all, only a single purpose-built
+`bearer_token_env_var` field (confirmed by what `codex mcp add
+--bearer-token-env-var` itself generates) — a server needing more than
+one header simply can't reach Codex through Trellis, and is refused
+there (not silently dropped) while still reaching every other agent.
+
+**Real OAuth** (browser redirect, short-lived access token, refresh
+token) is not implemented anywhere in Trellis, on purpose. All three
+native-config agents already have their own real, working flow for it:
+
+- Claude Code: `claude mcp add --client-id/--client-secret/--callback-port`
+- Codex: a dedicated `codex mcp login`/`codex mcp logout` pair
+- Kiro: `oauth`/`oauthScopes` fields in its own real
+  `~/.kiro/settings/mcp.json` schema
+
+pi has none of this — its bridge is Trellis's own code, and the MCP
+SDK's `authProvider: OAuthClientProvider` option is a full
+redirect-and-refresh flow that doesn't fit a synchronously-loaded
+extension's lifecycle. A remote server that requires real OAuth simply
+isn't reachable through the pi bridge today — a real, stated limitation,
+not something papered over with a partial implementation.
+
 ## What Trellis explicitly does not build
 
 - An MCP aggregator/gateway's actual routing/proxy logic (hub mode above
   lets you point every agent at one, but Trellis doesn't implement one)
+- Real OAuth for remote MCP servers (browser redirect, token storage,
+  refresh) — every agent that has its own native flow keeps using it;
+  see "Static header auth vs. real OAuth" above
 - A memory backend (defaults to `@modelcontextprotocol/server-memory`,
   documented in `schema/servers.example.yaml`; mem0/OpenMemory and
   totalrecallai-class semantic-search servers documented as opt-in

@@ -5,7 +5,7 @@
  * files on disk are its serialization, not the other way around.
  */
 
-export type Transport = "stdio" | "http";
+export type Transport = "stdio" | "http" | "sse";
 
 export type AgentId = "claude-code" | "codex" | "kiro" | "pi";
 
@@ -34,9 +34,16 @@ export interface McpServerDef {
   /** stdio only */
   command?: string;
   args?: string[];
-  /** http only */
+  /** http/sse only */
   url?: string;
-  auth?: "oauth" | "bearer-env";
+  /**
+   * http/sse only. Values are `${VAR}` references, same discipline as
+   * `env` — never a real value. Codex has no generic headers concept;
+   * only the single shape `{ Authorization: "Bearer ${VAR}" }` is
+   * expressible there (trellis-mcp-transport-auth design.md D4) — any
+   * other shape is a Codex-only conflict, not silently dropped.
+   */
+  headers?: Record<string, string>;
   /**
    * Variable NAMES the server process needs, never values. See
    * docs/research.md "Secrets" and schema/secrets.policy.example.yaml.

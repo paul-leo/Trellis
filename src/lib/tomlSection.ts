@@ -102,6 +102,26 @@ export function currentServerSectionText(content: string, name: string): string 
   return content.split("\n").slice(range.start, range.end + 1).join("\n");
 }
 
+const BEARER_TOKEN_VALUE_RE = /^Bearer \$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+/**
+ * The only `headers` shape Codex's own real schema can express — it has
+ * no generic headers concept, only this one purpose-built field
+ * (trellis-mcp-transport-auth design.md D4, matching what Codex's own
+ * `mcp add --bearer-token-env-var` CLI generates): exactly one entry,
+ * key `Authorization`, value exactly `Bearer ${VAR}`. Returns the var
+ * name, or `undefined` if `headers` is absent or any other shape —
+ * callers (mcpPlan.ts) refuse-and-conflict on "any other shape" rather
+ * than this function silently rendering nothing for it.
+ */
+export function codexBearerTokenEnvVar(def: McpServerDef): string | undefined {
+  const entries = Object.entries(def.headers ?? {});
+  if (entries.length !== 1) return undefined;
+  const [key, value] = entries[0];
+  if (key !== "Authorization") return undefined;
+  return BEARER_TOKEN_VALUE_RE.exec(value)?.[1];
+}
+
 /** Renders a `[mcp_servers.<name>]` block for a bounded, known shape —
  * this is templating, not general TOML serialization. */
 export function renderServerSection(name: string, def: McpServerDef): string {
@@ -112,6 +132,8 @@ export function renderServerSection(name: string, def: McpServerDef): string {
     if (def.env && def.env.length > 0) lines.push(`env_vars = ${tomlStringArray(def.env)}`);
   } else {
     if (def.url) lines.push(`url = ${tomlString(def.url)}`);
+    const bearerEnvVar = codexBearerTokenEnvVar(def);
+    if (bearerEnvVar) lines.push(`bearer_token_env_var = ${tomlString(bearerEnvVar)}`);
   }
   return lines.join("\n");
 }

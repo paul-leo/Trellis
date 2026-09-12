@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  codexBearerTokenEnvVar,
   currentServerSectionText,
   findSection,
   removeSection,
@@ -106,6 +107,41 @@ test("upsertSection: an http transport def renders a url, not command/args", () 
   const result = upsertSection("", "figma", { transport: "http", url: "https://mcp.figma.com/mcp" });
   assert.ok(result.includes('url = "https://mcp.figma.com/mcp"'));
   assert.ok(!result.includes("command"));
+});
+
+test("codexBearerTokenEnvVar: recognizes the single Authorization/Bearer/${VAR} shape", () => {
+  assert.equal(codexBearerTokenEnvVar({ transport: "http", url: "x", headers: { Authorization: "Bearer ${MY_TOKEN}" } }), "MY_TOKEN");
+});
+
+test("codexBearerTokenEnvVar: undefined for no headers", () => {
+  assert.equal(codexBearerTokenEnvVar({ transport: "http", url: "x" }), undefined);
+});
+
+test("codexBearerTokenEnvVar: undefined for more than one header", () => {
+  assert.equal(
+    codexBearerTokenEnvVar({ transport: "http", url: "x", headers: { Authorization: "Bearer ${A}", "X-Api-Key": "${B}" } }),
+    undefined,
+  );
+});
+
+test("codexBearerTokenEnvVar: undefined for a non-Authorization header", () => {
+  assert.equal(codexBearerTokenEnvVar({ transport: "http", url: "x", headers: { "X-Api-Key": "${A}" } }), undefined);
+});
+
+test("codexBearerTokenEnvVar: undefined for a value not matching Bearer ${VAR} exactly", () => {
+  assert.equal(codexBearerTokenEnvVar({ transport: "http", url: "x", headers: { Authorization: "Token ${A}" } }), undefined);
+  assert.equal(codexBearerTokenEnvVar({ transport: "http", url: "x", headers: { Authorization: "Bearer literal-value" } }), undefined);
+});
+
+test("renderServerSection: a bearer-token-shaped headers field renders bearer_token_env_var, no headers line", () => {
+  const section = renderServerSection("remote", { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${MY_TOKEN}" } });
+  assert.ok(section.includes('bearer_token_env_var = "MY_TOKEN"'));
+  assert.ok(!section.includes("headers"));
+});
+
+test("renderServerSection: a non-bearer-token headers shape renders no bearer_token_env_var line", () => {
+  const section = renderServerSection("remote", { transport: "http", url: "https://example.com/mcp", headers: { "X-Api-Key": "${A}" } });
+  assert.ok(!section.includes("bearer_token_env_var"));
 });
 
 test("currentServerSectionText: matches renderServerSection's own output for an unchanged entry, differs after a real change", () => {

@@ -20,7 +20,7 @@ import type { AgentId, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
-import { extractJsonEnvVarNames, extractTomlEnvVarNames } from "../lib/envVarNames.js";
+import { declaredEnvNames, extractJsonEnvVarNames, extractTomlEnvVarNames } from "../lib/envVarNames.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
 
 export interface RunSecretsAuditOptions {
@@ -69,7 +69,7 @@ function auditedAgents(homeDir: string): AuditedAgent[] {
 function findMissingEnvValues(servers: Record<string, McpServerDef>, policy: SecretsPolicy): SecretsFinding[] {
   const names = new Set<string>();
   for (const def of Object.values(servers)) {
-    for (const name of def.env ?? []) names.add(name);
+    for (const name of declaredEnvNames(def)) names.add(name);
   }
   if (names.size === 0) return [];
 
