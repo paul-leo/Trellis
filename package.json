@@ -1,8 +1,9 @@
 {
   "name": "agent-trellis",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A single source of capability for every coding agent — skills, MCP, subagents, memory, and secret policy, adapted natively into Claude Code, Codex, Kiro, and pi.",
   "license": "MIT",
+  "author": "Paul Leo",
   "type": "module",
   "bin": {
     "trellis": "./dist/cli.js"
@@ -23,7 +24,8 @@
     "build": "tsc -p tsconfig.json && node scripts/build-pi-bridge.mjs",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/unit/**/*.test.ts"
+    "test": "tsx --test test/unit/**/*.test.ts",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "engines": {
     "node": ">=20"

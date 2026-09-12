@@ -26,10 +26,50 @@ Trellis aligns with the emerging [`.agents Protocol`](https://dotagentsprotocol.
 draft rather than inventing a sixth competing standard, and is likely its first
 working implementation.
 
+## Install
+
+```
+npm install -g agent-trellis
+```
+
+## Quick start
+
+1. Create `~/.trellis/agents.md` (shared instructions) and, optionally,
+   `~/.trellis/skills/<name>/SKILL.md` per skill, `~/.trellis/mcp/servers.yaml`
+   (see [`schema/servers.example.yaml`](schema/servers.example.yaml)), and
+   `~/.trellis/secrets.policy.yaml`.
+2. `trellis doctor` — read-only scan of every present agent's current state.
+3. `trellis sync` — distribute skills/instructions to every present agent.
+4. `trellis mcp sync` — distribute MCP servers to every present agent's
+   native config (create/repair only — see Known limitations).
+5. `trellis secrets audit` — fail non-zero if any agent's real config holds
+   a literal credential or an unexpected env var name.
+
 ## Status
 
-Pre-alpha. Architecture and schema are being finalized before the first CLI
-command ships. See [`docs/roadmap.md`](docs/roadmap.md).
+**Early, pre-1.0.** All four CLI commands above are implemented, unit-tested,
+and verified end-to-end against real Docker containers (never a developer's
+own dotfiles during development — see
+[`docs/architecture.md`](docs/architecture.md)'s testing philosophy). See
+[`docs/roadmap.md`](docs/roadmap.md) for what's shipped (P0–P6) vs. planned
+(P7, a GUI).
+
+**Known limitations, honestly stated rather than discovered the hard way:**
+- MCP servers are never spawned/handshake-tested by `trellis mcp sync` or
+  `trellis sync` — only that the *config* is written correctly.
+  `trellis doctor --probe-mcp` is the one command that actually connects,
+  and it's opt-in.
+- The pi bridge extension (`trellis-pi-mcp-bridge`) has been verified to
+  load and register tools without erroring, never against a real LLM tool
+  call in production.
+- Verification has run against real Docker containers and a real,
+  isolated pi CLI install — not yet against a developer's actual, existing
+  `~/.claude`/`~/.codex`/`~/.kiro`/`~/.pi` in daily use. If you hit
+  something a clean-room sandbox wouldn't have caught, please open an
+  issue.
+- Automatic removal of an MCP server is deliberately unsupported (create/
+  repair only) until an ownership-tracking mechanism exists — see
+  `docs/roadmap.md`'s P2 note.
 
 ## Design principles
 
