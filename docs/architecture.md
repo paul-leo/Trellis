@@ -91,3 +91,35 @@ runtime extension, not a config generator.
   command runs)
 - A GUI (P5 in the roadmap evaluates embedding into an existing one —
   mcp-router's or skills-hub's — before building a new one)
+
+## Testing philosophy: never verify against the developer's real environment
+
+**Hard rule, not a preference.** P0's probes are read-only, so they're safe
+to run against a real machine's real `~/.claude`, `~/.codex`, etc. — that's
+how `docs/research.md`'s findings were originally discovered, by hand,
+against a real machine, and P0 formalizes exactly that.
+
+Every phase from P1 onward writes: symlinks, in-place TOML/JSON patches,
+eventually credentials passing through a spawned process's env. **None of
+that is ever exercised against a developer's actual dotfiles, actual
+`~/.claude.json`, actual `~/.codex/config.toml`, or any other real
+configuration a person depends on for their day-to-day work** — not during
+development, not in CI, not for a "quick manual check." A bug in an adapter
+that patches TOML in place is exactly the kind of thing that corrupts a
+real config file if it's tested against one.
+
+Verification happens against an isolated environment instead: a scratch
+`$HOME` (or a container with one mounted) populated with synthetic
+per-agent config that looks like the real thing but is expendable — created
+fresh, asserted against, thrown away. `docs/implementation-plan.md`'s P1
+acceptance criteria already describes this shape ("point at a scratch
+`$HOME`... run `trellis sync skills`... confirm zero findings"); this
+section exists to make it a project-wide rule that every later phase's
+acceptance criteria must follow, not a detail specific to P1.
+
+This is also why P0 needing to resolve pi's actual skill-discovery path
+(§D5 in `openspec/changes/trellis-doctor-p0/design.md`) is investigated
+directly against a real pi installation *as a read-only observation*, and
+that finding then gets encoded as a fixture for the isolated test
+environment — the real machine is where you learn the shape of the truth
+once; it is never where you repeatedly verify against it.
