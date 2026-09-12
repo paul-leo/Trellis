@@ -9,6 +9,7 @@ import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
+import { loadCanonicalSource } from "../core/canonical.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot } from "../core/types.js";
 
@@ -54,6 +55,14 @@ const EXIT_NONZERO_KINDS: ReadonlySet<FindingKind> = new Set([
 
 export interface RunDoctorOptions {
   json?: boolean;
+  /**
+   * Explicit override, mainly for tests. Most callers should leave this
+   * unset and let `runDoctor` resolve it itself: canonical source's real
+   * `known_host_injected` when `~/.trellis/` exists, `DEFAULT_KNOWN_HOST_INJECTED`
+   * otherwise (trellis-cli-init) — the same list `mcp sync`'s own
+   * collision refusal already reads, so the two commands agree on one
+   * machine instead of each trusting a different source.
+   */
   knownHostInjected?: readonly string[];
   /**
    * Off by default. Spawning every configured MCP server for a live
@@ -67,6 +76,9 @@ export interface RunDoctorOptions {
    * attempt handshakes.
    */
   probeMcp?: boolean;
+  /** Defaults to the real `~`; overridable for tests only — same seam
+   * every other Trellis entry point uses. */
+  homeDir?: string;
 }
 
 export interface DoctorReport {
@@ -74,8 +86,21 @@ export interface DoctorReport {
   findings: Finding[];
 }
 
+/** Exported so tests can assert on this resolution directly, without
+ * routing through real per-agent probes `runDoctor` also runs. */
+export function resolveKnownHostInjected(opts: RunDoctorOptions): readonly string[] {
+  if (opts.knownHostInjected) return opts.knownHostInjected;
+  try {
+    const canonical = loadCanonicalSource(opts.homeDir);
+    return canonical.mcp.knownHostInjected;
+  } catch {
+    // No canonical source — doctor must still work standalone (P0).
+    return DEFAULT_KNOWN_HOST_INJECTED;
+  }
+}
+
 export async function runDoctor(opts: RunDoctorOptions = {}): Promise<{ exitCode: number }> {
-  const report = await collectDoctorReport(opts.knownHostInjected, opts.probeMcp);
+  const report = await collectDoctorReport(resolveKnownHostInjected(opts), opts.probeMcp);
   const exitCode = report.findings.some((f) => EXIT_NONZERO_KINDS.has(f.kind)) ? 1 : 0;
 
   if (opts.json) {

@@ -11,6 +11,7 @@ RUN npm install
 
 COPY src ./src
 COPY scripts ./scripts
+COPY schema ./schema
 COPY test/fixtures/sample-mcp-server.js /fixtures/sample-mcp-server.js
 
 # Bundles the pi bridge extension (dist/pi-bridge/bundle.js) — see

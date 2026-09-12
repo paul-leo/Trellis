@@ -6,11 +6,12 @@
  */
 
 import { runDoctor } from "./commands/doctor.js";
+import { runInit } from "./commands/init.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync } from "./commands/mcp.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 
-const KNOWN_COMMANDS = ["doctor", "sync", "mcp", "secrets"] as const;
+const KNOWN_COMMANDS = ["init", "doctor", "sync", "mcp", "secrets"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -19,6 +20,10 @@ Usage:
   trellis <command>
 
 Commands:
+  init      Create ~/.trellis/ with a minimal valid skeleton if missing
+              (never overwrites an existing file — fills in only what's
+              missing) and prints which agents are present
+              --json    machine-readable output, no report text
   doctor    Scan Claude Code / Codex / Kiro / pi for drift
               --json         machine-readable output, no table text
               --probe-mcp    also handshake every configured MCP server
@@ -50,6 +55,12 @@ async function main(argv: string[]): Promise<void> {
     console.error(`Unknown command: ${command}\n`);
     printUsage();
     process.exitCode = 1;
+    return;
+  }
+
+  if (command === "init") {
+    const { exitCode } = await runInit({ json: rest.includes("--json") });
+    process.exitCode = exitCode;
     return;
   }
 

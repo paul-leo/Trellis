@@ -289,6 +289,39 @@ by `trellis-mcp-connect-timeout`'s own Docker run, which exercised this
 same session_shutdown/`closeAllClients` code path with no dedicated
 second real-CLI run needed.
 
+**`trellis-cli-init`, done and archived**
+(`openspec/changes/archive/2026-09-12-trellis-cli-init/`; adds
+`canonical-source-bootstrap`, modifies `capability-drift-detection`).
+New `trellis init` command: creates `~/.trellis/agents.md`,
+`mcp/servers.yaml` (`servers: {}`, `known_host_injected: []`), and
+`secrets.policy.yaml` (`reject_patterns` read live from
+`schema/secrets.policy.example.yaml`, not retyped) whenever they don't
+already exist — per file, never overwriting real content — then prints
+which of the four agents are present, each pointing at `trellis migrate
+--from <agent>` (next). Turns `sync`/`mcp sync`/`secrets audit`'s
+existing "no canonical source, create it" refusal into something an
+actual command satisfies, closing a gap this session's own real pi
+onboarding had to route around entirely by hand (`mkdir`, hand-copied
+skills, hand-written `scope.yaml`). Found and fixed alongside it, not
+separately: `doctor`'s collision check had been permanently stuck on a
+hardcoded `DEFAULT_KNOWN_HOST_INJECTED` list since before canonical
+source loading existed — `collectDoctorReport` already accepted an
+override, but `src/cli.ts` never passed one, so `doctor` and `mcp
+sync`'s own collision refusal (which does read canonical) could
+disagree about what counts as a collision on any machine whose real
+host-injected connectors differ from this project's own development
+machine. `doctor` now resolves `known_host_injected` from canonical
+when it exists, falling back to the hardcoded default only when it
+doesn't (unchanged P0 behavior). Verified in the real Docker sandbox —
+and that run caught a second real, unrelated bug of its own: neither
+`docker/sandbox.Dockerfile` nor `docker/pi-sandbox.Dockerfile` copied
+`schema/` into the image, so `init` crashed on `ENOENT` reading
+`schema/secrets.policy.example.yaml` the first time it ran inside a
+container — both Dockerfiles fixed, `package.json`'s own `files` array
+also gained `schema` for the same underlying reason (the published npm
+package didn't ship it either, and README already told users to read
+it).
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |

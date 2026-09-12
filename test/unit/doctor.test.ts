@@ -5,12 +5,17 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
+  DEFAULT_KNOWN_HOST_INJECTED,
   detectCaseMismatches,
   detectCollisions,
   detectCrossAgentDrift,
   detectDuplication,
+  resolveKnownHostInjected,
 } from "../../src/commands/doctor.js";
 import type { AgentSnapshot, AgentSnapshotSkillEntry } from "../../src/core/types.js";
 
@@ -83,4 +88,29 @@ test("case mismatch: wrong-case entry file is flagged, distinguishable from abse
   const findings = detectCaseMismatches([snap]);
   assert.equal(findings.length, 1);
   assert.match(findings[0].message, /broken-case-skill/);
+});
+
+test("resolveKnownHostInjected: an explicit override always wins, no canonical lookup needed", () => {
+  const result = resolveKnownHostInjected({ knownHostInjected: ["custom"] });
+  assert.deepEqual(result, ["custom"]);
+});
+
+test("resolveKnownHostInjected: a real canonical source's known_host_injected is used (trellis-cli-init)", () => {
+  const home = mkdtempSync(join(tmpdir(), "trellis-doctor-canonical-"));
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    "servers: {}\nknown_host_injected:\n  - a-real-machine-specific-connector\n",
+  );
+
+  const result = resolveKnownHostInjected({ homeDir: home });
+  assert.deepEqual(result, ["a-real-machine-specific-connector"]);
+  assert.notDeepEqual(result, DEFAULT_KNOWN_HOST_INJECTED);
+});
+
+test("resolveKnownHostInjected: no canonical source falls back to the hardcoded default (P0, unchanged)", () => {
+  const home = mkdtempSync(join(tmpdir(), "trellis-doctor-no-canonical-"));
+  const result = resolveKnownHostInjected({ homeDir: home });
+  assert.deepEqual(result, DEFAULT_KNOWN_HOST_INJECTED);
 });

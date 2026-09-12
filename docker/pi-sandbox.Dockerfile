@@ -13,6 +13,7 @@ RUN npm install
 
 COPY src ./src
 COPY scripts ./scripts
+COPY schema ./schema
 COPY test/fixtures/sample-mcp-server.js /fixtures/sample-mcp-server.js
 
 RUN node scripts/build-pi-bridge.mjs
