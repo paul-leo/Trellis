@@ -7,11 +7,12 @@
 
 import { runDoctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
+import { runMigrate } from "./commands/migrate.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync } from "./commands/mcp.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 
-const KNOWN_COMMANDS = ["init", "doctor", "sync", "mcp", "secrets"] as const;
+const KNOWN_COMMANDS = ["init", "migrate", "doctor", "sync", "mcp", "secrets"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -24,6 +25,12 @@ Commands:
               (never overwrites an existing file — fills in only what's
               missing) and prints which agents are present
               --json    machine-readable output, no report text
+  migrate --from <agent>
+            Import an existing agent's real skills/instructions into
+            canonical source (claude-code | codex | kiro | pi). Never
+            overwrites differing content — reports a conflict instead.
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
   doctor    Scan Claude Code / Codex / Kiro / pi for drift
               --json         machine-readable output, no table text
               --probe-mcp    also handshake every configured MCP server
@@ -60,6 +67,14 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "init") {
     const { exitCode } = await runInit({ json: rest.includes("--json") });
+    process.exitCode = exitCode;
+    return;
+  }
+
+  if (command === "migrate") {
+    const fromIndex = rest.indexOf("--from");
+    const from = fromIndex >= 0 ? rest[fromIndex + 1] : undefined;
+    const { exitCode } = await runMigrate({ from, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
     process.exitCode = exitCode;
     return;
   }

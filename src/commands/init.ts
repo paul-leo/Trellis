@@ -42,7 +42,10 @@ export interface InitReport {
   agents: AgentPointer[];
 }
 
-const AGENTS_MD_TEMPLATE = `# Shared instructions
+/** Exported so `migrate` can byte-compare canonical `agents.md` against
+ * this exact string (design.md D3, trellis-cli-migrate) rather than
+ * retyping an equivalent one that could silently drift from this. */
+export const AGENTS_MD_TEMPLATE = `# Shared instructions
 
 Write what every agent should know here — communication preferences,
 project conventions, anything you'd otherwise repeat per agent.

@@ -322,6 +322,36 @@ also gained `schema` for the same underlying reason (the published npm
 package didn't ship it either, and README already told users to read
 it).
 
+**`trellis-cli-migrate`, done and archived**
+(`openspec/changes/archive/2026-09-12-trellis-cli-migrate/`; adds
+`canonical-source-migration`). `trellis migrate --from <agent>`: probes
+the named agent, then per real (non-symlinked, case-correct) skill and
+per real instructions file, plans one of `create` (no canonical entry
+yet), `already-migrated` (byte-identical to what's already in
+canonical — `src/lib/dirEquals.ts`, a real recursive directory-content
+comparison, not a name/mtime/hash shortcut), or `conflict` (differs —
+reported, never overwritten). A symlinked or case-broken skill is
+skipped and reported rather than migrated, since there's nothing real
+of that agent's own to import. Canonical `agents.md` still at `trellis
+init`'s placeholder is treated the same as "doesn't exist yet" so a
+first real migrate always lands. No `scope.yaml` entry is ever written
+— a migrated skill stays unscoped (visible to all agents), matching
+`sync`'s own default. `--dry-run` computes and prints the same plan
+with zero writes. This closes `trellis init`'s own per-agent pointer
+message (`trellis migrate --from <agent>` — next), completing the
+init → migrate → sync → mcp sync → secrets audit onboarding path for a
+user who already has real content in one of the four agents. Verified
+in the real Docker sandbox in the sequence a real user would actually
+run it: `migrate --from claude-code` against the fixture home correctly
+created a new canonical skill from claude-code's real content and
+correctly conflicted on instructions (fixture's canonical `agents.md`
+already has real content); a subsequent `trellis sync` in the same
+container then correctly symlinked the newly migrated skill out to
+kiro and pi (byte-identical content confirmed via `diff`), while
+correctly reporting conflicts — not overwriting — on claude-code and
+codex, since both already have their own real, non-canonical
+`sample-skill` at that exact path.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |

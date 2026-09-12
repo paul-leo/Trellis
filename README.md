@@ -34,25 +34,38 @@ npm install -g agent-trellis
 
 ## Quick start
 
-1. Create `~/.trellis/agents.md` (shared instructions) and, optionally,
-   `~/.trellis/skills/<name>/SKILL.md` per skill, `~/.trellis/mcp/servers.yaml`
-   (see [`schema/servers.example.yaml`](schema/servers.example.yaml)), and
-   `~/.trellis/secrets.policy.yaml`.
-2. `trellis doctor` — read-only scan of every present agent's current state.
-3. `trellis sync` — distribute skills/instructions to every present agent.
-4. `trellis mcp sync` — distribute MCP servers to every present agent's
-   native config (create/repair only — see Known limitations).
-5. `trellis secrets audit` — fail non-zero if any agent's real config holds
+**Already using Claude Code, Codex, Kiro, or pi and want to migrate what you
+already have?**
+
+1. `trellis init` — creates `~/.trellis/` with a minimal skeleton (only what's
+   missing; never overwrites a file you already have) and tells you which of
+   the four agents it found on this machine.
+2. `trellis migrate --from <agent>` — once per agent you already use. Copies
+   that agent's real skills and instructions into canonical source. Never
+   overwrites: an already-identical skill is reported and skipped, a genuine
+   conflict is reported and left for you to resolve by hand. Add `--dry-run`
+   to preview first.
+3. `trellis sync` — distributes canonical skills/instructions to every agent
+   present on this machine (including the ones you didn't migrate from).
+4. `trellis mcp sync` — distributes `~/.trellis/mcp/servers.yaml` (see
+   [`schema/servers.example.yaml`](schema/servers.example.yaml)) to every
+   agent's native MCP config (create/repair only — see Known limitations).
+5. `trellis secrets audit` — fails non-zero if any agent's real config holds
    a literal credential or an unexpected env var name.
+6. `trellis doctor` — read-only scan of every present agent's current state;
+   run any time to check for drift.
+
+**Starting from nothing?** Skip step 2 — `trellis init`'s placeholder
+`agents.md` and empty `skills/` are a fine starting point; edit them by hand.
 
 ## Status
 
-**Early, pre-1.0.** All four CLI commands above are implemented, unit-tested,
-and verified end-to-end against real Docker containers (never a developer's
-own dotfiles during development — see
-[`docs/architecture.md`](docs/architecture.md)'s testing philosophy). See
-[`docs/roadmap.md`](docs/roadmap.md) for what's shipped (P0–P6) vs. planned
-(P7, a GUI).
+**Early, pre-1.0.** All six CLI commands above (`init`, `migrate`, `doctor`,
+`sync`, `mcp sync`, `secrets audit`) are implemented, unit-tested, and verified
+end-to-end against real Docker containers (never a developer's own dotfiles
+during development — see [`docs/architecture.md`](docs/architecture.md)'s
+testing philosophy). See [`docs/roadmap.md`](docs/roadmap.md) for what's
+shipped (P0–P6) vs. planned (P7, a GUI).
 
 **Known limitations, honestly stated rather than discovered the hard way:**
 - MCP servers are never spawned/handshake-tested by `trellis mcp sync` or
