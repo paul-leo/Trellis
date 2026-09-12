@@ -39,4 +39,9 @@ HOME="$FRESH_HOME" ./node_modules/.bin/trellis init
 echo "=== trellis migrate --from claude-code (agent not present, expect clean refusal) ==="
 HOME="$FRESH_HOME" ./node_modules/.bin/trellis migrate --from claude-code || true
 
-echo "OK: the installed trellis binary runs doctor/init/migrate without crashing"
+echo "=== trellis onboard --json (zero agents present, expect install hints) ==="
+ONBOARD_HOME="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH" "$FAKE_HOME" "$FRESH_HOME" "$ONBOARD_HOME"; rm -f agent-trellis-*.tgz' EXIT
+HOME="$ONBOARD_HOME" ./node_modules/.bin/trellis onboard --json
+
+echo "OK: the installed trellis binary runs doctor/init/migrate/onboard without crashing"
