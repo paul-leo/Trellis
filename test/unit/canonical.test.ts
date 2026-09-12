@@ -90,3 +90,35 @@ test("loadCanonicalSource: a missing mcp/servers.yaml yields an empty, valid mcp
   const source = loadCanonicalSource(home);
   assert.deepEqual(source.mcp, { servers: {}, knownHostInjected: [] });
 });
+
+test("loadCanonicalSource: a populated secrets.policy.yaml populates canonical.secretsPolicy", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(
+    join(root, "secrets.policy.yaml"),
+    [
+      "allowed_vars:",
+      "  - GITLAB_PERSONAL_ACCESS_TOKEN",
+      "  - TANKA_EMAIL",
+      "reject_patterns:",
+      "  - 'glpat-[A-Za-z0-9_-]{20,}'",
+      "  - 'sk-[A-Za-z0-9]{20,}'",
+      "",
+    ].join("\n"),
+  );
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.secretsPolicy.allowedVars, ["GITLAB_PERSONAL_ACCESS_TOKEN", "TANKA_EMAIL"]);
+  assert.equal(source.secretsPolicy.rejectPatterns.length, 2);
+  assert.ok(source.secretsPolicy.rejectPatterns[0] instanceof RegExp);
+  assert.ok(source.secretsPolicy.rejectPatterns[0].test("glpat-abcdefghijklmnopqrst"));
+  assert.ok(!source.secretsPolicy.rejectPatterns[0].test("not-a-token"));
+});
+
+test("loadCanonicalSource: a missing secrets.policy.yaml yields an empty, valid policy", () => {
+  const home = tmpHome();
+  mkdirSync(join(home, ".trellis"), { recursive: true });
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.secretsPolicy, { allowedVars: [], rejectPatterns: [] });
+});

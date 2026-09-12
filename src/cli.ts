@@ -8,6 +8,7 @@
 import { runDoctor } from "./commands/doctor.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync } from "./commands/mcp.js";
+import { runSecretsAudit } from "./commands/secretsAudit.js";
 
 const KNOWN_COMMANDS = ["doctor", "sync", "mcp", "secrets"] as const;
 
@@ -29,7 +30,10 @@ Commands:
   mcp sync  Distribute MCP servers to each agent's native config
               (create/repair only — no automatic removal, see docs/roadmap.md)
               --json    machine-readable output, no report text
-  secrets   Audit adapter output for leaked credentials (not yet implemented)
+  secrets audit
+            Scan each present agent's real MCP config for leaked
+            credentials and unexpected env var names
+              --json    machine-readable output, no report text
 
 See docs/roadmap.md for what's built vs. planned.`);
 }
@@ -77,6 +81,18 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     const { exitCode } = await runMcpSync({ json: rest.includes("--json") });
+    process.exitCode = exitCode;
+    return;
+  }
+
+  if (command === "secrets") {
+    const [subcommand] = rest;
+    if (subcommand !== "audit") {
+      console.error(`Unknown secrets subcommand: ${subcommand ?? "(none)"}\nUsage: trellis secrets audit\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const { exitCode } = await runSecretsAudit({ json: rest.includes("--json") });
     process.exitCode = exitCode;
     return;
   }

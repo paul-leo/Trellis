@@ -1,8 +1,5 @@
-# canonical-source-loading Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change trellis-sync-p1. Update Purpose after archive.
-## Requirements
 ### Requirement: Global-only canonical source loading
 The system SHALL load a `CanonicalSource` by reading `~/.trellis/skills/*/SKILL.md`,
 `~/.trellis/agents/*.md`, `~/.trellis/agents.md`, `~/.trellis/scope.yaml`,
@@ -48,35 +45,3 @@ SHALL NOT accept a root/workspace parameter that would enable one.
 - **WHEN** `~/.trellis/secrets.policy.yaml` does not exist
 - **THEN** `loadCanonicalSource()` returns `secretsPolicy: { allowedVars: [], rejectPatterns: [] }`,
   not an error — this file is optional, same as `mcp/servers.yaml`
-
-### Requirement: Missing global source is an error, missing individual entries are not
-The system SHALL raise an error if `~/.trellis/` does not exist at all when
-`loadCanonicalSource()` is called. The system SHALL NOT error if
-`~/.trellis/` exists but contains zero skills, zero agent profiles, or no
-`scope.yaml` — each of these is valid and yields an empty list or default
-scope, not a failure.
-
-#### Scenario: No canonical source at all is an error
-- **WHEN** `~/.trellis/` does not exist
-- **THEN** `loadCanonicalSource()` throws, rather than returning an empty
-  `CanonicalSource` that would look identical to "verified clean"
-
-#### Scenario: An empty but present canonical source is valid
-- **WHEN** `~/.trellis/` exists but `~/.trellis/skills/` contains no
-  subdirectories
-- **THEN** `loadCanonicalSource()` returns a `CanonicalSource` with an
-  empty `skills` array, not an error
-
-### Requirement: A scope.yaml reference to a nonexistent item is a diagnostic, not a hard failure
-The system SHALL record a diagnostic when `scope.yaml` names a skill,
-agent profile, or memory entry that does not exist in canonical, and SHALL
-continue loading every other, valid entry rather than aborting the whole
-load.
-
-#### Scenario: One bad scope.yaml entry doesn't block everything else
-- **WHEN** `scope.yaml` restricts a skill name that doesn't exist under
-  `~/.trellis/skills/` (e.g. a stale entry after a rename), alongside a
-  valid scope restriction on a skill that does exist
-- **THEN** `loadCanonicalSource()` returns successfully, the valid skill's
-  scope is applied normally, and a diagnostic names the stale entry
-

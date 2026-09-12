@@ -277,6 +277,13 @@ MCP entry regardless of how many servers are defined.
 
 ## P3 — `trellis secrets audit`
 
+> **Done and archived** (`openspec/changes/archive/2026-09-12-trellis-secrets-audit-p3/`).
+> Section kept as a historical note only — see `docs/roadmap.md` for the
+> actual outcome. Built as planned, with no dependency added: env-var-name
+> extraction turned out to need only real `JSON.parse` (Claude Code/Kiro)
+> and a five-line regex over one TOML line shape (Codex), not a general
+> parser or a reused write-path module. Don't edit this section further.
+
 - `src/commands/secretsAudit.ts`: reads every adapter's *actual output file*
   (not the canonical source — the point is catching what actually landed on
   disk) and runs `secrets.policy.yaml`'s `reject_patterns` against it.

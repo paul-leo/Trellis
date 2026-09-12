@@ -9,7 +9,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { AgentId, AgentProfile, CanonicalSource, McpConfig, McpServerDef, MemoryEntry, Scope, SkillRef } from "./types.js";
+import type { AgentId, AgentProfile, CanonicalSource, McpConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
 import { ALL_AGENTS } from "./types.js";
 
 interface ScopeYaml {
@@ -22,6 +22,11 @@ interface ServersYaml {
   servers?: Record<string, McpServerDef>;
   known_host_injected?: string[];
   hub?: { url: string };
+}
+
+interface SecretsPolicyYaml {
+  allowed_vars?: string[];
+  reject_patterns?: string[];
 }
 
 function trellisRoot(homeDir: string): string {
@@ -78,6 +83,17 @@ function loadServersYaml(path: string): McpConfig {
     servers: parsed.servers ?? {},
     knownHostInjected: parsed.known_host_injected ?? [],
     hub: parsed.hub,
+  };
+}
+
+function loadSecretsPolicyYaml(path: string): SecretsPolicy {
+  if (!existsSync(path)) {
+    return { allowedVars: [], rejectPatterns: [] };
+  }
+  const parsed = (parseYaml(readFileSync(path, "utf-8")) ?? {}) as SecretsPolicyYaml;
+  return {
+    allowedVars: parsed.allowed_vars ?? [],
+    rejectPatterns: (parsed.reject_patterns ?? []).map((pattern) => new RegExp(pattern)),
   };
 }
 
@@ -153,10 +169,10 @@ export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSourc
     agents,
     memories,
     mcp: loadServersYaml(join(root, "mcp", "servers.yaml")),
-    // Not read yet — P3 (secrets.policy.yaml) owns parsing this; P2's
-    // pre-write guard uses its own narrow, hardcoded floor instead
-    // (src/adapters/secretsGuard.ts), not this field.
-    secretsPolicy: { allowedVars: [], rejectPatterns: [] },
+    // P2's pre-write guard (src/adapters/mcpPlan.ts) uses its own narrow,
+    // hardcoded floor instead of this field — see design.md D1 in
+    // trellis-secrets-audit-p3.
+    secretsPolicy: loadSecretsPolicyYaml(join(root, "secrets.policy.yaml")),
     diagnostics,
   };
 }

@@ -65,12 +65,31 @@ so updating that previous section would have silently deleted an
 unrelated comment — see docs/architecture.md's testing philosophy for why
 this project always runs the real container, not just fixtures in memory.
 
+**P3 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-secrets-audit-p3/`;
+living spec at `openspec/specs/secrets-audit/`). `trellis secrets audit`
+reads each present MCP-capable agent's real, on-disk config (never
+canonical) and runs two independent checks: a whole-file scan against
+`secrets.policy.yaml`'s `reject_patterns`, and a check of every declared
+environment-variable *name* against `allowed_vars`. The second check
+exists because a value-only scan structurally cannot catch the first real
+incident on record — a GitLab PAT stored under the *wrong variable name*
+was still a well-formed `${VAR}` reference, just the wrong name. Env-var-
+name extraction stays dependency-free and format-narrow (real `JSON.parse`
+for Claude Code/Kiro; a five-line regex over the one `env_vars = [...]`
+line shape for Codex) rather than reusing P2's write-path
+`tomlSection.ts` or adding a TOML library for reads — a deliberate,
+separately-reasoned choice, not an oversight (P2's D2 rejected TOML
+libraries specifically for round-trip fidelity on *writes*; that concern
+doesn't apply to a read-only linter, but a full parser is still more than
+this one narrow extraction needs). Both real incidents on record were
+reproduced and caught live in the sandbox, not just in unit tests.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
 | P1 | ✅ `trellis sync skills` / `trellis sync instructions` — symlink-based distribution to Claude Code, Codex, Kiro, and pi | P0 |
 | P2 | ✅ `trellis mcp sync` — incremental, in-place adapters for Claude Code (JSON merge), Codex (TOML section patch), Kiro (JSON merge); collision check against known host-injected server names | P1 |
-| P3 | `trellis secrets audit` — scans every adapter's output for literal credential patterns, fails non-zero on any hit | P2 |
+| P3 | ✅ `trellis secrets audit` — scans every adapter's output for literal credential patterns and unexpected env var names, fails non-zero on any hit | P2 |
 | P4 | pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |
 | P5 | `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
 | P6 | Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
