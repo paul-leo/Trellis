@@ -169,3 +169,70 @@ test("pi bridge: session shutdown closes connected stdio children", async () => 
     killFixtureChildren(home);
   }
 });
+
+test("pi bridge: session shutdown closes every connected server's child, not just one (pi-bridge-lifecycle)", async () => {
+  const home = scratchHome();
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    // Two independent fixture servers sharing `home` as their common argv
+    // marker — deliberately, so a single pgrep count proves *both* were
+    // running before shutdown and *neither* survives it (killFixtureChildren
+    // targets the same marker for cleanup).
+    [
+      "servers:",
+      "  fixture-a:",
+      "    transport: stdio",
+      "    command: node",
+      "    args:",
+      `      - ${fixtureServer}`,
+      `      - ${home}`,
+      "  fixture-b:",
+      "    transport: stdio",
+      "    command: node",
+      "    args:",
+      `      - ${fixtureServer}`,
+      `      - ${home}`,
+      "",
+    ].join("\n"),
+  );
+  const pi = fakePi();
+  try {
+    await trellisMcpBridge(pi as never, home);
+    assert.ok(pi.tools.some((t) => t.name === "fixture-a__echo"));
+    assert.ok(pi.tools.some((t) => t.name === "fixture-b__echo"));
+
+    const aliveBefore = execFileSync("pgrep", ["-f", `${fixtureServer} ${home}`]).toString().trim().split("\n").length;
+    assert.equal(aliveBefore, 2, "expected both fixture children alive before shutdown");
+
+    await pi.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.equal(fixtureChildIsAlive(home), false, "expected shutdown to release every connected client, not just one");
+  } finally {
+    killFixtureChildren(home);
+  }
+});
+
+test("pi bridge: shutdown is idempotent — calling it twice closes each client at most once, no error", async () => {
+  const home = scratchHome();
+  initCanonical(home, "allowed_vars: []\nreject_patterns: []\n");
+  const pi = fakePi();
+  try {
+    await trellisMcpBridge(pi as never, home);
+    assert.ok(pi.tools.some((tool) => tool.name === "fixture__echo"));
+
+    await pi.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fixtureChildIsAlive(home), false, "expected the first shutdown to release the child");
+
+    // The second call must not throw (e.g. from double-closing an already-
+    // closed client) and must not resurrect or duplicate anything.
+    await pi.shutdown();
+    assert.equal(fixtureChildIsAlive(home), false, "expected the second shutdown to be a no-op, not an error or a respawn");
+  } finally {
+    killFixtureChildren(home);
+  }
+});

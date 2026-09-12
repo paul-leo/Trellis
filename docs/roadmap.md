@@ -267,6 +267,28 @@ none of `sync skills`/`sync instructions`/`mcp sync`'s target filters
 cover the bridge extension symlink's `kind: "extension"` — only bare
 `trellis sync` delivers it.
 
+**`pi-bridge-lifecycle`, done and archived**
+(`openspec/changes/archive/2026-09-12-pi-bridge-lifecycle/`; modifies
+`pi-mcp-bridge`). The bridge now owns the full lifecycle of every MCP
+client it connects — a `clients: Set<Client>` tracked from a successful
+`connectStdio`/`connectHttp`/`connectSse`, closed (idempotently, best-
+effort) on pi's `session_shutdown` event or when `tools/list` fails
+after connecting. Started as an open proposal carried forward from
+earlier work with only 1 of 3 declared scenarios under test; closed out
+here by adding the two missing ones — multiple connected servers are
+*all* released on shutdown (not just the first), and calling shutdown
+twice is a no-op on the second call, not an error or a double-close —
+both verified against real spawned subprocesses, not mocks. The fourth
+declared scenario ("a server that never connects is not cleaned
+twice") needed no dedicated test: it's enforced by control flow, not a
+runtime check — a failed connect never reaches `clients.add(client)`,
+so it was never a candidate for cleanup in the first place, and
+`trellis-mcp-connect-timeout`'s own tests already exercise that exact
+failure path. Real pi-sandbox verification was judged already covered
+by `trellis-mcp-connect-timeout`'s own Docker run, which exercised this
+same session_shutdown/`closeAllClients` code path with no dedicated
+second real-CLI run needed.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
