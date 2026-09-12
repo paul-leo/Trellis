@@ -41,11 +41,60 @@ interface PiToolDefinition {
 
 interface PiExtensionAPI {
   registerTool(tool: PiToolDefinition): void;
+  on?(event: "session_shutdown", handler: () => Promise<void> | void): void;
 }
 
 const CLIENT_INFO = { name: "trellis-mcp-bridge", version: "0.0.0" };
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 
-async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Client> {
+/**
+ * A hanging server (process alive, protocol response never sent) leaves
+ * `promise` permanently unsettled — indistinguishable from "still
+ * starting up" without a bound. Racing against a timeout converts that
+ * into an ordinary rejection, which every caller here already knows how
+ * to isolate (design.md D1, trellis-mcp-connect-timeout).
+ */
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * A timed-out (or otherwise failed) connect attempt must not leak the
+ * transport's own resources — for `StdioClientTransport` specifically,
+ * an unclosed transport means an orphaned child process that outlives
+ * this failed attempt indefinitely (confirmed by a real leaked
+ * subprocess during this change's own test run). `transport.close()` is
+ * best-effort: a transport that never fully connected may itself error
+ * on close, but the original connect failure is what the caller needs
+ * to see, not a secondary cleanup error.
+ */
+async function connectWithCleanup(client: Client, transport: Transport, timeoutMs: number, message: string): Promise<Client> {
+  try {
+    await withTimeout(client.connect(transport), timeoutMs, message);
+    return client;
+  } catch (err) {
+    try {
+      await transport.close();
+    } catch {
+      // best-effort; the original connect failure is what matters
+    }
+    throw err;
+  }
+}
+
+async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy, timeoutMs: number): Promise<Client> {
   const client = new Client(CLIENT_INFO, { capabilities: {} });
   const resolved = resolveSecretEnv(def.env ?? [], secretsPolicy);
   const namedEnv = Object.fromEntries((def.env ?? []).map((name) => [name, resolved[name] ?? ""]));
@@ -54,8 +103,7 @@ async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy): Pr
     args: def.args,
     env: { ...getDefaultEnvironment(), ...namedEnv },
   });
-  await client.connect(transport as Transport);
-  return client;
+  return connectWithCleanup(client, transport as Transport, timeoutMs, `connect timed out after ${timeoutMs}ms`);
 }
 
 function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Record<string, string> | undefined {
@@ -69,24 +117,32 @@ function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Record
   return result;
 }
 
-async function connectHttp(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Client> {
+async function connectHttp(def: McpServerDef, secretsPolicy: SecretsPolicy, timeoutMs: number): Promise<Client> {
   const client = new Client(CLIENT_INFO, { capabilities: {} });
   const headers = resolveHeaders(def, secretsPolicy);
   const opts = headers ? { requestInit: { headers } } : undefined;
-  await client.connect(new StreamableHTTPClientTransport(new URL(def.url!), opts) as Transport);
-  return client;
+  return connectWithCleanup(
+    client,
+    new StreamableHTTPClientTransport(new URL(def.url!), opts) as Transport,
+    timeoutMs,
+    `connect timed out after ${timeoutMs}ms`,
+  );
 }
 
-async function connectSse(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Client> {
+async function connectSse(def: McpServerDef, secretsPolicy: SecretsPolicy, timeoutMs: number): Promise<Client> {
   const client = new Client(CLIENT_INFO, { capabilities: {} });
   const headers = resolveHeaders(def, secretsPolicy);
   const opts = headers ? { requestInit: { headers } } : undefined;
-  await client.connect(new SSEClientTransport(new URL(def.url!), opts) as Transport);
-  return client;
+  return connectWithCleanup(
+    client,
+    new SSEClientTransport(new URL(def.url!), opts) as Transport,
+    timeoutMs,
+    `connect timed out after ${timeoutMs}ms`,
+  );
 }
 
-function registerServerTools(pi: PiExtensionAPI, serverName: string, client: Client): Promise<void> {
-  return client.listTools().then((result) => {
+function registerServerTools(pi: PiExtensionAPI, serverName: string, client: Client, timeoutMs: number): Promise<void> {
+  return withTimeout(client.listTools(), timeoutMs, `listTools timed out after ${timeoutMs}ms`).then((result) => {
     for (const tool of result.tools) {
       pi.registerTool({
         name: bridgedToolName(serverName, tool.name),
@@ -104,38 +160,74 @@ function registerServerTools(pi: PiExtensionAPI, serverName: string, client: Cli
 }
 
 /**
- * `homeDir` defaults to the real `~` — only overridable for tests, same
- * seam every other Trellis entry point uses. Not something pi itself
- * ever passes; this factory's own signature matches pi's
- * `ExtensionFactory = (pi) => void | Promise<void>` exactly (`homeDir`
- * has a default, so calling it as `factory(pi)` — what pi actually does
- * — works unchanged).
+ * `homeDir`/`connectTimeoutMs` default to the real `~` / 10s — only
+ * overridable for tests, same seam every other Trellis entry point
+ * uses. Neither is something pi itself ever passes; this factory's own
+ * signature matches pi's `ExtensionFactory = (pi) => void | Promise<void>`
+ * exactly (both trailing params have defaults, so calling it as
+ * `factory(pi)` — what pi actually does — works unchanged).
  */
-export default async function trellisMcpBridge(pi: PiExtensionAPI, homeDir: string = homedir()): Promise<void> {
+export default async function trellisMcpBridge(
+  pi: PiExtensionAPI,
+  homeDir: string = homedir(),
+  connectTimeoutMs: number = DEFAULT_CONNECT_TIMEOUT_MS,
+): Promise<void> {
   const canonical = loadCanonicalSource(homeDir);
   const { desired } = resolveMcpPlan("pi", canonical.mcp);
+  const clients = new Set<Client>();
+
+  const closeClient = async (client: Client): Promise<void> => {
+    if (!clients.delete(client)) return;
+    try {
+      await client.close();
+    } catch (err) {
+      // Cleanup is best-effort; one transport must not block other servers.
+      console.error(`trellis-mcp-bridge: failed to close MCP client: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const closeAllClients = async (): Promise<void> => {
+    const pending = [...clients];
+    clients.clear();
+    await Promise.all(
+      pending.map(async (client) => {
+        try {
+          await client.close();
+        } catch (err) {
+          console.error(`trellis-mcp-bridge: failed to close MCP client: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }),
+    );
+  };
+
+  // pi 0.85.x emits this before tearing down an extension runtime. Keep the
+  // hook optional so the bridge remains loadable in older compatible hosts.
+  pi.on?.("session_shutdown", closeAllClients);
 
   await Promise.all(
     desired.map(async ({ name, def }) => {
       let client: Client;
       try {
         if (def.transport === "http") {
-          client = await connectHttp(def, canonical.secretsPolicy);
+          client = await connectHttp(def, canonical.secretsPolicy, connectTimeoutMs);
         } else if (def.transport === "sse") {
-          client = await connectSse(def, canonical.secretsPolicy);
+          client = await connectSse(def, canonical.secretsPolicy, connectTimeoutMs);
         } else {
-          client = await connectStdio(def, canonical.secretsPolicy);
+          client = await connectStdio(def, canonical.secretsPolicy, connectTimeoutMs);
         }
       } catch (err) {
-        // One unreachable/misconfigured server must never prevent every
+        // One unreachable/misconfigured (including permanently hanging —
+        // trellis-mcp-connect-timeout) server must never prevent every
         // other server's tools from registering (tasks.md 3.2).
         console.error(`trellis-mcp-bridge: failed to connect to MCP server "${name}": ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
+      clients.add(client);
       try {
-        await registerServerTools(pi, name, client);
+        await registerServerTools(pi, name, client, connectTimeoutMs);
       } catch (err) {
         console.error(`trellis-mcp-bridge: failed to list tools for MCP server "${name}": ${err instanceof Error ? err.message : String(err)}`);
+        await closeClient(client);
       }
     }),
   );

@@ -234,6 +234,39 @@ the exact expected conflict message, and `secrets audit` catches a
 headers-embedded name both on the canonical side and in a real,
 already-written agent config file.
 
+**Post-P9 hardening, done and archived**
+(`openspec/changes/archive/2026-09-12-trellis-mcp-connect-timeout/`;
+modifies `pi-mcp-bridge`). Found live, not hypothesized: a real, still-
+published MCP server CLI (`@harness-fe/cli mcp`) that exits in under a
+second with `stdio: "ignore"` but, spawned exactly the way a real stdio
+MCP client must (a readable stdin pipe attached), never writes a byte
+and never exits — indistinguishable from "still starting up" without a
+bound. The pi bridge's `Promise.all` over every configured server had
+no timeout on `client.connect()`, so one such server stalled the entire
+extension load, plus every other configured server's tool registration
+with it. Each of `connectStdio`/`connectHttp`/`connectSse` (and
+`listTools()` after a successful connect) now races against a fixed
+10-second timeout — the same constant `doctor --probe-mcp`'s
+`mcpProbe.ts` already used independently, confirmed by reading it, not
+assumed. Fixing this surfaced a second, real bug beyond the plan: a
+timed-out `connectStdio` was leaking its spawned child process forever
+(discovered when a test run took 12-19s instead of the expected ~300ms,
+and confirmed by a live orphaned process still in `ps` after the test
+exited) — every connect function now calls `transport.close()` on any
+failure, timeout or otherwise, which for a stdio transport kills the
+underlying process. Verified three ways: a dedicated hanging-server
+fixture (two modes — silent from the first byte, and silent only after
+a real `initialize` reply) proves the isolation and the process-leak
+fix in the unit suite; the real Docker pi sandbox re-ran end to end
+with the fix in place, hitting the exact timeout path for real (a
+`memory` server's `npx` cold-start exceeding 10s), while two other,
+differently-broken servers failed fast and pi still reached its own
+unrelated "no API key" stage — proof nothing stalled. A pre-existing,
+unrelated gap was found (not fixed here, out of this change's scope):
+none of `sync skills`/`sync instructions`/`mcp sync`'s target filters
+cover the bridge extension symlink's `kind: "extension"` — only bare
+`trellis sync` delivers it.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
