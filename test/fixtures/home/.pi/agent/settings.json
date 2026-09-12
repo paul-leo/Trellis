@@ -1,0 +1,5 @@
+{
+  "defaultProvider": "anthropic",
+  "defaultModel": "sonnet",
+  "defaultThinkingLevel": "medium"
+}

@@ -1,0 +1,17 @@
+model = "gpt-5.6-sol"
+instructions = "/root/.codex/instructions.md"
+
+[mcp_servers.sample-server]
+command = "node"
+args = ["/fixtures/sample-mcp-server.js"]
+env_vars = ["SAMPLE_TOKEN"]
+
+# Deliberate fixture: "sentry" also appears in known_host_injected in
+# schema/servers.example.yaml. This exists to exercise the collision
+# detector against the exact incident class documented in
+# docs/research.md (a same-name static + host-injected server crashes
+# the whole Codex process on stdio/url type mismatch) — see
+# openspec/changes/trellis-doctor-p0/specs/capability-drift-detection/spec.md
+[mcp_servers.sentry]
+command = "node"
+args = ["/fixtures/fake-sentry-stdio.js"]

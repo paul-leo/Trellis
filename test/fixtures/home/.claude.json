@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "sample-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/fixtures/sample-mcp-server.js"],
+      "env": { "SAMPLE_TOKEN": "${SAMPLE_TOKEN}" }
+    }
+  }
+}

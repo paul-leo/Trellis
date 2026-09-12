@@ -123,3 +123,41 @@ directly against a real pi installation *as a read-only observation*, and
 that finding then gets encoded as a fixture for the isolated test
 environment — the real machine is where you learn the shape of the truth
 once; it is never where you repeatedly verify against it.
+
+### The actual mechanism: `scripts/sandbox.sh`
+
+```
+scripts/sandbox.sh                    # interactive shell in the sandbox
+scripts/sandbox.sh npm run dev doctor  # run a command in the sandbox
+```
+
+Backed by OrbStack (this machine's Docker context — a Mac-native,
+Apple-Virtualization-framework-backed runtime, not Docker Desktop; any
+Docker-compatible daemon works identically). `docker/sandbox.Dockerfile`
+builds a Node image containing the repo's `src/`; `docker/entrypoint.sh`
+copies `test/fixtures/home` (mounted **read-only**) into a container-local
+scratch `$HOME` before running anything, so no command executed inside the
+container can ever write back to the fixture files checked into git —
+verified directly: a write to the sandboxed `$HOME` during development
+left the host-side fixture byte-for-byte unchanged.
+
+`test/fixtures/home/` is a synthetic four-agent `$HOME` — fake
+`.claude.json`, `.codex/config.toml`, `.kiro/settings/mcp.json`,
+`.pi/agent/settings.json`, skill directories — built to exercise specific,
+known findings, not just to look plausible:
+
+- `.agents/skills/sample-skill/` vs. `.codex/skills/duplicate-skill/`:
+  byte-identical content at two different paths, deliberately, to exercise
+  `capability-drift-detection`'s duplication check against a real case
+  rather than an assertion with no failing fixture behind it.
+- `.codex/config.toml` defines an `mcp_servers.sentry` entry — a name that
+  also appears in `known_host_injected` (`schema/servers.example.yaml`) —
+  reproducing the exact collision class from `docs/research.md` (same-name
+  static + host-injected server) as a fixture, not just a comment
+  describing the risk.
+- `.kiro/skills/broken-case-skill/skill.md` — deliberately lowercase, to
+  exercise the case-sensitivity check.
+- `test/fixtures/sample-mcp-server.js` — a minimal real MCP server (reads
+  `initialize` over stdio, replies with fixed `serverInfo`) so
+  `probeMcpServer` has something deterministic to handshake against inside
+  the container without depending on a real npm package or network access.
