@@ -6,7 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -24,9 +24,24 @@ interface CapturedTool {
   execute(toolCallId: string, params: Record<string, unknown>): Promise<{ content: Array<{ type: string; text?: string }> }>;
 }
 
-function fakePi(): { registerTool: (tool: CapturedTool) => void; tools: CapturedTool[] } {
+function fakePi(): {
+  registerTool: (tool: CapturedTool) => void;
+  tools: CapturedTool[];
+  on: (event: "session_shutdown", handler: () => Promise<void> | void) => void;
+  shutdown: () => Promise<void>;
+} {
   const tools: CapturedTool[] = [];
-  return { registerTool: (tool) => tools.push(tool), tools };
+  let shutdownHandler: (() => Promise<void> | void) | undefined;
+  return {
+    registerTool: (tool) => tools.push(tool),
+    tools,
+    on: (_event, handler) => {
+      shutdownHandler = handler;
+    },
+    shutdown: async () => {
+      await shutdownHandler?.();
+    },
+  };
 }
 
 function scratchHome(): string {
@@ -54,6 +69,15 @@ function killFixtureChildren(marker: string): void {
     execSync(`pkill -f ${JSON.stringify(marker)}`);
   } catch {
     // pkill exits non-zero when nothing matched — not an error here
+  }
+}
+
+function fixtureChildIsAlive(home: string): boolean {
+  try {
+    execFileSync("pgrep", ["-f", `${fixtureServer} ${home}`]);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -125,5 +149,23 @@ test("pi bridge: a resolved header actually reaches the outbound HTTP request to
   } finally {
     delete process.env.HTTP_HEADER_TEST_VAR;
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("pi bridge: session shutdown closes connected stdio children", async () => {
+  const home = scratchHome();
+  initCanonical(home, "allowed_vars: []\nreject_patterns: []\n");
+  const pi = fakePi();
+  try {
+    await trellisMcpBridge(pi as never, home);
+    assert.ok(pi.tools.some((tool) => tool.name === "fixture__echo"));
+
+    assert.equal(fixtureChildIsAlive(home), true, "expected the fixture MCP child to be alive before shutdown");
+
+    await pi.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fixtureChildIsAlive(home), false, "expected shutdown to release the fixture MCP child");
+  } finally {
+    killFixtureChildren(home);
   }
 });
