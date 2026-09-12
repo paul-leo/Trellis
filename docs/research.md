@@ -68,15 +68,57 @@ before hub mode existed as a documented option.
 
 ## Shared memory (reuse)
 
-[mem0 / OpenMemory MCP](https://github.com/mem0ai/mem0) — "private,
-local-first memory layer with a built-in UI, compatible with all MCP
-clients." Mature, but needs Docker + an LLM key.
+Checked directly against this real machine before writing this section,
+rather than trusting an earlier draft's claim at face value — the result
+is more nuanced than either "confirmed" or "wrong":
+
+- `src/commands/doctor.ts`'s `DEFAULT_KNOWN_HOST_INJECTED` already lists
+  `"memory"`, documented there as "mirasim's actual known connectors on
+  this project's own machine" (P0's own empirical finding, not a guess).
+  Runtime-injected connectors are, by design, invisible in any agent's
+  *static* config — that's the entire reason `known_host_injected` exists
+  as a concept distinct from what a config file shows. So this likely
+  *is* real: mirasim probably does inject a `server-memory`-class
+  connector named `memory` at runtime for every session on this machine,
+  and no amount of reading `.claude.json`/`config.toml`/`mcp.json` could
+  confirm or deny that either way.
+- What static config *does* show, independent of whatever mirasim
+  injects: Kiro alone has an *additional* memory server explicitly
+  configured — [`totalrecallai`](https://github.com/Auriti-Labs/kiro-memory)
+  (npm `totalrecallai`) — SQLite-backed (`better-sqlite3`) with a local
+  embedding model for semantic/vector search (`fastembed` + `onnxruntime`),
+  a bundled React web viewer, AGPL-3.0 licensed, its own repo literally
+  named `kiro-memory` (purpose-built for Kiro, later marketed as
+  MCP-client-agnostic). Claude Code and Codex have no additional static
+  memory server at all. Whatever mirasim injects at runtime is presumably
+  uniform across all three; this static difference is real, additional,
+  and Kiro-specific — the single-source fragmentation problem Trellis
+  exists to solve, found in the wild rather than assumed on paper.
 
 The official reference server
 [`@modelcontextprotocol/server-memory`](https://github.com/modelcontextprotocol/servers/tree/main/src/memory)
-is zero-dependency, local JSON knowledge graph, already running in this
-environment via mirasim. Trellis defaults to this and documents mem0 as the
-upgrade path for cross-machine or richer semantic memory.
+is zero-dependency, local JSON knowledge graph, MIT-licensed, maintained
+as part of the official `modelcontextprotocol/servers` repo. Trellis
+documents this as the default (`schema/servers.example.yaml`'s `memory`
+entry) — the safe, unopinionated choice for a default any `.trellis/`
+setup can adopt without pulling in native bindings or a copyleft license
+obligation. It's very likely already what a mirasim-hosted session gets
+via runtime injection (see `known_host_injected` above) — on a host like
+that, declaring it again in `mcp/servers.yaml` collides with the
+already-injected connector, exactly the class of incident
+`known_host_injected` exists to refuse (see the schema example's own
+comment for how to tell which situation applies). On a host with no such
+injection, declaring it is what actually wires the default. Either way,
+`totalrecallai`'s semantic-search/SQLite/viewer feature set belongs in
+the same *opt-in upgrade* category as mem0/OpenMemory below, not silently
+adopted as the default just because it happened to already be configured
+on one agent, on one machine.
+
+[mem0 / OpenMemory MCP](https://github.com/mem0ai/mem0) — "private,
+local-first memory layer with a built-in UI, compatible with all MCP
+clients." Mature, but needs Docker + an LLM key. Documented as the
+upgrade path for cross-machine or richer semantic memory, alongside
+`totalrecallai` as a second real option in that same category.
 
 ## Secrets (formalize existing practice, don't build new infra)
 

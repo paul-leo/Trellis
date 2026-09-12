@@ -120,6 +120,26 @@ different resolution algorithms, and only the former would have caught an
 `"exports"` map that looked right but didn't actually resolve for a real
 consumer.
 
+**P6 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-memory-p6/`;
+living spec at `openspec/specs/memory-defaults/`). `@modelcontextprotocol/server-memory`
+is the documented default (`schema/servers.example.yaml`), confirmed by
+the user over `totalrecallai` — a real, third-party memory server found
+statically configured on this machine's Kiro install only (Claude
+Code/Codex had none at all). No new adapter code: an unscoped `memory`
+entry reaches all three native-config agents via P2's existing pipeline
+and pi via P4's bridge, verified end-to-end in the real sandbox with the
+actual `@modelcontextprotocol/server-memory` package name (never
+spawned — `mcp sync` only writes config). One real wrinkle corrected
+along the way: the schema example already lists `memory` under
+`known_host_injected` (a genuine, empirically-grounded P0 finding about
+mirasim's own runtime injection, not a stale guess), so the new default
+entry ships commented out with guidance on which of the two situations
+applies, rather than shipping an example that self-collides with
+Trellis's own guard. Deliberately out of scope: auto-ingesting
+`~/.trellis/memories/*.md` content into the running memory server's
+store — a real, separate problem left as an open question, not silently
+resolved.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
@@ -128,7 +148,7 @@ consumer.
 | P3 | ✅ `trellis secrets audit` — scans every adapter's output for literal credential patterns and unexpected env var names, fails non-zero on any hit | P2 |
 | P4 | ✅ pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |
 | P5 | ✅ `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
-| P6 | Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
+| P6 | ✅ Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
 | P7 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P6 |
 
 No dates. This is scoped by verification milestones, not calendar time.

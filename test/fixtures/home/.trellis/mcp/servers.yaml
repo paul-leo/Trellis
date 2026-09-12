@@ -1,5 +1,6 @@
-# Sandbox-only fixture (trellis-mcp-sync-p2 tasks.md 5.1). Exercises, in
-# one real `trellis mcp sync` run against the sandbox container:
+# Sandbox-only fixture (trellis-mcp-sync-p2 tasks.md 5.1, extended by
+# trellis-memory-p6 tasks.md 3.1). Exercises, in one real `trellis mcp
+# sync` run against the sandbox container:
 #   - "sample-server": already correctly present in every fixture agent
 #     config (.claude.json, .codex/config.toml, .kiro/settings/mcp.json) —
 #     must be a true no-op, proving idempotency against real files, not
@@ -12,6 +13,12 @@
 #     .codex/config.toml to model the incident class this guards against,
 #     see that file's own comment) — must produce a conflict, never a
 #     write, and must leave the existing config.toml section untouched.
+#   - "memory": the real @modelcontextprotocol/server-memory package name
+#     (trellis-memory-p6) — unscoped, so it must reach every MCP-capable
+#     agent AND pi's bridge (resolveMcpPlan), proving the existing P2/P4
+#     pipeline handles this specific real server correctly end-to-end.
+#     Never actually spawned here — `trellis mcp sync` only writes
+#     config, so no network access to the real npm registry is needed.
 servers:
   sample-server:
     transport: stdio
@@ -34,6 +41,11 @@ servers:
     transport: stdio
     command: node
     args: ["/fixtures/fake-sentry-stdio.js"]
+
+  memory:
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-memory"]
 
 known_host_injected:
   - sentry

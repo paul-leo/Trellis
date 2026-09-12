@@ -210,8 +210,10 @@ trade.
 
 - An MCP aggregator/gateway's actual routing/proxy logic (hub mode above
   lets you point every agent at one, but Trellis doesn't implement one)
-- A memory backend (defaults to `@modelcontextprotocol/server-memory`;
-  mem0/OpenMemory documented as an opt-in upgrade)
+- A memory backend (defaults to `@modelcontextprotocol/server-memory`,
+  documented in `schema/servers.example.yaml`; mem0/OpenMemory and
+  totalrecallai-class semantic-search servers documented as opt-in
+  upgrades — see docs/research.md "Shared memory")
 - A secret vault (reads `${VAR}` from whatever the environment already
   provides — `~/.config/agent-env/secrets.env`, 1Password's `op run`,
   anything that populates `process.env` before an adapter's generated

@@ -17,6 +17,29 @@
 #     field the way Codex does with SKILL.md frontmatter.
 
 servers:
+  # Default shared-memory backend (docs/research.md "Shared memory") —
+  # @modelcontextprotocol/server-memory: zero-dependency, local JSON
+  # knowledge graph, MIT-licensed. Left commented out here because this
+  # exact example ALSO lists "memory" under known_host_injected below —
+  # uncommenting both would self-collide (Trellis's own collision guard
+  # would correctly refuse to write it). Which situation you're actually
+  # in depends on your host:
+  #   - If your host (e.g. mirasim) already injects a runtime connector
+  #     under this name — check with `trellis doctor` — leave this
+  #     commented out and keep "memory" in known_host_injected below;
+  #     you already have it, just not from a static definition.
+  #   - If your host injects nothing under this name, uncomment this
+  #     entry AND remove "memory" from known_host_injected below (it's
+  #     only there as inherited example content, not a fact about your
+  #     environment) — that's what actually wires the default.
+  # mem0/OpenMemory or a totalrecallai-class semantic-search server are
+  # documented opt-in upgrades from this default, not silent defaults —
+  # same section of docs/research.md.
+  # memory:
+  #   transport: stdio
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-memory"]
+
   tanka:
     transport: stdio
     command: tanka-mcp
