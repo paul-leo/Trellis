@@ -31,4 +31,12 @@ echo "=== trellis --help ==="
 echo "=== trellis doctor (against a scratch, empty-agent HOME) ==="
 HOME="$FAKE_HOME" ./node_modules/.bin/trellis doctor
 
-echo "OK: the installed trellis binary runs doctor without crashing"
+echo "=== trellis init (against a fresh scratch HOME) ==="
+FRESH_HOME="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH" "$FAKE_HOME" "$FRESH_HOME"; rm -f agent-trellis-*.tgz' EXIT
+HOME="$FRESH_HOME" ./node_modules/.bin/trellis init
+
+echo "=== trellis migrate --from claude-code (agent not present, expect clean refusal) ==="
+HOME="$FRESH_HOME" ./node_modules/.bin/trellis migrate --from claude-code || true
+
+echo "OK: the installed trellis binary runs doctor/init/migrate without crashing"
