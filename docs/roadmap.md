@@ -406,6 +406,48 @@ deliberately out of scope for `trellis-cli-onboard`, tracked here as an
 explicit next step rather than something a user has to discover is
 missing.
 
+**Pre-release closed-loop audit, before first publish.** A full,
+skeptical review of the whole new-user path — every command's usage
+text against its real implementation, every doc claim against the
+actual code, `package.json`'s shipped files against everything read at
+runtime — found and fixed five real issues, none caught by the
+existing test suite because each lived in code path or a doc claim
+nothing exercised directly:
+- `trellis sync --dry-run` was broken as a flags-first invocation:
+  `src/cli.ts`'s target parsing only ever checked `rest[0]`, so a flag
+  placed before a target (or with no target at all) was misread as an
+  unknown target named e.g. `"--dry-run"`. Fixed by parsing the whole
+  `rest` array for a recognized target instead of assuming position,
+  and the parsing logic (`parseSyncArgs`) was pulled out into its own
+  small, directly unit-tested function (`test/unit/cli.test.ts`) —
+  `src/cli.ts` previously had zero direct test coverage of its own argv
+  dispatch, which is exactly why a pure-parsing bug like this shipped
+  unnoticed. Adding that test surfaced a second real issue: importing
+  `cli.ts` for the pure function ran the whole CLI against the test
+  runner's own argv as an unguarded side effect (`main(...)` had no
+  entrypoint check) — fixed with the standard `import.meta.url ===
+  file://${process.argv[1]}` guard.
+- `sync --dry-run` was undocumented in `printUsage()`, `README.md`, and
+  `docs/getting-started.md` despite being real and (once fixed) working
+  — all three now document it.
+- `onboard.ts` had its own, second copy of `migrate`'s and `sync`'s
+  report-printing logic, and that copy was missing `migrate.ts`'s own
+  "nothing to migrate" empty-plan case — a real gap for exactly the
+  fresh-Claude-Code-install scenario this project's own new-user
+  persona represents (config present, zero skills, no instructions
+  file). Fixed by exporting and reusing `migrate.ts`'s `printPlan` and
+  `sync.ts`'s `printReport` directly instead of a second copy that
+  could silently drift.
+- `package.json`'s `files` shipped `dist` and `schema` but not `docs` —
+  every globally-installed user's local `README.md` (which *is*
+  shipped) links to `docs/getting-started.md`, `docs/architecture.md`,
+  and `docs/roadmap.md`, none of which existed on their machine. Same
+  root cause `trellis-cli-init`'s own entry already fixed once for
+  `schema/` — the fix pattern (add it to `files`) applied again here.
+- `docs/architecture.md`'s canonical-schema diagram listed
+  `trellis.lock.json` with no "not built yet" annotation, unlike every
+  other not-yet-built thing described in the same document — annotated.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |

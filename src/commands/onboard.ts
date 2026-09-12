@@ -15,9 +15,9 @@ import * as piProbe from "../probes/pi.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot } from "../core/types.js";
 import { INSTALL_HINTS, collectInitReport } from "./init.js";
-import { applyMigratePlan, collectMigratePlan } from "./migrate.js";
+import { applyMigratePlan, collectMigratePlan, printPlan as printMigratePlan } from "./migrate.js";
 import type { MigratePlan } from "./migrate.js";
-import { collectSyncReport } from "./sync.js";
+import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
 
 const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
@@ -191,26 +191,18 @@ function printResult(result: OnboardResult, dryRun: boolean): void {
     console.log(`Using ${result.base} as the migration base.`);
   }
 
+  // Reuse `migrate`/`sync`'s own printing verbatim (including the
+  // "nothing to migrate" / "already in sync" cases) rather than a second,
+  // easily-drifting copy of this formatting. `dryRun: false` here since
+  // this function's own leading "[dry run]" line already said so once.
   if (result.migratePlan) {
-    console.log(`\nmigrate --from ${result.migratePlan.agent}`);
-    for (const item of result.migratePlan.items) {
-      console.log(`  [${item.action}] ${item.kind === "skill" ? `skill "${item.name}"` : "instructions"} — ${item.detail}`);
-    }
+    console.log("");
+    printMigratePlan(result.migratePlan, false);
   }
 
   if (result.syncReport) {
     console.log("\nsync");
-    for (const { agent, present: agentPresent, items } of result.syncReport.reports) {
-      if (!agentPresent) {
-        console.log(`  —  ${agent} (not installed)`);
-        continue;
-      }
-      const created = items.filter((i) => i.action === "create");
-      const removed = items.filter((i) => i.action === "remove");
-      const conflicts = items.filter((i) => i.action === "conflict");
-      const icon = conflicts.length > 0 ? "⚠️ " : "✅";
-      console.log(`  ${icon} ${agent} — ${created.length} created, ${removed.length} removed, ${conflicts.length} conflict(s)`);
-    }
+    printSyncReport(result.syncReport, false);
   }
 
   console.log("\nNext: `trellis mcp sync` to distribute MCP servers, `trellis secrets audit` to check for leaked credentials.");

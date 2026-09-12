@@ -160,7 +160,9 @@ guessing which one should win. If you meant to bring that content into
 canonical, that's what `migrate` is for.
 
 Run `trellis sync skills` or `trellis sync instructions` to distribute just
-one half.
+one half. Add `--dry-run` (in any position — `trellis sync --dry-run` and
+`trellis sync skills --dry-run` both work) to preview the plan with zero
+writes.
 
 ## `trellis mcp sync`
 

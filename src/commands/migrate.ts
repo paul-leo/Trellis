@@ -156,7 +156,10 @@ export async function runMigrate(opts: RunMigrateOptions = {}): Promise<{ exitCo
   return { exitCode: hasConflict ? 1 : 0 };
 }
 
-function printPlan(plan: MigratePlan, dryRun: boolean): void {
+/** Exported so `onboard` prints a migrate plan identically to running
+ * `migrate` standalone, instead of a second, easily-drifting copy of
+ * this formatting (including the empty-plan "nothing to migrate" case). */
+export function printPlan(plan: MigratePlan, dryRun: boolean): void {
   console.log(`${dryRun ? "[dry run] " : ""}migrate --from ${plan.agent}`);
   if (plan.items.length === 0) {
     console.log("  nothing to migrate");

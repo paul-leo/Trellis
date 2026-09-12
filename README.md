@@ -67,6 +67,7 @@ already have?**
    to preview first.
 3. `trellis sync` — distributes canonical skills/instructions to every agent
    present on this machine (including the ones you didn't migrate from).
+   Add `--dry-run` to preview first.
 4. `trellis mcp sync` — distributes `~/.trellis/mcp/servers.yaml` (see
    [`schema/servers.example.yaml`](schema/servers.example.yaml)) to every
    agent's native MCP config (create/repair only — see Known limitations).

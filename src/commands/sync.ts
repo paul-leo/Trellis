@@ -101,7 +101,10 @@ export async function runSync(opts: RunSyncOptions = {}): Promise<{ exitCode: nu
   return { exitCode: hasConflict ? 1 : 0 };
 }
 
-function printReport(report: SyncReport, dryRun: boolean): void {
+/** Exported so `onboard` prints a sync report identically to running
+ * `sync` standalone, instead of a second, easily-drifting copy of this
+ * formatting. */
+export function printReport(report: SyncReport, dryRun: boolean): void {
   if (dryRun) console.log("[dry run]");
   for (const { agent, present, items } of report.reports) {
     if (!present) {

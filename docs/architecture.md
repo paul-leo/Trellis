@@ -46,7 +46,9 @@ Aligned to the `.agents Protocol` draft, extended where the draft is silent:
 ├── scope.yaml                 # exceptions to "shared with all agents" —
 │                             # see "Private / agent-specific capabilities"
 ├── secrets.policy.yaml       # which var names are allowed, nothing else
-└── trellis.lock.json         # per-agent adapter state, for drift detection
+└── trellis.lock.json         # NOT YET BUILT — planned ownership-tracking
+                              # file for MCP removal (docs/roadmap.md's P2
+                              # note); nothing in src/ reads or writes this
 ```
 
 ## Global vs. workspace scope

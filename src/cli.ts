@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Entry point. Only `doctor` (P0) is implemented — see docs/roadmap.md for
- * the rest. This stays a thin dispatcher; real logic lives in
- * src/commands/*.ts so it stays testable without going through argv.
+ * Entry point. Stays a thin dispatcher; real logic lives in
+ * src/commands/*.ts so it stays testable without going through argv. See
+ * docs/roadmap.md for what's implemented.
  */
 
 import { runDoctor } from "./commands/doctor.js";
@@ -14,6 +14,20 @@ import { runMcpSync } from "./commands/mcp.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 
 const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "secrets"] as const;
+
+/**
+ * Pulled out of the `sync` dispatch branch so argv parsing is directly
+ * unit-testable (test/unit/cli.test.ts) rather than only exercisable
+ * through a real process invocation — this exact class of bug (only
+ * `rest[0]` was ever checked, so a flag placed first was mistaken for an
+ * unknown target) had no test coverage before it was found by manual
+ * review, not a test failure.
+ */
+export function parseSyncArgs(rest: string[]): { target?: "skills" | "instructions"; unknownArg?: string } {
+  const target = rest.find((arg): arg is "skills" | "instructions" => arg === "skills" || arg === "instructions");
+  const unknownArg = rest.find((arg) => !arg.startsWith("--") && arg !== "skills" && arg !== "instructions");
+  return { target, unknownArg };
+}
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -46,7 +60,8 @@ Commands:
                              some reaching real external services)
   sync [skills|instructions]
             Distribute skills/instructions to each agent (omit target for both)
-              --json    machine-readable output, no report text
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
   mcp sync  Distribute MCP servers to each agent's native config
               (create/repair only — no automatic removal, see docs/roadmap.md)
               --json    machine-readable output, no report text
@@ -102,10 +117,9 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "sync") {
-    const [maybeTarget] = rest;
-    const target = maybeTarget === "skills" || maybeTarget === "instructions" ? maybeTarget : undefined;
-    if (maybeTarget && !target && maybeTarget !== "--json") {
-      console.error(`Unknown sync target: ${maybeTarget}\n`);
+    const { target, unknownArg } = parseSyncArgs(rest);
+    if (unknownArg) {
+      console.error(`Unknown sync target: ${unknownArg}\n`);
       printUsage();
       process.exitCode = 1;
       return;
@@ -145,7 +159,14 @@ async function main(argv: string[]): Promise<void> {
   process.exitCode = 1;
 }
 
-main(process.argv.slice(2)).catch((err) => {
-  console.error(err instanceof Error ? err.stack : String(err));
-  process.exitCode = 1;
-});
+// Only run when this file is the actual entrypoint (the real `trellis`
+// invocation), not when something imports it as a module — test/unit/
+// cli.test.ts imports `parseSyncArgs` from here, and without this guard
+// that import silently ran the whole CLI against the test runner's own
+// argv as a side effect (found while adding that exact test).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main(process.argv.slice(2)).catch((err) => {
+    console.error(err instanceof Error ? err.stack : String(err));
+    process.exitCode = 1;
+  });
+}
