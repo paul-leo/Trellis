@@ -205,6 +205,22 @@ trade.
 - A GUI (P5 in the roadmap evaluates embedding into an existing one —
   mcp-router's or skills-hub's — before building a new one)
 
+## MCP handshake probing is opt-in, not default
+
+`trellis doctor`'s default run never spawns a configured MCP server — it
+only reads static config (name, transport, collision against
+`known_host_injected`). Live handshake probing (`src/lib/mcpProbe.ts`) is a
+real capability, unit-tested against a fixture server, but running it
+against every server configured on a real machine turned out not to be
+"read-only" in the sense that actually matters: some servers reach real
+external services with real credentials (OAuth-backed connectors,
+`chrome-devtools-mcp`'s `--autoConnect`), and doing this for a dozen-plus
+servers serially, once per agent, made a single default `trellis doctor`
+run take minutes and spawn processes with a meaningfully larger blast
+radius than "list what's configured." Pass `--probe-mcp` to opt in; the
+default stays fast, side-effect-free, and safe to run in a pre-commit hook
+or CI on every commit.
+
 ## Testing philosophy: never verify against the developer's real environment
 
 **Hard rule, not a preference.** P0's probes are read-only, so they're safe

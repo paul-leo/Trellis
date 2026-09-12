@@ -1,5 +1,8 @@
-## ADDED Requirements
+# capability-drift-detection Specification
 
+## Purpose
+TBD - created by archiving change trellis-doctor-p0. Update Purpose after archive.
+## Requirements
 ### Requirement: Cross-agent snapshot comparison
 The system SHALL compare `AgentSnapshot`s from all present agents pairwise
 and report, for each skill name that appears in more than one agent, whether
@@ -56,6 +59,23 @@ crash the entire agent process on at least one target (Codex — see
   Codex's `url is not supported for stdio` startup failure), so the finding
   is immediately actionable rather than requiring rediscovery
 
+### Requirement: MCP handshake probing is opt-in, never default
+The system SHALL NOT spawn any configured MCP server during a default
+`trellis doctor` invocation. Handshake probing (per `agent-state-probing`'s
+"MCP server handshake probing" requirement) SHALL only run when explicitly
+requested via `--probe-mcp`.
+
+#### Scenario: Default invocation never spawns a server
+- **WHEN** `trellis doctor` is run without `--probe-mcp`
+- **THEN** every `AgentSnapshotMcpServer` entry has no `probe` result, and
+  no child process is spawned for any configured MCP server
+
+#### Scenario: `--probe-mcp` opts into live handshakes
+- **WHEN** `trellis doctor --probe-mcp` is run
+- **THEN** each present agent's stdio-transport servers are handshaked
+  (in parallel per agent, not serially), and results populate `probe` on
+  the corresponding `AgentSnapshotMcpServer` entries
+
 ### Requirement: Human-readable and machine-readable report output
 The system SHALL, by default, print findings as a table using ✅ (clean),
 ⚠️ (finding, non-fatal to report), and ❌ (agent absent or probe failure)
@@ -88,3 +108,4 @@ cleanly and no cross-agent finding exists.
 - **WHEN** at least one drift, duplication, or collision finding is produced
 - **THEN** the process exit code is non-zero, making `trellis doctor`
   usable as a CI or pre-commit gate
+

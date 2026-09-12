@@ -65,9 +65,14 @@ exists with the wrong case rather than silently ignoring it.
 The system SHALL provide one probe per supported agent (Claude Code, Codex,
 Kiro, pi) that produces an `AgentSnapshot` describing that agent's current,
 real, already-installed state: presence, version, skill roots (with symlink
-status and target), MCP servers (with source — static config vs. known
-runtime-injected — and handshake result), instructions file location and
-symlink status, and subagent directory location and count where applicable.
+status and target), MCP servers as read from that agent's own persisted
+static config (name, transport, handshake result), instructions file
+location and symlink status, and subagent directory location and count
+where applicable. Classifying a server name as colliding with a known
+host-injected name is a comparison `capability-drift-detection` performs
+against the static list a probe reports, not something a probe determines
+itself — no probe can observe a host's runtime-only injection (e.g.
+mirasim's overrides never touch the config file a probe reads).
 No probe SHALL write to any file or modify any agent's configuration.
 
 #### Scenario: Agent is not installed
@@ -85,10 +90,11 @@ literal configured path
   comparison can apply realpath-based deduplication (see
   `capability-drift-detection`)
 
-#### Scenario: pi's skill state is reported honestly under discovery-path
-uncertainty
-- **WHEN** the pi probe runs and pi does not expose a persistent,
-  filesystem-discoverable skill directory (see design.md D5, outcome B)
-- **THEN** the snapshot explicitly marks skill state as "not comparable"
-  rather than reporting zero skills, so this is distinguishable from "pi has
-  no skills configured"
+#### Scenario: pi's skill root is its confirmed discovery directory
+- **WHEN** the pi probe runs
+- **THEN** it reads `~/.pi/agent/skills` as pi's skill root — confirmed by
+  direct source read of `@earendil-works/pi-coding-agent`'s
+  `loadSkills()`/`getAgentDir()` (see design.md D5, outcome A) — and
+  reports its contents the same way every other agent's skill root is
+  reported (symlink status, realpath, skill names), with no special-cased
+  "not comparable" marker

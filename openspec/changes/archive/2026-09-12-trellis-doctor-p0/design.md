@@ -98,29 +98,67 @@ comparison logic to special-case each agent pairwise (4 agents → 6 pairs ×
 4 agent-specific shapes), instead of running one generic comparison over N
 uniform snapshots.
 
-### D5 — pi's skill discovery path: resolve before writing the probe, don't assume
+### D5 — RESOLVED: pi's skill discovery path is `~/.pi/agent/skills` (outcome A)
 
 `docs/research.md` only confirmed pi *reads* `SKILL.md`-format content
 somewhere; the actual discovery directory was never directly observed
 (only inferred from decompiled bundle strings, which turned up no fixed
-path literal). This change requires, as its first task, running `pi
---skill <path>` and `pi config` against a live pi installation and
-inspecting `~/.pi/agent/settings.json` afterward, to determine one of two
-outcomes:
+path literal).
 
-- **A**: pi has a real discovery directory → `src/probes/pi.ts` reads it
-  directly, matching the other three agents' shape.
-- **B**: pi is strictly `--skill`-flag-per-invocation, no persistent
-  directory → the probe instead reports "no persistent skill state to
-  compare" as an explicit, honest finding, and `capability-drift-detection`
-  must treat pi's absence of comparable state as a distinct case, not a
-  zero (silently reporting "0 skills" would be indistinguishable from "pi
-  has genuinely no skills configured," which is a different, worse finding
-  to get wrong).
+**Evidence** (direct source read, stronger than the live-behavioral test
+this task originally planned — see note below): the installed package
+(`@earendil-works/pi-coding-agent`) ships an *unminified* `dist/` tree
+alongside the minified bundle used for the earlier research pass.
+`dist/core/skills.js`'s `loadSkills()` is unambiguous:
 
-This decision **gates P4's design** (`docs/implementation-plan.md` already
-flags this), not just this probe — recording the actual outcome here is
-part of this change's job, not a side effect.
+```js
+if (includeDefaults) {
+  addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
+  addSkills(loadSkillsFromDirInternal(resolve(resolvedCwd, CONFIG_DIR_NAME, "skills"), "project", true));
+}
+```
+
+`resolvedAgentDir` defaults to `getAgentDir()` (`dist/config.js`), which is
+`join(homedir(), CONFIG_DIR_NAME, "agent")` with `CONFIG_DIR_NAME = ".pi"`
+— i.e. **`~/.pi/agent/skills`** for the global/user scope Trellis manages
+(project scope, `<cwd>/.pi/skills`, is out of scope per "Global vs.
+workspace scope"). This is a real, persistent, filesystem-discoverable
+directory, loaded on every startup unconditionally — not something that
+only exists per-invocation via `--skill`. **Outcome A.**
+
+Two details worth recording alongside the resolution, both consistent with
+this change's existing decisions:
+- Dedup inside `loadSkills` is by `canonicalizePath` (realpath), and a
+  same-name collision from two different real paths is recorded as an
+  explicit diagnostic rather than silently resolved — the same realpath-
+  based identity model as D3, independently arrived at by pi's own
+  implementation.
+- The `SKILL.md` entry check (`entry.name !== "SKILL.md"`) is a literal,
+  case-sensitive string comparison, the same class of constraint already
+  known from Codex (`docs/research.md`) — not a new finding, but confirms
+  it's not Codex-specific.
+
+**Method note**: tasks.md's plan (1.1/1.2) was to run `pi --skill <path>`
+and `pi config` live and observe the result. Reading the actual unminified
+source directly turned out to be available and is strictly stronger
+evidence for this specific question (it's the literal code that runs, not
+an inference from behavior or from decompiled/minified strings) — and
+avoids spending a real model invocation (`pi -p ...` triggers an actual
+LLM call) on a question the source already answers unambiguously. No live
+`pi` session was run for this decision as a result; if a future change
+needs to observe pi's *runtime* behavior (e.g. tool registration timing for
+P4's bridge), that still needs a live session — this substitution is
+specific to "where does discovery look," not a general substitute for
+behavioral testing.
+
+**Consequence for this change**: `src/probes/pi.ts` reads `~/.pi/agent/skills`
+directly, exactly like the other three agents' skill roots — no "not
+comparable" marker is needed in `AgentSnapshot` or in
+`capability-drift-detection`'s spec, and the scenario in
+`specs/agent-state-probing/spec.md` describing outcome B has been replaced
+with one describing the confirmed path. This also **un-gates P4**: the pi
+bridge (P4) is being built against a known filesystem location already,
+not held on runtime discovery.
 
 ## Risks / Trade-offs
 
@@ -154,11 +192,10 @@ external state to roll back.
 
 ## Open Questions
 
-- D5 is a question this change must answer with evidence, not defer — see
-  tasks.md for the concrete investigation steps. The answer (A or B) should
-  be recorded back into this design doc's D5 section once known, so the
-  decision and its evidence live together rather than only in a commit
-  message.
+None remaining.
+
+- ~~D5: pi's skill discovery path~~ — resolved: `~/.pi/agent/skills`,
+  outcome A. See D5 above.
 - ~~Whether Codex's `mcp list` output is JSON-parseable~~ — resolved: `codex
   mcp list --json` exists and was confirmed working directly against this
   machine's Codex install (see D2). No open question remains here.

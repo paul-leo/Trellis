@@ -116,6 +116,78 @@ export interface SecretsPolicy {
   rejectPatterns: RegExp[];
 }
 
+/**
+ * Result of one MCP stdio handshake probe (src/lib/mcpProbe.ts). `ok:
+ * false` always carries `error` — "configured but unreachable" and "never
+ * attempted" must stay distinguishable in an AgentSnapshot, so there's no
+ * silent-false path.
+ */
+export interface McpProbeResult {
+  ok: boolean;
+  serverInfo?: { name?: string; version?: string };
+  error?: string;
+  stderr?: string;
+}
+
+export interface AgentSnapshotSkillEntry {
+  name: string;
+  /** The skill's directory (what would be symlinked). */
+  dir: string;
+  /** Resolved realpath of `dir` — what duplication/drift comparison keys
+   * on (design.md D3), never `dir` itself. */
+  realDir: string;
+  isSymlink: boolean;
+  /** From `findSkillFile` — false means a same-named file exists with the
+   * wrong case and was NOT picked up by the target agent. */
+  caseCorrect: boolean;
+}
+
+export interface AgentSnapshotSkillRoot {
+  path: string;
+  isSymlink: boolean;
+  target?: string;
+  skills: AgentSnapshotSkillEntry[];
+}
+
+/**
+ * Every entry here came from an agent's own persisted, static config — a
+ * probe has no way to observe a host environment's runtime-only
+ * injection (e.g. mirasim's `-c` overrides never touch the config file
+ * probes read). The static-vs-known-host-injected classification spec.md
+ * describes is a comparison `trellis doctor` computes against
+ * `known_host_injected`, not a field a probe can set — see
+ * src/commands/doctor.ts's collision check.
+ */
+export interface AgentSnapshotMcpServer {
+  name: string;
+  transport?: Transport;
+  probe?: McpProbeResult;
+}
+
+export interface AgentSnapshotPathRef {
+  path: string;
+  isSymlink: boolean;
+  target?: string;
+}
+
+/**
+ * One shape for every agent (design.md D4) — agent-specific detail lives
+ * inside each probe(), never in this type, so comparison logic in
+ * src/commands/doctor.ts never special-cases an agent.
+ */
+export interface AgentSnapshot {
+  agent: AgentId;
+  present: boolean;
+  version?: string;
+  skillRoots: AgentSnapshotSkillRoot[];
+  mcpServers: AgentSnapshotMcpServer[];
+  instructionsFile?: AgentSnapshotPathRef;
+  subagentsDir?: AgentSnapshotPathRef & { count: number };
+  /** Non-fatal issues hit while probing (e.g. a config file failed to
+   * parse) — a doctor finding, never silently swallowed. */
+  diagnostics: string[];
+}
+
 export interface CanonicalSource {
   /**
    * Global (`~/.trellis`) only for now. Project-local `.trellis/` and its

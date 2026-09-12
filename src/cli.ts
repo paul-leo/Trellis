@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Pre-alpha entry point. No command does real work yet — see
- * docs/roadmap.md. This stub exists so the package structure (bin, adapter
- * contract, canonical types) is real and typechecked from day one, instead
- * of arriving all at once with the first feature.
+ * Entry point. Only `doctor` (P0) is implemented — see docs/roadmap.md for
+ * the rest. This stays a thin dispatcher; real logic lives in
+ * src/commands/*.ts so it stays testable without going through argv.
  */
+
+import { runDoctor } from "./commands/doctor.js";
 
 const KNOWN_COMMANDS = ["doctor", "sync", "mcp", "secrets"] as const;
 
@@ -15,7 +16,11 @@ Usage:
   trellis <command>
 
 Commands:
-  doctor    Scan Claude Code / Codex / Kiro / pi for drift (not yet implemented)
+  doctor    Scan Claude Code / Codex / Kiro / pi for drift
+              --json         machine-readable output, no table text
+              --probe-mcp    also handshake every configured MCP server
+                             (off by default — spawns real processes,
+                             some reaching real external services)
   sync      Distribute skills/instructions to each agent (not yet implemented)
   mcp       Manage the canonical MCP server list (not yet implemented)
   secrets   Audit adapter output for leaked credentials (not yet implemented)
@@ -23,8 +28,8 @@ Commands:
 See docs/roadmap.md for what's built vs. planned.`);
 }
 
-function main(argv: string[]): void {
-  const [command] = argv;
+async function main(argv: string[]): Promise<void> {
+  const [command, ...rest] = argv;
 
   if (!command || command === "--help" || command === "-h") {
     printUsage();
@@ -38,10 +43,19 @@ function main(argv: string[]): void {
     return;
   }
 
+  if (command === "doctor") {
+    const { exitCode } = await runDoctor({ json: rest.includes("--json"), probeMcp: rest.includes("--probe-mcp") });
+    process.exitCode = exitCode;
+    return;
+  }
+
   console.error(
     `\`trellis ${command}\` is not implemented yet — this is a pre-alpha scaffold.\nSee docs/roadmap.md for status.`,
   );
   process.exitCode = 1;
 }
 
-main(process.argv.slice(2));
+main(process.argv.slice(2)).catch((err) => {
+  console.error(err instanceof Error ? err.stack : String(err));
+  process.exitCode = 1;
+});
