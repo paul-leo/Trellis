@@ -39,7 +39,7 @@ export async function probe(homeDir: string = homedir(), opts: ProbeOptions = {}
 
   let version: string | undefined;
   try {
-    version = execFileSync("claude", ["--version"], { encoding: "utf-8" }).trim();
+    version = execFileSync("claude", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
   } catch {
     // Config exists without the CLI on PATH — still probeable, just unversioned.
   }

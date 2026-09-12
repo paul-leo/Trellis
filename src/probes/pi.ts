@@ -33,7 +33,7 @@ export async function probe(homeDir: string = homedir()): Promise<AgentSnapshot>
 
   let version: string | undefined;
   try {
-    version = execFileSync("pi", ["--version"], { encoding: "utf-8" }).trim();
+    version = execFileSync("pi", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
   } catch {
     // config exists without the binary on PATH — unusual, still probeable
   }

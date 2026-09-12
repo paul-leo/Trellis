@@ -43,7 +43,7 @@ export async function probe(homeDir: string = homedir(), opts: ProbeOptions = {}
 
   let version: string | undefined;
   try {
-    version = execFileSync("kiro-cli", ["--version"], { encoding: "utf-8" }).trim();
+    version = execFileSync("kiro-cli", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
   } catch {
     // binary not on PATH — config existing without it is still probeable
   }
