@@ -117,3 +117,30 @@ test("codex: a real stdio MCP server (with static_env) is migrated via the real 
   assert.match(written, /gitlab:/);
   assert.match(written, /GITLAB_API_URL/);
 });
+
+test("codex: a real remote (url + bearer_token_env_var) MCP server migrates via the real codex binary (trellis-migrate-mcp-servers follow-up)", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  writeFileSync(
+    join(home, ".codex", "config.toml"),
+    `model = "x"\n\n[mcp_servers.figma]\nurl = "https://mcp.figma.com/mcp"\nbearer_token_env_var = "FIGMA_TOKEN"\n`,
+  );
+
+  const plan = await collectMigratePlan("codex", home, ["mcp"]);
+  assert.equal(plan.present, true);
+  assert.equal(plan.items.length, 1, JSON.stringify(plan.items));
+  assert.equal(plan.items[0].action, "create");
+  assert.equal(plan.items[0].name, "figma");
+  assert.deepEqual(plan.items[0].mcpDef, {
+    transport: "http",
+    url: "https://mcp.figma.com/mcp",
+    headers: { Authorization: "Bearer ${FIGMA_TOKEN}" },
+  });
+
+  applyMigratePlan(plan, home);
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /figma:/);
+  assert.match(written, /FIGMA_TOKEN/);
+});

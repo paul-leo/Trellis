@@ -92,13 +92,36 @@ test("buildCodexMcpReadResult: a stdio entry with env_vars and a matching TOML s
   ]);
 });
 
-test("buildCodexMcpReadResult: a non-stdio entry is unsupported, never guessed at (design.md D2)", () => {
-  const entries: CodexMcpEntryRich[] = [{ name: "figma", enabled: true, transport: { type: "http" } }];
+test("buildCodexMcpReadResult: a real streamable_http entry (url only) converts to transport: http", () => {
+  const entries: CodexMcpEntryRich[] = [{ name: "figma", enabled: true, transport: { type: "streamable_http", url: "https://mcp.figma.com/mcp", bearer_token_env_var: null, http_headers: null, env_http_headers: null, http_headers_helper: null } }];
+  const result = buildCodexMcpReadResult(entries, undefined);
+  assert.deepEqual(result.unsupported, []);
+  assert.deepEqual(result.entries, [{ name: "figma", def: { transport: "http", url: "https://mcp.figma.com/mcp" } }]);
+});
+
+test("buildCodexMcpReadResult: url + bearer_token_env_var converts to headers: Authorization Bearer ${VAR}", () => {
+  const entries: CodexMcpEntryRich[] = [{ name: "figma", enabled: true, transport: { type: "streamable_http", url: "https://mcp.figma.com/mcp", bearer_token_env_var: "FIGMA_TOKEN", http_headers: null, env_http_headers: null, http_headers_helper: null } }];
+  const result = buildCodexMcpReadResult(entries, undefined);
+  assert.deepEqual(result.entries, [{ name: "figma", def: { transport: "http", url: "https://mcp.figma.com/mcp", headers: { Authorization: "Bearer ${FIGMA_TOKEN}" } } }]);
+});
+
+test("buildCodexMcpReadResult: a non-null http_headers/env_http_headers/http_headers_helper is unsupported, never guessed at", () => {
+  for (const field of ["http_headers", "env_http_headers", "http_headers_helper"] as const) {
+    const entries: CodexMcpEntryRich[] = [{ name: "figma", enabled: true, transport: { type: "streamable_http", url: "https://mcp.figma.com/mcp", [field]: { some: "unknown-shape" } } }];
+    const result = buildCodexMcpReadResult(entries, undefined);
+    assert.deepEqual(result.entries, [], `field ${field} should have made this unsupported`);
+    assert.equal(result.unsupported.length, 1);
+    assert.match(result.unsupported[0].reason, /header mechanism/);
+  }
+});
+
+test("buildCodexMcpReadResult: a non-stdio entry with no url at all is unsupported (malformed)", () => {
+  const entries: CodexMcpEntryRich[] = [{ name: "figma", enabled: true, transport: { type: "streamable_http" } }];
   const result = buildCodexMcpReadResult(entries, undefined);
   assert.deepEqual(result.entries, []);
   assert.equal(result.unsupported.length, 1);
   assert.equal(result.unsupported[0].name, "figma");
-  assert.match(result.unsupported[0].reason, /stdio transport/);
+  assert.match(result.unsupported[0].reason, /no url/);
 });
 
 test("buildCodexMcpReadResult: missing TOML content still converts command/args/env names, just no static_env", () => {

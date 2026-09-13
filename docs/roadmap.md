@@ -844,14 +844,15 @@ name is a conflict, never overwritten. pi is still never a migrate-in
 source — no static config to read, unchanged from P14's own framing.
 Two fidelity limits, found by actually running each agent's real
 tooling rather than assumed, are handled by refusing rather than
-guessing: **Codex is stdio-transport only** — `codex mcp list --json`
-had no evidence in this codebase for any other transport shape at
-design time; a real, one-off run against a locally-installed `codex-cli
-0.154.0` during implementation *did* observe a `streamable_http` shape
-(`url`, `bearer_token_env_var`, plus three further undocumented fields)
-for a hand-written `url`-based server — recorded as a concrete lead for
-a future change, not built now, since one data point from one version
-isn't a contract; a non-stdio Codex server is reported
+guessing: **Codex is stdio-transport only at first** (closed as a
+same-day follow-up, see below) — `codex mcp list --json` had no
+evidence in this codebase for any other transport shape at design time;
+a real, one-off run against a locally-installed `codex-cli 0.154.0`
+during implementation *did* observe a `streamable_http` shape (`url`,
+`bearer_token_env_var`, plus three further undocumented fields) for a
+hand-written `url`-based server — recorded as a concrete lead for a
+future change, not built at first, since one data point from one
+version isn't a contract; a non-stdio Codex server was reported
 `skip-unsupported`, named, not silently dropped. **Codex's `static_env`**
 is recovered by reading `[mcp_servers.<name>.env]` directly from
 `config.toml` (a new `readServerEnvTable` in `tomlSection.ts`, the exact
@@ -866,14 +867,37 @@ scoped only to this new reader module, leaving both probes' existing,
 including one exercising the real, locally-installed `codex` binary
 end-to-end against a scratch, HOME-scoped `.codex/config.toml` (341/341
 project-wide, zero regressions). One related, pre-existing gap
-surfaced but deliberately not fixed here (out of scope, named instead):
-`src/probes/codex.ts`'s own `probe()` never scopes its `codex mcp list
---json` subprocess call to a passed-in `homeDir` via `HOME` env override
-the way this change's own new reader now does — meaning that probe's
-MCP listing always reflects the real machine's real codex config
-regardless of what `homeDir` a caller passes it. This change's own new
-`readCodexMcpDefs` does not have this problem; `codex.ts`'s pre-existing
-`probe()` still does.
+surfaced but deliberately not fixed at first (out of scope for this
+change, named instead): `src/probes/codex.ts`'s own `probe()` never
+scoped its `codex mcp list --json` subprocess call to a passed-in
+`homeDir` via `HOME` env override the way this change's own new reader
+did — meaning that probe's MCP listing always reflected the real
+machine's real codex config regardless of what `homeDir` a caller passed
+it, an inconsistency with the rest of `probe()`'s own home-scoped reads.
+
+**Same-day follow-up, both of the above closed (not a separately
+numbered phase — direct fixes to already-shipped, already-specced
+behavior, not new requirements, so no new OpenSpec change):**
+`src/probes/codex.ts`'s `probe()` now scopes both of its `execFileSync`
+calls to the passed-in `homeDir` the same way — verified with a new
+regression test (`test/unit/codexProbe.test.ts`) using two distinct
+scratch homes with two distinct MCP servers, confirming neither leaks
+into the other; confirmed the test actually catches the bug by reverting
+the fix and watching it fail against this real machine's real MCP
+servers before restoring it. Separately, `buildCodexMcpReadResult`
+(`src/lib/mcpMigrateRead.ts`) now converts a non-stdio Codex server when
+it uses only `url` and, optionally, `bearer_token_env_var` — verified
+this exact shape against the real `codex` binary a second time
+(including with a real `bearer_token_env_var` set, not just a bare
+`url`) — while a server using any of the three still-unexplained header
+fields (`http_headers`/`env_http_headers`/`http_headers_helper`, all
+`null` when unused, confirmed by the same real run) still refuses rather
+than guesses. A migrated remote Codex server is always labeled `http`,
+never `sse` — not a guess: Codex's own `config.toml` schema has no field
+distinguishing the two (`upsertSection`'s own codex TOML rendering is
+byte-identical for both transports, now covered by its own test), so
+that distinction was never stored in the first place. 350/350 tests
+passing.
 
 | Phase | Deliverable | Depends on |
 |---|---|---|
@@ -893,7 +917,7 @@ regardless of what `homeDir` a caller passes it. This change's own new
 | P13 | ✅ Sandbox verification against this machine's real, structurally-relevant state (not just fixtures); every agent verified as both migrate source and sync/mcp-sync target | P0–P2 |
 | P14 | ✅ MCP server lifecycle parity with skills: ownership-tracked safe removal on sync (migrate-in closed separately by P16) | P2, P13 |
 | P15 | ✅ Shared memory: ingest canonical `memories/*.md` into the `server-memory` store's own graph file (per-agent extraction into canonical remains a separate, open gap) | P6 |
-| P16 | ✅ MCP migrate-in: `trellis migrate --only mcp` for claude-code/kiro/codex (stdio only for codex — see prose above), closing the gap P14 named | P12, P14 |
+| P16 | ✅ MCP migrate-in: `trellis migrate --only mcp` for claude-code/kiro/codex (codex remote transport + probe HOME-scoping closed same-day, see prose above), closing the gap P14 named | P12, P14 |
 
 No dates. This is scoped by verification milestones, not calendar time.
 Execution order for P11–P16: P11 → P12 → P13 → P14 → P15 → P16 — CRUD

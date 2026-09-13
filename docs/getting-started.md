@@ -174,12 +174,17 @@ migrate --from claude-code
 
 Two known fidelity limits, named rather than silently worked around:
 
-- **Codex — stdio transport only.** `codex mcp list --json` has no
-  observed output shape in this codebase for a non-stdio (http/sse)
-  server (see `docs/roadmap.md`'s entry for this change for what one real
-  run on one codex version actually reported) — a non-stdio Codex server
-  is reported `skip-unsupported`, not guessed at. Use `trellis mcp add`
-  for that one server as a workaround.
+- **Codex remote servers migrate when they only use `url` and
+  `bearer_token_env_var`** — the one shape this codebase has verified
+  against a real `codex` binary, and the only shape Trellis's own writer
+  ever produces for Codex. Codex's own config schema has no way to tell
+  `http` apart from `sse`, so a migrated remote server always comes back
+  as `http` — not a guess, that distinction was never stored in the
+  first place. A server using Codex's other header mechanisms
+  (`http_headers`/`env_http_headers`/`http_headers_helper` — real fields
+  this project has no verified shape for) is reported `skip-unsupported`
+  rather than guessed at; use `trellis mcp add` for that one server as a
+  workaround.
 - **`headers` recovery depends on that agent's own real on-disk shape.**
   claude-code/kiro read `headers` from the exact same JSON field Trellis
   itself writes (`schema/servers.example.yaml`'s `figma` example) — if a

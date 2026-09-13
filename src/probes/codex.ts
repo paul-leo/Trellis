@@ -58,17 +58,25 @@ export async function probe(homeDir: string = homedir(), opts: ProbeOptions = {}
   }
 
   const diagnostics: string[] = [];
+  // `codex` resolves its own config via $HOME (confirmed by running it with
+  // an overridden HOME against an empty scratch dir — it returns `[]`, not
+  // the real machine's servers), so every subprocess call here must be
+  // scoped to `homeDir` explicitly — otherwise a caller probing a non-
+  // default `homeDir` would silently get this real machine's real MCP
+  // server list instead (trellis-migrate-mcp-servers found this gap in
+  // src/lib/mcpMigrateRead.ts's own equivalent call; fixed there first).
+  const codexEnv = { ...process.env, HOME: homeDir };
 
   let version: string | undefined;
   try {
-    version = execFileSync("codex", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
+    version = execFileSync("codex", ["--version"], { encoding: "utf-8", timeout: 5_000, env: codexEnv }).trim();
   } catch {
     // config exists without the binary on PATH — unusual, still probeable
   }
 
   let mcpEntries: CodexMcpEntry[] = [];
   try {
-    const raw = execFileSync("codex", ["mcp", "list", "--json"], { encoding: "utf-8", timeout: 5_000 });
+    const raw = execFileSync("codex", ["mcp", "list", "--json"], { encoding: "utf-8", timeout: 5_000, env: codexEnv });
     mcpEntries = JSON.parse(raw) as CodexMcpEntry[];
   } catch (err) {
     diagnostics.push(`codex mcp list --json failed: ${err instanceof Error ? err.message : String(err)}`);

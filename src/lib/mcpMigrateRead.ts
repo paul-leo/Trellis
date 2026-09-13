@@ -129,6 +129,20 @@ export interface CodexMcpEntryRich {
     command?: string;
     args?: string[];
     env_vars?: string[];
+    /** Remote-transport fields. Confirmed by running the real,
+     * locally-installed `codex-cli 0.154.0` against a hand-written
+     * `url`-only server and a `url` + `bearer_token_env_var` server: the
+     * type string is `"streamable_http"` (not `"http"`), and the three
+     * `*headers*` fields come back `null` when unused. Codex's own
+     * config.toml schema (`tomlSection.ts`'s `renderServerSection`) has
+     * no way to distinguish `http` from `sse` at all — both render
+     * identically — so there is no lossy guess in always reading a
+     * remote entry back as `"http"`; that distinction was never stored. */
+    url?: string;
+    bearer_token_env_var?: string | null;
+    http_headers?: unknown;
+    env_http_headers?: unknown;
+    http_headers_helper?: unknown;
   };
 }
 
@@ -137,17 +151,19 @@ export interface CodexMcpEntryRich {
  * below so the stdio/non-stdio/malformed decision logic is unit-testable
  * without a real `codex` binary on PATH (this codebase has no fake-codex
  * fixture anywhere; codex's subprocess dependency is otherwise entirely
- * untested at the unit level — see design.md D2's note that this
- * codebase has no verified evidence for codex's own non-stdio JSON
- * shape, which is exactly why that case is refused rather than guessed
- * at here too).
+ * untested at the unit level).
  */
 export function buildCodexMcpReadResult(mcpEntries: CodexMcpEntryRich[], tomlContent: string | undefined): McpMigrateReadResult {
   const entries: McpMigrateEntry[] = [];
   const unsupported: McpMigrateUnsupported[] = [];
   for (const entry of mcpEntries) {
     if (entry.transport.type !== "stdio") {
-      unsupported.push({ name: entry.name, reason: `codex migrate-in only supports stdio transport (got "${entry.transport.type}")` });
+      const remote = buildCodexRemoteDef(entry);
+      if (remote.def) {
+        entries.push({ name: entry.name, def: remote.def });
+      } else {
+        unsupported.push({ name: entry.name, reason: remote.reason });
+      }
       continue;
     }
     if (!entry.transport.command) {
@@ -164,6 +180,31 @@ export function buildCodexMcpReadResult(mcpEntries: CodexMcpEntryRich[], tomlCon
     entries.push({ name: entry.name, def });
   }
   return { entries, unsupported };
+}
+
+/**
+ * A non-stdio Codex entry converts only when it's exactly `url` (+
+ * optional `bearer_token_env_var`) — the one shape this project has
+ * verified evidence for, and the only shape Trellis's own writer
+ * (`renderServerSection`'s else-branch) ever produces for Codex. Any of
+ * the three unexplained `*headers*` fields being non-null means the real
+ * server uses a mechanism this codebase has no verified shape for — that
+ * entry stays unsupported rather than silently dropping whatever those
+ * fields represent.
+ */
+function buildCodexRemoteDef(entry: CodexMcpEntryRich): { def: McpServerDef; reason?: undefined } | { def?: undefined; reason: string } {
+  const { url, bearer_token_env_var: bearerVar, http_headers, env_http_headers, http_headers_helper } = entry.transport;
+  if (http_headers != null || env_http_headers != null || http_headers_helper != null) {
+    return { reason: `codex migrate-in does not support this server's header mechanism (http_headers/env_http_headers/http_headers_helper) — no verified shape for it` };
+  }
+  if (!url) {
+    return { reason: `codex migrate-in: non-stdio entry has no url — malformed, skipped` };
+  }
+  const def: McpServerDef = { transport: "http", url };
+  if (bearerVar) {
+    def.headers = { Authorization: `Bearer \${${bearerVar}}` };
+  }
+  return { def };
 }
 
 /**
