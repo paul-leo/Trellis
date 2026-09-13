@@ -5,6 +5,16 @@
 #   - Real values come from whatever already populates process env
 #     (a plain `.env`-style file, 1Password's `op run`, etc.) — Trellis
 #     does not store or transport secret values itself.
+#   - `static_env` is the one deliberate exception: values written into
+#     the agent's config verbatim, for something that was never a secret
+#     in the first place (an email address, an environment tag) — still
+#     scanned against `reject_patterns` like everything else, so a real
+#     credential accidentally placed there is still refused, not silently
+#     written (trellis-mcp-static-env-and-disabled-servers).
+#   - `enabled: false` keeps a server's definition in canonical without
+#     writing it to any agent — for a server you want to keep configured
+#     but not currently active everywhere, matching how a real agent's
+#     own config often already represents "off, not deleted".
 #   - A server name that a host environment is known to inject at runtime
 #     (see `known_host_injected` below) must not be redefined here — on
 #     Codex this causes the entire process to fail to start, not just that
@@ -35,15 +45,32 @@ servers:
   # mem0/OpenMemory or a totalrecallai-class semantic-search server are
   # documented opt-in upgrades from this default, not silent defaults —
   # same section of docs/research.md.
+  #
+  # static_env.MEMORY_FILE_PATH: without this, the server's own unset-env
+  # default resolves relative to wherever `npx` happened to cache the
+  # package — not a stable location. Setting it explicitly to a path
+  # under ~/.trellis/ is also what lets `trellis memory sync`
+  # (trellis-memory-sync) find and write the same file the running
+  # server itself reads at startup.
   # memory:
   #   transport: stdio
   #   command: npx
   #   args: ["-y", "@modelcontextprotocol/server-memory"]
+  #   static_env:
+  #     MEMORY_FILE_PATH: "~/.trellis/memories/graph.jsonl"
 
+  # `static_env`: a value that was never a secret in the first place (an
+  # email address, an environment tag) — written verbatim, never treated
+  # as a name to resolve. Prefer `env` (names only) whenever a value
+  # actually is a secret; `static_env` is the deliberate, visibly-different
+  # exception, still scanned against `reject_patterns` like any other
+  # literal field.
   tanka:
     transport: stdio
     command: tanka-mcp
-    env: [TANKA_EMAIL, TANKA_ENV]
+    static_env:
+      TANKA_EMAIL: "you@example.com"
+      TANKA_ENV: "sd-or"
 
   gitlab:
     transport: stdio
@@ -51,10 +78,20 @@ servers:
     args: ["-y", "@zereight/mcp-gitlab"]
     env: [GITLAB_PERSONAL_ACCESS_TOKEN, GITLAB_API_URL]
 
+  # `enabled: false` keeps this definition in canonical without writing it
+  # to any agent — for something you want configured but not currently
+  # active anywhere. Remove the line (or set it to `true`) to turn it back
+  # on everywhere at once, with nothing to redefine.
+  supabase-db:
+    transport: stdio
+    command: npx
+    args: ["-y", "@supabase/mcp-server-supabase"]
+    env: [SUPABASE_ACCESS_TOKEN]
+    enabled: false
+
   figma:
     transport: http
     url: "https://mcp.figma.com/mcp"
-    auth: oauth
 
   # Example of a private/agent-specific server: only Claude Code has a use
   # for this one, so the other three agents never see it defined at all.

@@ -9,5 +9,17 @@ cp -r /fixtures-ro/home /root-scratch
 export HOME=/root-scratch
 export PATH="/trellis/node_modules/.bin:$PATH"
 
+# Every name test/fixtures/home/.trellis/secrets.policy.yaml's allowed_vars
+# lists is presumed, by the fixture's own design, to resolve to *something*
+# in a real working setup — these are the sandbox's own stand-in values
+# (trellis-mcp-static-env-and-disabled-servers: mcp sync now refuses to
+# write a name-only env entry that doesn't resolve, so a fixture server
+# declaring one of these names needs it actually set here, same as it
+# would need to be on a real machine).
+export SAMPLE_TOKEN="sandbox-sample-token"
+export REMOTE_BEARER_TOKEN="sandbox-bearer-token"
+export REMOTE_MULTI_TOKEN="sandbox-multi-token"
+export REMOTE_MULTI_KEY="sandbox-multi-key"
+
 cd /trellis
 exec "$@"

@@ -6,15 +6,21 @@
  * each adapter turns this into plan items using its own read/write
  * mechanism (JSON merge vs. TOML section splice).
  *
- * No automatic removal here (design.md D7, trellis-mcp-sync-p2): unlike a
- * skill's symlink, a plain key has no ownership marker, so "not in
- * canonical anymore" can't be distinguished from "the user configured
- * this directly." Only create/repair + refuse.
+ * Removal is NOT decided here (design.md D7, trellis-mcp-sync-p2): unlike
+ * a skill's symlink, a plain key has no ownership marker of its own, so
+ * "not in canonical anymore" can't be distinguished from "the user
+ * configured this directly" from this function's storage-agnostic view
+ * alone. Each format-specific caller (`jsonMcp.ts`'s `planJsonMcp`,
+ * `codex.ts`'s own `planMcp`) computes removal candidates itself, against
+ * `src/lib/mcpOwnership.ts`'s ledger and that format's own current
+ * on-disk content (trellis-mcp-lifecycle-parity) — this function only
+ * ever returns create/repair + refuse.
  */
 
 import { isInScope } from "../core/adapter.js";
-import type { AgentId, McpConfig, McpServerDef } from "../core/types.js";
+import type { AgentId, McpConfig, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
+import { resolveSecretEnv } from "../lib/secretEnv.js";
 
 export const HUB_ENTRY_NAME = "trellis-hub";
 
@@ -53,7 +59,9 @@ const DANGEROUS_LITERAL_PATTERNS: { label: string; pattern: RegExp }[] = [
 ];
 
 function findLiteralSecret(def: McpServerDef): string | undefined {
-  const candidates = [def.command, def.url, ...(def.args ?? []), ...Object.values(def.headers ?? {})].filter((v): v is string => typeof v === "string");
+  const candidates = [def.command, def.url, ...(def.args ?? []), ...Object.values(def.headers ?? {}), ...Object.values(def.staticEnv ?? {})].filter(
+    (v): v is string => typeof v === "string",
+  );
   for (const candidate of candidates) {
     for (const { label, pattern } of DANGEROUS_LITERAL_PATTERNS) {
       if (pattern.test(candidate)) {
@@ -64,7 +72,22 @@ function findLiteralSecret(def: McpServerDef): string | undefined {
   return undefined;
 }
 
-export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[]): McpPlanResult {
+/**
+ * Name-only `env` entries that don't resolve to anything would otherwise
+ * be written and silently break the agent's connection to that server —
+ * found via real-machine dogfooding (trellis-mcp-static-env-and-disabled-servers
+ * proposal.md "Why"). Uses the identical `resolveSecretEnv` `secrets
+ * audit`/the pi bridge already call, so this and a later `secrets audit`
+ * run can never disagree about what resolves.
+ */
+function findUnresolvedEnvName(def: McpServerDef, policy: SecretsPolicy): string | undefined {
+  const names = def.env ?? [];
+  if (names.length === 0) return undefined;
+  const resolved = resolveSecretEnv(names, policy);
+  return names.find((name) => !resolved[name]);
+}
+
+export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[], policy: SecretsPolicy): McpPlanResult {
   if (mcp.hub) {
     if (mcp.knownHostInjected.includes(HUB_ENTRY_NAME)) {
       return { desired: [], conflicts: [{ name: HUB_ENTRY_NAME, message: collisionMessage(HUB_ENTRY_NAME, agentId) }] };
@@ -76,6 +99,10 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
   const conflicts: McpConflict[] = [];
 
   for (const [name, def] of Object.entries(mcp.servers)) {
+    if (def.enabled === false) {
+      continue;
+    }
+
     if (!isInScope(agentId, def.agents, managedAgents)) {
       continue;
     }
@@ -103,6 +130,16 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
       conflicts.push({
         name,
         message: `refusing to write MCP server "${name}" for codex: its "headers" field isn't the single { Authorization: "Bearer \${VAR}" } shape Codex's own config format can express — Codex has no generic headers concept, only \`bearer_token_env_var\`. Still written normally for every other in-scope agent.`,
+      });
+      continue;
+    }
+
+    const unresolvedName = findUnresolvedEnvName(def, policy);
+    if (unresolvedName) {
+      const source = policy.envFile ?? "process environment";
+      conflicts.push({
+        name,
+        message: `refusing to write MCP server "${name}": its declared env var "${unresolvedName}" has no resolvable value in ${source} — writing it now would silently break this server's connection once the agent starts it (trellis-mcp-static-env-and-disabled-servers)`,
       });
       continue;
     }

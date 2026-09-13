@@ -5,10 +5,10 @@
  * canonical-source-loading/spec.md for the exact contract this implements.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, parseDocument } from "yaml";
 import type { AgentId, AgentProfile, CanonicalSource, McpConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
 import { ALL_AGENTS } from "./types.js";
 
@@ -18,10 +18,37 @@ interface ScopeYaml {
   memories?: Record<string, AgentId[]>;
 }
 
+/**
+ * The on-disk shape for one server entry — `static_env` (snake_case, like
+ * every other multi-word key across `.trellis/*.yaml`) is translated to
+ * `McpServerDef.staticEnv` (camelCase) below; every other field happens
+ * to already be a single word, so no server-def field needed this
+ * treatment before (trellis-mcp-static-env-and-disabled-servers).
+ */
+type McpServerDefYaml = Omit<McpServerDef, "staticEnv"> & { static_env?: Record<string, string> };
+
 interface ServersYaml {
-  servers?: Record<string, McpServerDef>;
+  servers?: Record<string, McpServerDefYaml>;
   known_host_injected?: string[];
   hub?: { url: string };
+}
+
+function fromServerDefYaml(def: McpServerDefYaml): McpServerDef {
+  const { static_env, ...rest } = def;
+  return static_env ? { ...rest, staticEnv: static_env } : rest;
+}
+
+/** Inverse of `fromServerDefYaml` (trellis-canonical-cli-crud) — strips
+ * `undefined` fields so the written YAML never gets a literal `null`
+ * for an omitted optional. */
+export function toServerDefYaml(def: McpServerDef): McpServerDefYaml {
+  const { staticEnv, ...rest } = def;
+  const out: Record<string, unknown> = { ...rest };
+  if (staticEnv) out.static_env = staticEnv;
+  for (const key of Object.keys(out)) {
+    if (out[key] === undefined) delete out[key];
+  }
+  return out as McpServerDefYaml;
 }
 
 interface SecretsPolicyYaml {
@@ -84,11 +111,55 @@ function loadServersYaml(path: string): McpConfig {
     return { servers: {}, knownHostInjected: [] };
   }
   const parsed = (parseYaml(readFileSync(path, "utf-8")) ?? {}) as ServersYaml;
+  const servers = Object.fromEntries(Object.entries(parsed.servers ?? {}).map(([name, def]) => [name, fromServerDefYaml(def)]));
   return {
-    servers: parsed.servers ?? {},
+    servers,
     knownHostInjected: parsed.known_host_injected ?? [],
     hub: parsed.hub,
   };
+}
+
+export type ServersYamlWriteResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Writes or replaces one server entry in `servers.yaml`, preserving
+ * every other entry's and comment's exact formatting (trellis-
+ * canonical-cli-crud design.md D3) — a `Document`-based edit
+ * (`setIn`), never `parse` + rebuild + `stringify`, which would
+ * re-serialize the whole file and lose anything hand-authored outside
+ * the touched entry. Refuses (no write) if the file doesn't exist yet
+ * (run `trellis init` first) or fails to parse.
+ */
+export function upsertServerYaml(path: string, name: string, def: McpServerDef): ServersYamlWriteResult {
+  if (!existsSync(path)) {
+    return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
+  }
+  let doc;
+  try {
+    doc = parseDocument(readFileSync(path, "utf-8"));
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  doc.setIn(["servers", name], toServerDefYaml(def));
+  writeFileSync(path, doc.toString());
+  return { ok: true };
+}
+
+/** Inverse of `upsertServerYaml` — same preservation guarantee, same
+ * refusal posture on a missing/unparseable file. */
+export function removeServerYaml(path: string, name: string): ServersYamlWriteResult {
+  if (!existsSync(path)) {
+    return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
+  }
+  let doc;
+  try {
+    doc = parseDocument(readFileSync(path, "utf-8"));
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  doc.deleteIn(["servers", name]);
+  writeFileSync(path, doc.toString());
+  return { ok: true };
 }
 
 function loadSecretsPolicyYaml(path: string, homeDir: string): SecretsPolicy {

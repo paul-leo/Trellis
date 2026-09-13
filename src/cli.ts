@@ -10,12 +10,14 @@ import { runInit } from "./commands/init.js";
 import { runMigrate } from "./commands/migrate.js";
 import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
-import { runMcpSync } from "./commands/mcp.js";
+import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, parseMcpAddArgs } from "./commands/mcp.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
+import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
+import { runMemorySync } from "./commands/memory.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "secrets", "rollback"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "skill", "memory", "secrets", "rollback"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -44,9 +46,12 @@ Commands:
               missing) and prints which agents are present
               --json    machine-readable output, no report text
   migrate --from <agent>
-            Import an existing agent's real skills/instructions into
-            canonical source (claude-code | codex | kiro | pi). Never
-            overwrites differing content — reports a conflict instead.
+            Import an existing agent's real skills/instructions/MCP
+            servers into canonical source (claude-code | codex | kiro |
+            pi — pi has no static MCP config, mcp migrate-in is a no-op
+            for it). Never overwrites differing content — reports a
+            conflict instead.
+              --only skills|instructions|mcp   restrict to one category
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   doctor    Scan Claude Code / Codex / Kiro / pi for drift
@@ -59,7 +64,47 @@ Commands:
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   mcp sync  Distribute MCP servers to each agent's native config
-              (create/repair only — no automatic removal, see docs/roadmap.md)
+              (create/repair, plus ownership-ledger-gated removal — an
+              entry is only ever removed when it's still exactly what
+              Trellis itself last wrote there; see docs/roadmap.md)
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
+  mcp list  List canonical MCP servers (transport, scope, enabled;
+              never prints resolved secret values)
+              --json    machine-readable output, no report text
+  mcp add <name> --transport stdio|http|sse ...
+            Add a canonical MCP server (refuses on an existing name,
+              no overwrite): --command <cmd> [--args a,b] (stdio) or
+              --url <url> (http/sse); [--headers k=v,...]
+              [--env NAME,...] [--static-env k=v,...] [--agents id,...]
+              [--enabled true|false]
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
+  mcp remove <name>
+            Remove a canonical MCP server (canonical-side only — does
+              not touch any agent's already-synced native config)
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
+  skill list
+            List canonical skills with resolved scope
+              --json    machine-readable output, no report text
+  skill add <name> --from <path>
+            Import a real skill directory into canonical (refuses on
+              an existing name with different content, no overwrite)
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
+  skill remove <name>
+            Remove a canonical skill (the next sync auto-removes the
+              now-stale symlink on every managed agent)
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
+  memory sync
+            Ingest canonical memories/*.md into the shared-memory MCP
+              server's own on-disk knowledge-graph file (requires a
+              "memory" server with static_env.MEMORY_FILE_PATH set in
+              servers.yaml — see schema/servers.example.yaml; a no-op,
+              not an error, if unconfigured). Never touches an entity
+              or relation this didn't create.
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   secrets audit
@@ -113,7 +158,9 @@ async function main(argv: string[]): Promise<void> {
   if (command === "migrate") {
     const fromIndex = rest.indexOf("--from");
     const from = fromIndex >= 0 ? rest[fromIndex + 1] : undefined;
-    const { exitCode } = await runMigrate({ from, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
+    const onlyIndex = rest.indexOf("--only");
+    const only = onlyIndex >= 0 ? rest[onlyIndex + 1] : undefined;
+    const { exitCode } = await runMigrate({ from, only, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
     process.exitCode = exitCode;
     return;
   }
@@ -138,13 +185,83 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "mcp") {
-    const [subcommand] = rest;
+    const [subcommand, ...mcpRest] = rest;
+    const json = mcpRest.includes("--json");
+    const dryRun = mcpRest.includes("--dry-run");
+
+    if (subcommand === "sync") {
+      const { exitCode } = await runMcpSync({ json, dryRun });
+      process.exitCode = exitCode;
+      return;
+    }
+    if (subcommand === "list") {
+      process.exitCode = runMcpList({ json }).exitCode;
+      return;
+    }
+    if (subcommand === "add") {
+      const [name] = mcpRest;
+      process.exitCode = runMcpAdd(name, parseMcpAddArgs(mcpRest), { json, dryRun }).exitCode;
+      return;
+    }
+    if (subcommand === "remove") {
+      const [name] = mcpRest;
+      if (!name) {
+        console.error("Usage: trellis mcp remove <name>");
+        process.exitCode = 1;
+        return;
+      }
+      process.exitCode = runMcpRemove(name, { json, dryRun }).exitCode;
+      return;
+    }
+    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|remove <name>\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (command === "skill") {
+    const [subcommand, ...skillRest] = rest;
+    const json = skillRest.includes("--json");
+    const dryRun = skillRest.includes("--dry-run");
+
+    if (subcommand === "list") {
+      process.exitCode = runSkillList({ json }).exitCode;
+      return;
+    }
+    if (subcommand === "add") {
+      const [name] = skillRest;
+      const fromIndex = skillRest.indexOf("--from");
+      const from = fromIndex >= 0 ? skillRest[fromIndex + 1] : undefined;
+      if (!name || !from) {
+        console.error("Usage: trellis skill add <name> --from <path>");
+        process.exitCode = 1;
+        return;
+      }
+      process.exitCode = runSkillAdd(name, from, { json, dryRun }).exitCode;
+      return;
+    }
+    if (subcommand === "remove") {
+      const [name] = skillRest;
+      if (!name) {
+        console.error("Usage: trellis skill remove <name>");
+        process.exitCode = 1;
+        return;
+      }
+      process.exitCode = runSkillRemove(name, { json, dryRun }).exitCode;
+      return;
+    }
+    console.error(`Unknown skill subcommand: ${subcommand ?? "(none)"}\nUsage: trellis skill list|add <name> --from <path>|remove <name>\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (command === "memory") {
+    const [subcommand, ...memoryRest] = rest;
     if (subcommand !== "sync") {
-      console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync\n`);
+      console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory sync\n`);
       process.exitCode = 1;
       return;
     }
-    const { exitCode } = await runMcpSync({ json: rest.includes("--json"), dryRun: rest.includes("--dry-run") });
+    const { exitCode } = runMemorySync({ json: memoryRest.includes("--json"), dryRun: memoryRest.includes("--dry-run") });
     process.exitCode = exitCode;
     return;
   }

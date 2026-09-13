@@ -155,6 +155,11 @@ test("pi bridge: a resolved header actually reaches the outbound HTTP request to
 test("pi bridge: session shutdown closes connected stdio children", async () => {
   const home = scratchHome();
   initCanonical(home, "allowed_vars: []\nreject_patterns: []\n");
+  // This test only cares about connect/shutdown lifecycle, not env
+  // resolution — resolveMcpPlan now refuses to connect a server whose
+  // declared env name doesn't resolve, so PI_BRIDGE_TEST_VAR (declared by
+  // the shared initCanonical fixture) needs *some* value here.
+  process.env.PI_BRIDGE_TEST_VAR = "unused-in-this-test";
   const pi = fakePi();
   try {
     await trellisMcpBridge(pi as never, home);
@@ -166,6 +171,7 @@ test("pi bridge: session shutdown closes connected stdio children", async () => 
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(fixtureChildIsAlive(home), false, "expected shutdown to release the fixture MCP child");
   } finally {
+    delete process.env.PI_BRIDGE_TEST_VAR;
     killFixtureChildren(home);
   }
 });
@@ -219,6 +225,7 @@ test("pi bridge: session shutdown closes every connected server's child, not jus
 test("pi bridge: shutdown is idempotent — calling it twice closes each client at most once, no error", async () => {
   const home = scratchHome();
   initCanonical(home, "allowed_vars: []\nreject_patterns: []\n");
+  process.env.PI_BRIDGE_TEST_VAR = "unused-in-this-test";
   const pi = fakePi();
   try {
     await trellisMcpBridge(pi as never, home);
@@ -233,6 +240,7 @@ test("pi bridge: shutdown is idempotent — calling it twice closes each client 
     await pi.shutdown();
     assert.equal(fixtureChildIsAlive(home), false, "expected the second shutdown to be a no-op, not an error or a respawn");
   } finally {
+    delete process.env.PI_BRIDGE_TEST_VAR;
     killFixtureChildren(home);
   }
 });

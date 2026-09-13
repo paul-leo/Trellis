@@ -43,6 +43,11 @@ function writeClaudeSkill(home: string, name: string, content: string): void {
   writeFileSync(join(dir, "SKILL.md"), content);
 }
 
+function writeClaudeInstructions(home: string, content: string): void {
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", "CLAUDE.md"), content);
+}
+
 function readManaged(home: string): string {
   return readFileSync(join(home, ".trellis", "managed.yaml"), "utf-8");
 }
@@ -332,4 +337,109 @@ test("onboard --dry-run creates no backup session at all", async () => {
 
   const { backupsRoot } = await import("../../src/lib/backup.js");
   assert.equal(existsSync(backupsRoot(home)), false);
+});
+
+test("migrate categories: both kinds real consults the injected picker seam", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real instructions\n");
+
+  let calledWith: string | undefined;
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    agent: "claude-code",
+    manage: "none",
+    promptForMigrateCategories: async (source) => {
+      calledWith = source.agent;
+      return ["skill"];
+    },
+  });
+
+  assert.equal(calledWith, "claude-code");
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "instructions"), false);
+  assert.equal(existsSync(join(home, ".trellis", "agents.md")), true);
+  assert.notEqual(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), "# real instructions\n");
+});
+
+test("migrate categories: only one real kind skips the picker seam entirely, defaults to that kind", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  // No real instructions content — placeholder-equivalent, so
+  // hasRealInstructions is false and the choice isn't meaningful.
+
+  let pickerCalled = false;
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    agent: "claude-code",
+    manage: "none",
+    promptForMigrateCategories: async () => {
+      pickerCalled = true;
+      return [];
+    },
+  });
+
+  assert.equal(pickerCalled, false, "the seam must not be consulted when only one kind has real content");
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
+  assert.equal(result.migrateSkipped, undefined);
+});
+
+test("migrate categories: no picker seam injected and no real TTY defaults to migrating both kinds", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real instructions\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "none" });
+
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "instructions"), true);
+  assert.equal(result.migrateSkipped, undefined);
+});
+
+test("migrate categories: selecting zero skips migrate for this run, but not sync/mcp-sync/secrets-audit", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real instructions\n");
+
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    agent: "claude-code",
+    manage: "claude-code",
+    promptForMigrateCategories: async () => [],
+  });
+
+  assert.equal(result.migratePlan, undefined);
+  assert.equal(result.migrateSkipped, "migrate skipped — no categories selected");
+  assert.ok(result.syncReport, "sync must still run");
+  assert.ok(result.mcpSyncReport, "mcp sync must still run");
+  assert.ok(result.secretsAuditReport, "secrets audit must still run");
+  // Nothing was actually migrated: canonical still has init's placeholder.
+  assert.equal(existsSync(join(home, ".trellis", "skills", "real-skill")), false);
+});
+
+test("migrate categories: --json never consults the picker seam even with both kinds real", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real instructions\n");
+
+  let pickerCalled = false;
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    agent: "claude-code",
+    manage: "none",
+    json: true,
+    promptForMigrateCategories: async () => {
+      pickerCalled = true;
+      return [];
+    },
+  });
+
+  assert.equal(pickerCalled, false);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "instructions"), true);
 });

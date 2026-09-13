@@ -45,10 +45,13 @@ Aligned to the `.agents Protocol` draft, extended where the draft is silent:
 ├── memories/*.md             # shared memory entries (server-memory backed)
 ├── scope.yaml                 # exceptions to "shared with all agents" —
 │                             # see "Private / agent-specific capabilities"
-├── secrets.policy.yaml       # which var names are allowed, nothing else
-└── trellis.lock.json         # NOT YET BUILT — planned ownership-tracking
-                              # file for MCP removal (docs/roadmap.md's P2
-                              # note); nothing in src/ reads or writes this
+└── secrets.policy.yaml       # which var names are allowed, nothing else
+
+# Not user-authored, so not shown in the tree above — Trellis's own
+# bookkeeping, written/read only by `trellis mcp sync` itself:
+#   mcp/ownership.json  # what Trellis last wrote per (agent, server name) —
+#                       # the ownership marker MCP removal needed
+#                       # (docs/roadmap.md P14, src/lib/mcpOwnership.ts)
 ```
 
 ## Global vs. workspace scope

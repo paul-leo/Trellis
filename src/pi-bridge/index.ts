@@ -102,7 +102,12 @@ async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy, tim
   const transport = new StdioClientTransport({
     command: def.command!,
     args: def.args,
-    env: { ...getDefaultEnvironment(), ...namedEnv },
+    // staticEnv merges last: a literal, intentionally-plain value (an
+    // email, an environment tag) always wins over an unresolved name-only
+    // entry's empty-string fallback for the same key — though in practice
+    // resolveMcpPlan's D6 refusal never lets an unresolved name reach
+    // this point at all (trellis-mcp-static-env-and-disabled-servers).
+    env: { ...getDefaultEnvironment(), ...namedEnv, ...(def.staticEnv ?? {}) },
   });
   return connectWithCleanup(client, transport as Transport, timeoutMs, `connect timed out after ${timeoutMs}ms`);
 }
@@ -180,7 +185,7 @@ export default async function trellisMcpBridge(
   // independent of whether `trellis onboard` was ever run to add pi to
   // managed.yaml. managedAgents governs static config-file writes; this
   // is pi reading canonical directly at its own runtime, P4's own concern.
-  const { desired } = resolveMcpPlan("pi", canonical.mcp, ALL_AGENTS);
+  const { desired } = resolveMcpPlan("pi", canonical.mcp, ALL_AGENTS, canonical.secretsPolicy);
   const clients = new Set<Client>();
 
   const closeClient = async (client: Client): Promise<void> => {

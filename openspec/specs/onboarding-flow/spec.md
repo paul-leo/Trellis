@@ -7,14 +7,17 @@ TBD - created by archiving change trellis-cli-onboard. Update Purpose after arch
 
 The system SHALL run `trellis init`'s own idempotent bootstrap first, then
 probe all four agents directly for their real skill names/count and
-instructions presence, then resolve two independent things — a migration
-**source** (at most one, read-only, may be none) and a **managed set**
-(zero or more agents to write to) — before running, in order,
-`migrate --from <source>` (if a source was resolved), `sync`, `mcp sync`,
-and `secrets audit`, each scoped to the resolved managed set and each
-reusing its own command's existing plan/apply logic rather than
-re-implementing any of it. A user completing onboard SHALL never need to
-run a further command by hand to finish it.
+instructions presence, then resolve three independent things — a migration
+**source** (at most one, read-only, may be none), which migrate
+**categories** to bring in from that source (skills, instructions, or
+both — may be neither, in which case migrate is skipped entirely for
+this run), and a **managed set** (zero or more agents to write to) —
+before running, in order, `migrate --from <source> --only <categories>`
+(if a source was resolved and at least one category was selected),
+`sync`, `mcp sync`, and `secrets audit`, each scoped to the resolved
+managed set and each reusing its own command's existing plan/apply logic
+rather than re-implementing any of it. A user completing onboard SHALL
+never need to run a further command by hand to finish it.
 
 #### Scenario: A fresh machine with no canonical source yet gets one, safely
 - **WHEN** `trellis onboard` runs and `~/.trellis/` does not exist yet
@@ -33,6 +36,53 @@ run a further command by hand to finish it.
 - **THEN** its own output already includes migrate, sync, mcp sync, and
   secrets audit results — not a hint telling the user to run any of them
   separately
+
+### Requirement: Migrate category selection is offered only when it's a meaningful choice
+
+The system SHALL offer an interactive category checkbox (skills,
+instructions) on a real, raw-mode-capable terminal only when the
+resolved source agent has both real skills and real instructions
+content — both checked by default, matching `migrate`'s own flag-less
+default of migrating both. When the source has only one kind of real
+content, or no interactive picker is available, the system SHALL skip
+the prompt and migrate whichever kind(s) actually have content, with no
+prompt shown.
+
+#### Scenario: A source with both skills and instructions offers the checkbox
+- **WHEN** the resolved source agent has at least one real skill and
+  real (non-placeholder, non-symlink) instructions content, and
+  stdin/stdout are a real terminal capable of raw mode
+- **THEN** the command renders a checkbox listing "skills" and
+  "instructions", both pre-checked, lets the user toggle either with
+  Space, and confirms with Enter
+
+#### Scenario: A source with only one real kind of content skips the prompt
+- **WHEN** the resolved source agent has real skills but placeholder or
+  symlinked instructions (or the reverse)
+- **THEN** no category prompt is shown, and migrate runs for whichever
+  kind actually has real content
+
+#### Scenario: A terminal that can't support the picker migrates both, unprompted
+- **WHEN** the resolved source has both kinds of real content but the
+  terminal cannot support the interactive picker (or is not a TTY at
+  all)
+- **THEN** migrate runs for both categories with no prompt shown — the
+  same behavior onboard had before this requirement existed
+
+### Requirement: Selecting zero categories skips migrate for this run, not an error
+
+The system SHALL treat an empty category selection as an explicit,
+valid choice to skip migrate entirely for this run — distinct from no
+source having been resolved at all — and SHALL continue on to sync, mcp
+sync, and secrets audit for the resolved managed set exactly as if no
+source existed.
+
+#### Scenario: Unchecking both categories skips migrate, not the rest of onboard
+- **WHEN** the user unchecks both "skills" and "instructions" in the
+  category checkbox and confirms
+- **THEN** the output states migrate was skipped because no categories
+  were selected, and sync/mcp sync/secrets audit still run normally for
+  the resolved managed set
 
 ### Requirement: Zero present agents surfaces install guidance, never an installer
 
@@ -67,10 +117,13 @@ independent, per the new managed-set requirement below.
 
 The system SHALL, when two or more agents are detected present with real
 content, resolve which one is the migration source via an explicit
-`--agent <id>` flag when given, or an interactive prompt (a numbered
-choice, not free-text agent-name entry) when stdin is a real terminal and
-no flag was given, and SHALL refuse cleanly with no prompt and no guess
-when neither is available.
+`--agent <id>` flag when given, or an interactive picker when stdin/stdout
+are a real terminal capable of raw mode and no flag was given, and SHALL
+refuse cleanly with no prompt and no guess when neither is available. The
+interactive picker SHALL let the user move a highlighted selection with
+arrow keys (or j/k) and confirm with Enter; a terminal that cannot support
+raw mode SHALL fall back to a numbered-choice text prompt instead of
+failing to prompt at all.
 
 #### Scenario: `--agent` resolves the source non-interactively
 - **WHEN** two or more agents are present with real content and
@@ -84,11 +137,22 @@ when neither is available.
 - **THEN** the command refuses, lists the agents that are actually
   present, and performs no writes
 
-#### Scenario: Interactive prompt is a numbered choice
+#### Scenario: Interactive picker resolves the source on a capable terminal
 - **WHEN** two or more agents are present with real content, no
-  `--agent` was given, and stdin is a real terminal
-- **THEN** the command prompts with a numbered list of the present
-  candidates and accepts either the number or the agent's id
+  `--agent` was given, and stdin/stdout are a real terminal capable of
+  raw mode
+- **THEN** the command renders an arrow-key-navigable list of the
+  present candidates, highlights the current selection, and resolves to
+  the chosen agent's id when the user presses Enter — with no digit
+  typing required
+
+#### Scenario: A terminal that can't support the picker falls back to numbered choice
+- **WHEN** two or more agents are present with real content, no
+  `--agent` was given, and stdin is a real terminal but cannot support
+  raw mode (e.g. `process.stdin.setRawMode` is unavailable)
+- **THEN** the command falls back to prompting with a numbered list of
+  the present candidates and accepts either the number or the agent's
+  id, exactly as before this change
 
 #### Scenario: No prompt possible refuses cleanly
 - **WHEN** two or more agents are present with real content, no
@@ -115,11 +179,14 @@ read-only regardless of `--dry-run` and its output is included either way.
 ### Requirement: Managed-set selection is a separate, explicit multi-choice
 
 The system SHALL prompt for which agents to manage as a distinct step
-from source resolution — a numbered multi-select (comma-separated
-indices) listing all four agents, present or not, with whatever's
-already in `~/.trellis/managed.yaml` pre-checked. The resolved source (if
-any) SHALL be offered like every other candidate and SHALL start
-unchecked unless it was already in `managed.yaml` from an earlier run.
+from source resolution — an interactive checkbox picker on a real
+terminal capable of raw mode, listing all four agents, present or not,
+with whatever's already in `~/.trellis/managed.yaml` pre-checked; a
+terminal that cannot support raw mode SHALL fall back to a numbered
+multi-select (comma-separated indices) instead of failing to prompt at
+all. The resolved source (if any) SHALL be offered like every other
+candidate and SHALL start unchecked unless it was already in
+`managed.yaml` from an earlier run.
 
 #### Scenario: The source starts unchecked in the managed-set prompt
 - **WHEN** claude-code is resolved as the migration source and
@@ -137,6 +204,21 @@ unchecked unless it was already in `managed.yaml` from an earlier run.
 - **WHEN** `--manage none` is given
 - **THEN** the managed set is empty for this run — distinct from
   omitting `--manage` entirely, which requires a prompt or refuses
+
+#### Scenario: Interactive checkbox picker resolves the managed set on a capable terminal
+- **WHEN** no `--manage` was given and stdin/stdout are a real terminal
+  capable of raw mode
+- **THEN** the command renders a checkbox-style list of all four agents
+  (pre-checked per `managed.yaml`), lets the user move the highlight
+  with arrow keys and toggle a row with Space, and resolves to the set
+  of checked agents when the user presses Enter — with no digit typing
+  required
+
+#### Scenario: A terminal that can't support the picker falls back to numbered multi-select
+- **WHEN** no `--manage` was given and stdin is a real terminal but
+  cannot support raw mode
+- **THEN** the command falls back to the numbered multi-select
+  (comma-separated indices) prompt exactly as before this change
 
 #### Scenario: No TTY and no `--manage` refuses cleanly
 - **WHEN** stdin is not a real terminal (including any `--json` run) and

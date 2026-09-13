@@ -1,21 +1,23 @@
 /**
  * `trellis onboard` — chains `init` → agent detection → migration-source
- * resolution → managed-agent-set selection (install-then-manage for a
+ * resolution → migrate-category selection (trellis-migrate-category-
+ * selection) → managed-agent-set selection (install-then-manage for a
  * selected, not-yet-present agent) → `migrate` → `sync` → `mcp sync` →
  * `secrets audit` into one guided flow (trellis-cli-onboard,
  * trellis-managed-agents) — a user should never have to type a second
- * command by hand to finish onboarding. Source and managed set are
- * independent choices (design.md D2): importing from a source never
- * writes back to it, and it is not implicitly added to the managed set.
- * Orchestrates existing commands' own plan/apply logic; no new
- * skill-copy, symlink, conflict-detection, or secrets-scanning judgment
- * is made here.
+ * command by hand to finish onboarding. Source, categories, and managed
+ * set are three independent choices (design.md D2): importing from a
+ * source never writes back to it, and it is not implicitly added to the
+ * managed set. Orchestrates existing commands' own plan/apply logic; no
+ * new skill-copy, symlink, conflict-detection, or secrets-scanning
+ * judgment is made here.
  */
 
 import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { canUseInteractivePicker, runMultiSelectPicker, runSingleSelectPicker } from "../lib/terminalPicker.js";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
@@ -25,7 +27,7 @@ import type { AgentId, AgentSnapshot } from "../core/types.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { INSTALL_HINTS, collectInitReport } from "./init.js";
 import { applyMigratePlan, collectMigratePlan, printPlan as printMigratePlan } from "./migrate.js";
-import type { MigratePlan } from "./migrate.js";
+import type { MigrateKind, MigratePlan } from "./migrate.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
 import { collectMcpSyncReport, printReport as printMcpSyncReport } from "./mcp.js";
@@ -94,6 +96,11 @@ export interface RunOnboardOptions {
    * pre-parsed list — so the same parsing/validation code path is
    * exercised whether the answer came from a flag or a prompt. */
   promptForManagedAgents?: (candidates: OnboardAgentSummary[], alreadyManaged: readonly AgentId[]) => Promise<string>;
+  /** Test-only: replaces the real migrate-category picker/default logic
+   * (trellis-migrate-category-selection). An empty array is a valid
+   * answer — "skip migrate for this run" (design.md D6) — distinct from
+   * `source` being unresolved at all. */
+  promptForMigrateCategories?: (source: OnboardAgentSummary) => Promise<MigrateKind[]>;
   /** Test-only: injected into every `confirmAndInstall` call for a
    * selected, not-yet-present agent. Never a real terminal prompt or a
    * real `npm install` in a unit test. */
@@ -116,6 +123,10 @@ export interface OnboardResult {
   managedAgents?: AgentId[];
   installResults?: OnboardInstallResult[];
   migratePlan?: MigratePlan;
+  /** Set when a source was resolved but zero migrate categories were
+   * selected (design.md D6) — distinct from `migratePlan` being absent
+   * because no source existed at all, which prints nothing here. */
+  migrateSkipped?: string;
   syncReport?: SyncReport;
   mcpSyncReport?: McpSyncReport;
   secretsAuditReport?: SecretsAuditReport;
@@ -126,13 +137,20 @@ export interface OnboardResult {
   installHints?: Record<AgentId, string>;
 }
 
-async function promptForAgentReal(present: OnboardAgentSummary[]): Promise<string> {
+function agentSummaryLabel(s: OnboardAgentSummary): string {
+  const skills = s.skillCount > 0 ? ` (${s.skillNames.join(", ")})` : "";
+  return `${s.agent} — ${s.skillCount} skill(s)${skills}, instructions: ${s.hasRealInstructions ? "yes" : "no"}`;
+}
+
+/** Numbered-typing fallback (trellis-onboard-interactive-picker design.md
+ * D2) — used only when the terminal can't support the raw-mode picker
+ * (`canUseInteractivePicker()` false). Unchanged from before that change. */
+async function promptForAgentNumbered(present: OnboardAgentSummary[]): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log("Multiple agents detected:");
     present.forEach((s, i) => {
-      const skills = s.skillCount > 0 ? ` (${s.skillNames.join(", ")})` : "";
-      console.log(`  ${i + 1}) ${s.agent} — ${s.skillCount} skill(s)${skills}, instructions: ${s.hasRealInstructions ? "yes" : "no"}`);
+      console.log(`  ${i + 1}) ${agentSummaryLabel(s)}`);
     });
     for (let attempt = 0; attempt < 2; attempt++) {
       const answer = (await rl.question(`Choose a migration source [1-${present.length}]: `)).trim();
@@ -150,7 +168,29 @@ async function promptForAgentReal(present: OnboardAgentSummary[]): Promise<strin
   }
 }
 
-async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alreadyManaged: readonly AgentId[]): Promise<string> {
+/** Arrow-key single-select on a real, raw-mode-capable terminal; falls
+ * back to `promptForAgentNumbered` otherwise. Resolves to the exact same
+ * string contract either way — a real agent id — so `resolveMigrationSource`
+ * and every test injecting `RunOnboardOptions.promptForAgent` need no
+ * changes (design.md D5). Cancel (Ctrl+C) prints a message and exits
+ * directly, rather than threading a new "cancelled" state through the
+ * rest of onboard's return-based refusal plumbing. */
+async function promptForAgentReal(present: OnboardAgentSummary[]): Promise<string> {
+  if (!canUseInteractivePicker()) {
+    return promptForAgentNumbered(present);
+  }
+  console.log("Multiple agents detected — use Up/Down (or j/k) and Enter to choose a migration source:");
+  const index = await runSingleSelectPicker(present.map(agentSummaryLabel));
+  if (index === null) {
+    console.log("cancelled, no changes made");
+    process.exit(1);
+  }
+  return present[index].agent;
+}
+
+/** Numbered-typing fallback — unchanged from before this change (see
+ * `promptForAgentNumbered`'s doc comment). */
+async function promptForManagedAgentsNumbered(candidates: OnboardAgentSummary[], alreadyManaged: readonly AgentId[]): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log("Which agents should Trellis manage? (comma-separated numbers; enter for none new)");
@@ -164,6 +204,74 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
   } finally {
     rl.close();
   }
+}
+
+/** Checkbox multi-select on a real, raw-mode-capable terminal; falls
+ * back to `promptForManagedAgentsNumbered` otherwise. Resolves to the
+ * same comma-separated-agent-id string contract `parseManagedSelection`
+ * already parses — an empty selection resolves to `""` (comma-separated
+ * join of zero items), which `parseManagedSelection` already treats as
+ * "none" (design.md D5). Cancel behaves like `promptForAgentReal`'s. */
+async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alreadyManaged: readonly AgentId[]): Promise<string> {
+  if (!canUseInteractivePicker()) {
+    return promptForManagedAgentsNumbered(candidates, alreadyManaged);
+  }
+  console.log("Which agents should Trellis manage? Up/Down (or j/k) to move, Space to toggle, Enter to confirm:");
+  const labels = candidates.map((s) => {
+    const status = s.present ? `present, ${s.skillCount} skill(s)` : "not installed";
+    return `${s.agent} — ${status}`;
+  });
+  const initiallyChecked = candidates.map((s) => alreadyManaged.includes(s.agent));
+  const indices = await runMultiSelectPicker(labels, initiallyChecked);
+  if (indices === null) {
+    console.log("cancelled, no changes made");
+    process.exit(1);
+  }
+  return indices.map((i) => candidates[i].agent).join(",");
+}
+
+/**
+ * Resolves which categories (skills, instructions) to migrate from a
+ * resolved source (trellis-migrate-category-selection). Unlike the two
+ * pickers above, there is no numbered-text fallback to preserve parity
+ * with — this concept never existed before this change, so "can't
+ * prompt" simply means "default to whichever kind(s) actually have real
+ * content, silently" (design.md D4). The picker itself is only offered
+ * when the choice is meaningful — both kinds present, a capable
+ * terminal, and not a `--json` run (design.md D5). An empty result is a
+ * valid answer: "skip migrate for this run" (design.md D6), left for
+ * the caller to act on.
+ */
+async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOnboardOptions): Promise<MigrateKind[]> {
+  const wantsSkills = source.skillCount > 0;
+  const wantsInstructions = source.hasRealInstructions;
+
+  // The choice is only meaningful when both kinds are real — same gate
+  // for the injected test seam as for the real picker, mirroring how
+  // `promptForAgent`/`promptForManagedAgents` are only ever consulted
+  // when their own real prompt would actually apply.
+  if (wantsSkills && wantsInstructions && !opts.json) {
+    if (opts.promptForMigrateCategories) {
+      return opts.promptForMigrateCategories(source);
+    }
+    if (canUseInteractivePicker()) {
+      console.log(`Which categories should be migrated from ${source.agent}? Space to toggle, Enter to confirm:`);
+      const indices = await runMultiSelectPicker(["skills", "instructions"], [true, true]);
+      if (indices === null) {
+        console.log("cancelled, no changes made");
+        process.exit(1);
+      }
+      const kinds: MigrateKind[] = [];
+      if (indices.includes(0)) kinds.push("skill");
+      if (indices.includes(1)) kinds.push("instructions");
+      return kinds;
+    }
+  }
+
+  const kinds: MigrateKind[] = [];
+  if (wantsSkills) kinds.push("skill");
+  if (wantsInstructions) kinds.push("instructions");
+  return kinds;
 }
 
 /** Shared by `--manage` and the interactive prompt's answer — same
@@ -311,10 +419,17 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   }
 
   let migratePlan: MigratePlan | undefined;
+  let migrateSkipped: string | undefined;
   if (source) {
-    migratePlan = await collectMigratePlan(source, homeDir);
-    if (!opts.dryRun) {
-      applyMigratePlan(migratePlan, homeDir);
+    const sourceSummary = summary.find((s) => s.agent === source)!;
+    const categories = await resolveMigrateCategories(sourceSummary, opts);
+    if (categories.length > 0) {
+      migratePlan = await collectMigratePlan(source, homeDir, categories);
+      if (!opts.dryRun) {
+        applyMigratePlan(migratePlan, homeDir);
+      }
+    } else {
+      migrateSkipped = "migrate skipped — no categories selected";
     }
   }
 
@@ -338,6 +453,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     managedAgents,
     installResults: installResults.length > 0 ? installResults : undefined,
     migratePlan,
+    migrateSkipped,
     syncReport,
     mcpSyncReport,
     secretsAuditReport,
@@ -407,6 +523,9 @@ function printResult(result: OnboardResult, dryRun: boolean): void {
   if (result.migratePlan) {
     console.log("");
     printMigratePlan(result.migratePlan, false);
+  } else if (result.migrateSkipped) {
+    console.log("");
+    console.log(result.migrateSkipped);
   }
 
   if (result.syncReport) {

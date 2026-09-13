@@ -191,3 +191,166 @@ test("--from an agent that isn't present refuses cleanly, no writes", async () =
   assert.equal(exitCode, 1);
   assert.equal(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), AGENTS_MD_TEMPLATE);
 });
+
+test("--only instructions excludes every skill from the plan, none read or written", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real\n");
+
+  const plan = await collectMigratePlan("claude-code", home, ["instructions"]);
+  assert.equal(plan.items.some((i) => i.kind === "skill"), false);
+  assert.equal(plan.items.filter((i) => i.kind === "instructions").length, 1);
+
+  applyMigratePlan(plan, home);
+  assert.equal(existsSync(join(home, ".trellis", "skills", "real-skill")), false);
+  assert.equal(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), "# real\n");
+});
+
+test("--only skills excludes instructions from the plan, agents.md untouched", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real\n");
+
+  const plan = await collectMigratePlan("claude-code", home, ["skill"]);
+  assert.equal(plan.items.some((i) => i.kind === "instructions"), false);
+  assert.equal(plan.items.filter((i) => i.kind === "skill").length, 1);
+
+  applyMigratePlan(plan, home);
+  assert.equal(readFileSync(join(home, ".trellis", "skills", "real-skill", "SKILL.md"), "utf-8"), "content\n");
+  assert.equal(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), AGENTS_MD_TEMPLATE);
+});
+
+test("runMigrate --only instructions excludes skills end to end", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real\n");
+
+  const { exitCode } = await runMigrate({ from: "claude-code", only: "instructions", homeDir: home });
+  assert.equal(exitCode, 0);
+  assert.equal(existsSync(join(home, ".trellis", "skills", "real-skill")), false);
+  assert.equal(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), "# real\n");
+});
+
+test("omitting --only remains today's behavior: both kinds migrate", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real\n");
+
+  const plan = await collectMigratePlan("claude-code", home);
+  assert.equal(plan.items.some((i) => i.kind === "skill"), true);
+  assert.equal(plan.items.some((i) => i.kind === "instructions"), true);
+});
+
+test("an invalid --only value refuses before probing the agent, no writes", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  writeClaudeSkill(home, "real-skill", "content\n");
+
+  const { exitCode } = await runMigrate({ from: "claude-code", only: "bogus", homeDir: home });
+  assert.equal(exitCode, 1);
+  assert.equal(existsSync(join(home, ".trellis", "skills", "real-skill")), false);
+});
+
+function writeClaudeMcpServer(home: string, name: string, entry: Record<string, unknown>): void {
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { [name]: entry } }));
+}
+
+test("mcp: a new MCP server is imported from claude-code into servers.yaml", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  writeClaudeMcpServer(home, "gitlab", { type: "stdio", command: "npx", args: ["-y", "@zereight/mcp-gitlab"], env: { GITLAB_PERSONAL_ACCESS_TOKEN: "${GITLAB_PERSONAL_ACCESS_TOKEN}" } });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].action, "create");
+  assert.equal(plan.items[0].name, "gitlab");
+
+  applyMigratePlan(plan, home);
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /gitlab:/);
+  assert.match(written, /command: npx/);
+});
+
+test("mcp: re-running migrate after a successful import is a no-op", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  writeClaudeMcpServer(home, "gitlab", { type: "stdio", command: "npx" });
+
+  const first = await collectMigratePlan("claude-code", home, ["mcp"]);
+  applyMigratePlan(first, home);
+
+  const second = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(second.items.length, 1);
+  assert.equal(second.items[0].action, "already-migrated");
+});
+
+test("mcp: a canonical server with a different definition is a conflict, not overwritten", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  writeClaudeMcpServer(home, "gitlab", { type: "stdio", command: "npx" });
+
+  const first = await collectMigratePlan("claude-code", home, ["mcp"]);
+  applyMigratePlan(first, home);
+
+  writeClaudeMcpServer(home, "gitlab", { type: "stdio", command: "different-command" });
+  const second = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(second.items.length, 1);
+  assert.equal(second.items[0].action, "conflict");
+
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /command: npx/);
+  assert.doesNotMatch(written, /different-command/);
+});
+
+test("mcp: --only skills or --only instructions excludes every MCP server from the plan", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  writeClaudeMcpServer(home, "gitlab", { type: "stdio", command: "npx" });
+
+  const skillsOnly = await collectMigratePlan("claude-code", home, ["skill"]);
+  assert.equal(skillsOnly.items.some((i) => i.kind === "mcp"), false);
+
+  const instructionsOnly = await collectMigratePlan("claude-code", home, ["instructions"]);
+  assert.equal(instructionsOnly.items.some((i) => i.kind === "mcp"), false);
+});
+
+test("mcp: pi is never an MCP migration source — no static config to read", async () => {
+  const home = scratchHome();
+  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+  writeFileSync(join(home, ".pi", "agent", "settings.json"), "{}");
+  await collectInitReport(home);
+
+  const plan = await collectMigratePlan("pi", home, ["mcp"]);
+  assert.equal(plan.present, true, "pi must actually be detected as present, otherwise this test proves nothing");
+  assert.equal(plan.items.some((i) => i.kind === "mcp"), false);
+});
+
+test("an invalid --only value's message names all three valid values", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+
+  let logged = "";
+  const originalError = console.error;
+  console.error = (msg: string) => {
+    logged = msg;
+  };
+  try {
+    await runMigrate({ from: "claude-code", only: "bogus", homeDir: home });
+  } finally {
+    console.error = originalError;
+  }
+  assert.match(logged, /skills/);
+  assert.match(logged, /instructions/);
+  assert.match(logged, /mcp/);
+});

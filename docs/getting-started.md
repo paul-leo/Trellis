@@ -24,11 +24,14 @@ commands to type by hand:
    - **No agent has real content**: skipped — canonical starts from `init`'s
      placeholder.
    - **Exactly one agent has real content**: auto-selected, no prompt.
-   - **Two or more**: prompts you with a numbered choice (if you're at a real
-     terminal), or pass `--agent <id>` to skip the prompt.
+   - **Two or more**: prompts you to choose (Up/Down or j/k, Enter to confirm,
+     on a real terminal that supports it — falls back to a numbered
+     type-a-digit prompt otherwise), or pass `--agent <id>` to skip the
+     prompt entirely.
 2. **Managed set** — zero or more agents to actually write to. Always an
    explicit choice: pass `--manage <ids>` (comma-separated, e.g. `--manage
-   pi,codex`) or `--manage none`, or answer the numbered multi-select prompt.
+   pi,codex`) or `--manage none`, or answer the interactive checkbox prompt
+   (Space to toggle, Enter to confirm — same numbered fallback as above).
    **The source is not included by default** — migrating from Claude Code
    doesn't mean Trellis starts managing Claude Code too, unless you say so.
    Selecting an agent that isn't installed yet is itself the authorization to
@@ -134,27 +137,128 @@ Add `--dry-run` to see the plan without writing anything:
 $ trellis migrate --from codex --dry-run
 ```
 
+Add `--only skills`, `--only instructions`, or `--only mcp` to migrate
+just one category — useful when you only want part of it brought in
+right now. Omit it to migrate all three, exactly as above:
+
+```
+$ trellis migrate --from codex --only instructions
+```
+
 **What each action means:**
 
 | Action | Meaning |
 |---|---|
 | `create` | New to canonical source — copied in. |
-| `already-migrated` | Canonical already has byte-identical content (safe re-run, nothing happens). |
+| `already-migrated` | Canonical already has byte-identical (or, for MCP servers, structurally identical) content (safe re-run, nothing happens). |
 | `conflict` | Canonical already has *different* real content — **left untouched**, resolve by hand. |
 | `skip-symlink` | That agent's own copy is itself a symlink (already shared in from elsewhere) — nothing of that agent's own to import. |
 | `skip-case-broken` | Found as `skill.md` instead of `SKILL.md` — fix the case on the source agent first. |
+| `skip-unsupported` | MCP servers only — that agent's real definition can't be safely represented (see below); nothing was written for it. |
 
 Migrate never overwrites a genuine conflict, and never scopes a migrated
-skill to just the source agent — once in canonical, it's visible to every
-agent by default (see `sync`, below). If migrate reports a `conflict`, open
-the two files it names and decide by hand which content should actually be
-canonical, then re-run.
+skill (or MCP server) to just the source agent — once in canonical, it's
+visible to every agent by default (see `sync`, below). If migrate reports
+a `conflict`, open the two files/entries it names and decide by hand
+which content should actually be canonical, then re-run.
+
+**MCP servers** (claude-code, kiro, codex — not pi, which has no static
+MCP config to read at all) migrate the same way, into
+`~/.trellis/mcp/servers.yaml`:
+
+```
+$ trellis migrate --from claude-code --only mcp
+migrate --from claude-code
+  [create] mcp server "gitlab" — will add to servers.yaml
+```
+
+Two known fidelity limits, named rather than silently worked around:
+
+- **Codex — stdio transport only.** `codex mcp list --json` has no
+  observed output shape in this codebase for a non-stdio (http/sse)
+  server (see `docs/roadmap.md`'s entry for this change for what one real
+  run on one codex version actually reported) — a non-stdio Codex server
+  is reported `skip-unsupported`, not guessed at. Use `trellis mcp add`
+  for that one server as a workaround.
+- **`headers` recovery depends on that agent's own real on-disk shape.**
+  claude-code/kiro read `headers` from the exact same JSON field Trellis
+  itself writes (`schema/servers.example.yaml`'s `figma` example) — if a
+  server was hand-authored with some other shape, it migrates whatever
+  is actually there, same as any other field.
 
 ## Starting from nothing
 
 Skip migrate. Edit `~/.trellis/agents.md` and add skills under
-`~/.trellis/skills/<name>/SKILL.md` directly. There's nothing else to set up
-before moving on to `sync`.
+`~/.trellis/skills/<name>/SKILL.md` directly, or use
+`trellis skill add` (below) instead of hand-editing. There's nothing else
+to set up before moving on to `sync`.
+
+The same applies to MCP servers — `~/.trellis/mcp/servers.yaml` can be
+hand-authored the same way (see
+[`schema/servers.example.yaml`](../schema/servers.example.yaml) for the
+full shape), or use `trellis mcp add` (below). Either way, move on to
+[`trellis mcp sync`](#trellis-mcp-sync) once you've added what you want.
+
+## `trellis skill` / `trellis mcp` — canonical CRUD via the CLI
+
+An alternative to hand-editing canonical files directly — useful for
+scripting, or when you'd rather not open a text editor for a one-line
+change. Both commands are canonical-side only: they never touch any
+agent's native config (that stays `sync`/`mcp sync`'s job).
+
+```
+$ trellis skill list
+my-skill — claude-code, codex, pi
+
+$ trellis skill add my-other-skill --from ./some/local/dir
+skill add my-other-skill
+  [create] will copy from ./some/local/dir
+
+$ trellis skill remove my-other-skill
+removed skill "my-other-skill" from canonical source.
+```
+
+`skill add` refuses (no write) if the name already exists with different
+content — same conflict posture as `migrate`, never silently overwritten.
+`skill remove` deletes the canonical directory; the *next* `trellis sync`
+then auto-removes the now-stale symlink on every agent that had it (skills
+carry their own ownership marker — the symlink itself — so this
+propagates automatically, unlike MCP servers below).
+
+```
+$ trellis mcp list
+tanka (http) — codex, pi
+  env: TANKA_TOKEN (values never read/printed)
+
+$ trellis mcp add local-server --transport stdio --command node --args server.js --env API_KEY
+mcp add local-server
+  [create] will add to servers.yaml
+
+$ trellis mcp remove local-server
+removed MCP server "local-server" from canonical source.
+```
+
+`mcp add` takes `--transport stdio|http|sse`; stdio requires `--command`
+(plus optional `--args a,b`, `--env NAME,...`, `--static-env k=v,...`),
+http/sse require `--url` (plus optional `--headers k=v,...`, values
+expected as `${VAR}` references, never literal secrets). Both accept
+`--agents id,...` (scope) and `--enabled true|false`. Same no-overwrite
+conflict posture as `skill add` — there is no `--force`.
+
+`mcp remove` is **canonical-only** — it does not remove the server from
+any agent that already has it from an earlier `mcp sync` (the same
+no-automatic-removal gap `mcp sync` itself has — see
+[README's Known limitations](../README.md#status)); remove it by hand on
+each agent in the meantime.
+
+`mcp list` never resolves or prints a secret value: `env` names are shown
+as bare names (the actual value is never read from your shell), and
+`static_env` values are shown in full since those were never secrets in
+the first place (see `mcp sync`'s own explanation of `env` vs.
+`static_env`, further below).
+
+All four of `skill add`/`skill remove`/`mcp add`/`mcp remove` support
+`--dry-run` and `--json`, same convention as every other command.
 
 ## `trellis sync`
 
@@ -219,6 +323,53 @@ already populates them. See
 [`schema/secrets.policy.example.yaml`](../schema/secrets.policy.example.yaml)
 for exactly how that resolution works for each agent, including the one
 narrow exception (pi's bridge has to read a value into its own process).
+
+Before writing any name-only `env` entry, `mcp sync` checks it actually
+resolves — a name with no value anywhere `secrets audit` would also
+check is refused as a conflict for that one server, not written and left
+to silently break that server once the agent tries to use it. Every
+other server, and every other agent, still syncs normally.
+
+For a value that isn't a secret at all — an email address, an
+environment tag — use `static_env` instead of `env`: written into the
+agent's config verbatim, never treated as a name to resolve (still
+scanned for an accidental real credential, same as every other literal
+field). `enabled: false` keeps a server's definition in canonical
+without writing it to any agent — for something you want configured but
+not currently active anywhere; remove the line (or set it `true`) to
+turn it back on everywhere at once. See
+[`schema/servers.example.yaml`](../schema/servers.example.yaml) for both.
+
+## `trellis memory sync`
+
+Ingests `~/.trellis/memories/*.md` into the actual on-disk file
+`@modelcontextprotocol/server-memory` reads at its own startup — closing
+the gap between "memory entries exist in canonical" and "the running
+memory server actually knows about them." Requires a `memory` server in
+`servers.yaml` with `static_env.MEMORY_FILE_PATH` set explicitly (see
+[`schema/servers.example.yaml`](../schema/servers.example.yaml)); without
+one, this is a no-op, not an error.
+
+```
+$ trellis memory sync
+memory sync — /Users/you/.trellis/memories/graph.jsonl
+  [create] "sprint-tasks" — will create a new entity
+```
+
+Every entry Trellis creates is tagged internally so a later sync can
+safely update or remove it; anything else already in that file — an
+entity or relation an agent added itself while actually using the memory
+server — is never touched. If a name collides with something already in
+the graph that Trellis didn't create, the command refuses that one entry
+(reported as a conflict) rather than overwriting it, same posture as
+every other conflict in this project.
+
+**Known limitation, named rather than silently worked around:** this only
+ingests canonical's *own* `memories/*.md` files into the shared store —
+it does not (yet) extract an agent's own already-accumulated memory
+content (e.g. Claude Code's own per-project memory feature) back into
+canonical. That extraction is a real, separate, still-open gap — see
+`docs/roadmap.md`'s P15 entry.
 
 ## `trellis secrets audit`
 

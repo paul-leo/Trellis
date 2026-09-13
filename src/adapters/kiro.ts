@@ -3,8 +3,9 @@
  * symlinks, `~/.kiro/steering/CLAUDE.md` symlinked to canonical `agents.md`.
  *
  * MCP servers: plain JSON parse → merge under `mcpServers` → stringify
- * (trellis-mcp-sync-p2 design.md D4) — create/repair only, no automatic
- * removal (D7).
+ * (trellis-mcp-sync-p2 design.md D4). Removal (trellis-mcp-lifecycle-
+ * parity) only happens when `src/lib/mcpOwnership.ts`'s ledger proves
+ * the current entry is still exactly what Trellis itself last wrote.
  *
  * Kiro's own `${VAR}` substitution (real, found by reading Kiro's
  * installed extension source — trellis-kiro-approved-env-vars design.md
@@ -23,9 +24,10 @@ import { isInScope } from "../core/adapter.js";
 import type { CanonicalSource } from "../core/types.js";
 import * as kiroProbe from "../probes/kiro.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
-import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
+import { applyJsonMcp, planJsonMcp, renderJsonServerEntry } from "./jsonMcp.js";
 import { resolveMcpPlan } from "./mcpPlan.js";
 import { declaredEnvNames } from "../lib/envVarNames.js";
+import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
 import type { BackupSession } from "../lib/backup.js";
 
 /** VS-Code-family global settings path. macOS only — see
@@ -80,14 +82,15 @@ export class KiroAdapter implements TrellisAdapter {
   private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
     const configPath = join(this.homeDir, ".kiro", "settings", "mcp.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
-    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents });
+    const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
+    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership });
   }
 
   /** Names come from `resolveMcpPlan`, not a raw scan of `canonical.mcp.servers`
    * (design.md D2) — a server scoped away from Kiro, or refused for a
    * known_host_injected collision, never contributes a name here either. */
   private desiredApprovedEnvVars(canonical: CanonicalSource): string[] {
-    const { desired } = resolveMcpPlan(this.id, canonical.mcp, canonical.managedAgents);
+    const { desired } = resolveMcpPlan(this.id, canonical.mcp, canonical.managedAgents, canonical.secretsPolicy);
     const names = new Set<string>();
     for (const { def } of desired) {
       for (const name of declaredEnvNames(def)) names.add(name);
@@ -138,13 +141,23 @@ export class KiroAdapter implements TrellisAdapter {
       backup,
     );
 
-    const mcpCreates = plan.filter((item) => item.kind === "mcp" && item.action === "create" && item.mcpWrite);
-    if (mcpCreates.length > 0) {
-      const configPath = mcpCreates[0].target;
+    const mcpWrites = plan.filter((item) => item.kind === "mcp" && (item.action === "create" || item.action === "remove"));
+    if (mcpWrites.length > 0) {
+      const configPath = mcpWrites[0].target;
       const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
-      const merged = applyJsonMcp(parsed, mcpCreates);
+      const merged = applyJsonMcp(parsed, mcpWrites);
       mkdirSync(dirname(configPath), { recursive: true });
       backup.writeFile(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+
+      let ownership = loadMcpOwnership(this.homeDir);
+      for (const item of mcpWrites) {
+        if (item.action === "create" && item.mcpWrite) {
+          ownership = recordOwned(ownership, this.id, item.mcpWrite.name, renderJsonServerEntry(item.mcpWrite.def));
+        } else if (item.action === "remove" && item.mcpRemove) {
+          ownership = forgetOwned(ownership, this.id, item.mcpRemove.name);
+        }
+      }
+      saveMcpOwnership(this.homeDir, ownership);
     }
 
     const approvedEnvVarsCreate = plan.find((item) => item.kind === "kiro-approved-env-vars" && item.action === "create" && item.approvedEnvVars);

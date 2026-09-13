@@ -5,8 +5,9 @@
  * before the other three adapters commit to reusing `symlinkPlan.ts`.
  *
  * MCP servers: plain JSON parse → merge under `mcpServers` → stringify
- * (trellis-mcp-sync-p2 design.md D4) — create/repair only, no automatic
- * removal (D7).
+ * (trellis-mcp-sync-p2 design.md D4). Removal (trellis-mcp-lifecycle-
+ * parity) only happens when `src/lib/mcpOwnership.ts`'s ledger proves
+ * the current entry is still exactly what Trellis itself last wrote.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -17,7 +18,8 @@ import { isInScope } from "../core/adapter.js";
 import type { CanonicalSource } from "../core/types.js";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
-import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
+import { applyJsonMcp, planJsonMcp, renderJsonServerEntry } from "./jsonMcp.js";
+import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
 import type { BackupSession } from "../lib/backup.js";
 
 export class ClaudeCodeAdapter implements TrellisAdapter {
@@ -61,7 +63,8 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
   private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
     const configPath = join(this.homeDir, ".claude.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
-    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents });
+    const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
+    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership });
   }
 
   async apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
@@ -70,14 +73,24 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
       backup,
     );
 
-    const mcpCreates = plan.filter((item) => item.kind === "mcp" && item.action === "create" && item.mcpWrite);
-    if (mcpCreates.length === 0) {
+    const mcpWrites = plan.filter((item) => item.kind === "mcp" && (item.action === "create" || item.action === "remove"));
+    if (mcpWrites.length === 0) {
       return;
     }
-    const configPath = mcpCreates[0].target;
+    const configPath = mcpWrites[0].target;
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
-    const merged = applyJsonMcp(parsed, mcpCreates);
+    const merged = applyJsonMcp(parsed, mcpWrites);
     backup.writeFile(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+
+    let ownership = loadMcpOwnership(this.homeDir);
+    for (const item of mcpWrites) {
+      if (item.action === "create" && item.mcpWrite) {
+        ownership = recordOwned(ownership, this.id, item.mcpWrite.name, renderJsonServerEntry(item.mcpWrite.def));
+      } else if (item.action === "remove" && item.mcpRemove) {
+        ownership = forgetOwned(ownership, this.id, item.mcpRemove.name);
+      }
+    }
+    saveMcpOwnership(this.homeDir, ownership);
   }
 
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {

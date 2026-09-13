@@ -4,6 +4,7 @@ import {
   codexBearerTokenEnvVar,
   currentServerSectionText,
   findSection,
+  readServerEnvTable,
   removeSection,
   renderServerSection,
   upsertSection,
@@ -180,4 +181,150 @@ args = ["/fixtures/fake-sentry-stdio.js"]
   const result = upsertSection(withLeadingComment, "sample-server", { transport: "stdio", command: "different" });
   assert.ok(result.includes('# This comment documents the NEXT section, not this one.'), "comment must survive an update to the prior section");
   assert.ok(result.includes("[mcp_servers.sentry]"));
+});
+
+test("renderServerSection: staticEnv renders an adjacent [mcp_servers.<name>.env] table with literal values", () => {
+  const section = renderServerSection("tanka", {
+    transport: "stdio",
+    command: "tanka-mcp",
+    staticEnv: { TANKA_EMAIL: "a@b.com", TANKA_ENV: "sd-or" },
+  });
+  const lines = section.split("\n");
+  assert.deepEqual(lines, [
+    "[mcp_servers.tanka]",
+    'command = "tanka-mcp"',
+    "[mcp_servers.tanka.env]",
+    'TANKA_EMAIL = "a@b.com"',
+    'TANKA_ENV = "sd-or"',
+  ]);
+});
+
+test("upsertSection: a new server with staticEnv creates both tables as one unit", () => {
+  const result = upsertSection(FIXTURE, "tanka", { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_ENV: "sd-or" } });
+  assert.ok(result.includes("[mcp_servers.tanka]"));
+  assert.ok(result.includes("[mcp_servers.tanka.env]"));
+  assert.ok(result.includes('TANKA_ENV = "sd-or"'));
+  for (const line of FIXTURE.split("\n")) {
+    assert.ok(result.includes(line), `expected untouched line to survive: ${line}`);
+  }
+});
+
+test("upsertSection: repairing a staticEnv server replaces both tables atomically, nothing else touched", () => {
+  const withStaticEnv = upsertSection(FIXTURE, "tanka", { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_ENV: "sd-or" } });
+  const repaired = upsertSection(withStaticEnv, "tanka", { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_ENV: "test-sg" } });
+
+  assert.ok(!repaired.includes("sd-or"), "old static value must be gone, not left behind");
+  assert.ok(repaired.includes('TANKA_ENV = "test-sg"'));
+  assert.ok(repaired.includes("[mcp_servers.tanka.env]"), "nested table must still exist after repair");
+  for (const line of FIXTURE.split("\n")) {
+    assert.ok(repaired.includes(line), `expected untouched line to survive: ${line}`);
+  }
+});
+
+test("removeSection: a staticEnv server's main and nested tables are both removed together", () => {
+  const withStaticEnv = upsertSection(FIXTURE, "tanka", { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_ENV: "sd-or" } });
+  const removed = removeSection(withStaticEnv, "tanka");
+  assert.equal(removed, FIXTURE);
+});
+
+test("currentServerSectionText: a staticEnv server's text spans both tables", () => {
+  const def = { transport: "stdio" as const, command: "tanka-mcp", staticEnv: { TANKA_ENV: "sd-or" } };
+  const withStaticEnv = upsertSection(FIXTURE, "tanka", def);
+  const current = currentServerSectionText(withStaticEnv, "tanka");
+  assert.equal(current, renderServerSection("tanka", def));
+});
+
+test("upsertSection then removeSection round-trips a staticEnv server back to equivalent content", () => {
+  const added = upsertSection(FIXTURE, "tanka", { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_EMAIL: "a@b.com", TANKA_ENV: "sd-or" } });
+  const removed = removeSection(added, "tanka");
+  assert.equal(removed, FIXTURE);
+});
+
+test("findServerRange (via currentServerSectionText): a blank line between the two tables doesn't break atomic ownership", () => {
+  const withBlankLine = `[mcp_servers.tanka]
+command = "tanka-mcp"
+
+[mcp_servers.tanka.env]
+TANKA_ENV = "sd-or"
+
+[some_other_setting]
+foo = "bar"
+`;
+  const current = currentServerSectionText(withBlankLine, "tanka");
+  assert.ok(current?.includes("[mcp_servers.tanka.env]"), "the nested table must be included despite the blank line");
+  assert.ok(!current?.includes("[some_other_setting]"));
+
+  const removed = removeSection(withBlankLine, "tanka");
+  assert.ok(!removed.includes("[mcp_servers.tanka]"));
+  assert.ok(!removed.includes("[mcp_servers.tanka.env]"));
+  assert.ok(removed.includes("[some_other_setting]"));
+  assert.ok(removed.includes('foo = "bar"'));
+});
+
+test("findServerRange (via currentServerSectionText): a comment between the two tables doesn't break atomic ownership", () => {
+  const withComment = `[mcp_servers.tanka]
+command = "tanka-mcp"
+# hand-added note about the env table below
+[mcp_servers.tanka.env]
+TANKA_ENV = "sd-or"
+
+[some_other_setting]
+foo = "bar"
+`;
+  const current = currentServerSectionText(withComment, "tanka");
+  assert.ok(current?.includes("[mcp_servers.tanka.env]"), "the nested table must be included despite the comment");
+
+  const result = upsertSection(withComment, "tanka", { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_ENV: "test-sg" } });
+  assert.ok(!result.includes("sd-or"), "old value must be replaced, not left alongside the new one");
+  assert.ok(result.includes('TANKA_ENV = "test-sg"'));
+  assert.ok(result.includes("[some_other_setting]"));
+  assert.ok(result.includes('foo = "bar"'));
+});
+
+test("regression: a trailing comment before the NEXT unrelated section is excluded from a staticEnv server's range", () => {
+  const withTrailingComment = `[mcp_servers.tanka]
+command = "tanka-mcp"
+[mcp_servers.tanka.env]
+TANKA_ENV = "sd-or"
+
+# This documents the next section, not tanka's.
+[some_other_setting]
+foo = "bar"
+`;
+  const current = currentServerSectionText(withTrailingComment, "tanka");
+  assert.ok(!current?.includes("This documents the next section"));
+
+  const result = upsertSection(withTrailingComment, "tanka", { transport: "stdio", command: "different" });
+  assert.ok(result.includes("# This documents the next section, not tanka's."), "comment must survive an update to tanka's section");
+  assert.ok(result.includes("[some_other_setting]"));
+});
+
+test("readServerEnvTable: reads an existing env table's literal values (trellis-migrate-mcp-servers)", () => {
+  const content = `[mcp_servers.tanka]
+command = "tanka-mcp"
+[mcp_servers.tanka.env]
+TANKA_ENV = "sd-or"
+TANKA_EMAIL = "you@example.com"
+`;
+  assert.deepEqual(readServerEnvTable(content, "tanka"), { TANKA_ENV: "sd-or", TANKA_EMAIL: "you@example.com" });
+});
+
+test("readServerEnvTable: returns undefined when no env table exists", () => {
+  assert.equal(readServerEnvTable(FIXTURE, "gitlab"), undefined);
+  assert.equal(readServerEnvTable(FIXTURE, "nonexistent"), undefined);
+});
+
+test("readServerEnvTable: an empty env table reads as an empty object, not undefined", () => {
+  const content = `[mcp_servers.tanka]
+command = "tanka-mcp"
+[mcp_servers.tanka.env]
+[some_other_setting]
+foo = "bar"
+`;
+  assert.deepEqual(readServerEnvTable(content, "tanka"), {});
+});
+
+test("readServerEnvTable: a quoted key round-trips through readServerEnvTable/renderServerSection", () => {
+  const rendered = renderServerSection("weird", { transport: "stdio", command: "x", staticEnv: { "has space": "v1" } });
+  assert.deepEqual(readServerEnvTable(rendered, "weird"), { "has space": "v1" });
 });

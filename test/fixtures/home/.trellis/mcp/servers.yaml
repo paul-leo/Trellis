@@ -25,6 +25,14 @@
 #   - "remote-multi-header" (trellis-mcp-transport-auth): a `headers`
 #     shape Codex cannot express (two headers) — must be a Codex-only
 #     conflict while Claude Code/Kiro still receive it in full.
+#   - "tanka" (trellis-mcp-static-env-and-disabled-servers): `static_env`
+#     — must create BOTH `[mcp_servers.tanka]` and the adjacent
+#     `[mcp_servers.tanka.env]` literal-value table on Codex, atomically;
+#     Claude Code/Kiro get the same two values merged into their `env` map
+#     verbatim, not as `${VAR}` references.
+#   - "supabase-db" (trellis-mcp-static-env-and-disabled-servers):
+#     `enabled: false` — must produce no write and no conflict on any
+#     agent, real content matching this machine's actual Codex config.
 servers:
   sample-server:
     transport: stdio
@@ -65,6 +73,20 @@ servers:
     headers:
       Authorization: "Bearer ${REMOTE_MULTI_TOKEN}"
       X-Api-Key: "${REMOTE_MULTI_KEY}"
+
+  tanka:
+    transport: stdio
+    command: tanka-mcp
+    static_env:
+      TANKA_EMAIL: "you@example.com"
+      TANKA_ENV: "sd-or"
+
+  supabase-db:
+    transport: stdio
+    command: npx
+    args: ["-y", "@supabase/mcp-server-supabase"]
+    env: [SUPABASE_ACCESS_TOKEN]
+    enabled: false
 
 known_host_injected:
   - sentry

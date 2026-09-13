@@ -5,7 +5,7 @@
  * paths, same bytes per file; anything else is unequal.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 function listFilesRecursive(dir: string): string[] {
@@ -35,4 +35,19 @@ export function dirContentsEqual(a: string, b: string): boolean {
     if (!readFileSync(join(a, rel)).equals(readFileSync(join(b, rel)))) return false;
   }
   return true;
+}
+
+export type DirImportDecision = "create" | "already-present" | "conflict";
+
+/**
+ * Shared create/already-present/conflict decision for copying a real
+ * directory into a canonical destination — used by both `migrate`'s
+ * own skill planning and `trellis skill add` (trellis-canonical-cli-crud
+ * design.md D2), so the two never silently drift apart on what counts
+ * as "safe to skip" vs. "a real conflict."
+ */
+export function decideDirImport(sourceDir: string, canonicalDir: string): DirImportDecision {
+  if (!existsSync(canonicalDir)) return "create";
+  if (dirContentsEqual(sourceDir, canonicalDir)) return "already-present";
+  return "conflict";
 }

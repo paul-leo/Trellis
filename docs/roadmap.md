@@ -600,6 +600,281 @@ exactly that one path as a `conflict` (exit 1) while still correctly
 restoring the other two, untouched, unaffected paths in the same
 invocation.
 
+**`trellis-mcp-static-env-and-disabled-servers`, implemented and
+sandbox-verified** (modifies `mcp-server-sync`). Found by dogfooding
+`mcp sync` against a real machine's actual, actively-used Codex
+`config.toml` rather than a fixture: `[mcp_servers.supabase_db]` had
+`enabled = false` (a definition kept on hand, deliberately off — no way
+to represent that in canonical short of deleting it), and
+`[mcp_servers.tanka]` used a hardcoded literal `env` table, not the
+`env_vars` name-forwarding array every other real server on the same
+machine uses. Migrating `tanka` as-is into the old names-only model
+would have had `mcp sync` rewrite a working config into a broken one —
+`TANKA_EMAIL`/`TANKA_ENV` were never real process env vars, just plain
+values written straight into the file — and neither `mcp sync` nor
+`secrets audit` would have caught it before the write happened.
+
+`McpServerDef` gained `enabled?: boolean` (filtered in `resolveMcpPlan`
+itself, the one choke point every adapter already funnels through — a
+disabled server gets no write and no conflict, not just on Codex but on
+every agent) and `staticEnv?: Record<string, string>` for a value that
+was never a secret in the first place — Codex renders it as an adjacent
+`[mcp_servers.<name>.env]` table (extending `tomlSection.ts`'s section
+boundary logic to treat the pair as one atomic create/repair/remove
+unit), Claude Code/Kiro merge it into the same `env` map their `${VAR}`
+references already use. `resolveMcpPlan` also gained a mandatory fourth
+`policy: SecretsPolicy` parameter: before writing any name-only `env`
+entry, it now resolves it through the same `resolveSecretEnv` `secrets
+audit`/the pi bridge already call, refusing (as a new conflict scoped to
+just that server, on just that agent) a name that wouldn't actually
+resolve — the exact silent-breakage scenario `tanka` would have hit.
+
+The on-disk YAML key is `static_env` (snake_case, matching every other
+multi-word key across `.trellis/*.yaml` — `known_host_injected`,
+`allowed_vars` — translated to camelCase in `loadServersYaml`), a real
+gap the design doc missed until implementation: `McpServerDef` had
+always been parsed as-is with zero field translation, since every prior
+field name happened to already be a single word.
+
+Sandbox-verified, not just unit-tested: reproducing this machine's exact
+`tanka`/`supabase-db` shapes in `test/fixtures/home` and running a real
+`mcp sync` inside `scripts/sandbox.sh` produced Codex's two-table output
+byte-for-byte identical to the real, working config this change was
+motivated by — and surfaced one more real regression before it could
+ship: the sandbox's own pre-existing fixture servers declare `env` names
+that don't resolve inside the container, which the new pre-write check
+would have refused outright. Fixed by exporting their fixture values in
+`docker/entrypoint.sh`, matching what a real working setup would
+actually have — found only because the fixture was actually run, not
+just reasoned about.
+
+Also removed a dead field from `schema/servers.example.yaml`: the
+`figma` example's `auth: oauth` was never a real property on
+`McpServerDef`, never read by any adapter, and never asserted by any
+spec — the YAML parser has no field validation, so it silently did
+nothing. No real OAuth support exists; the line taught a capability that
+was never there.
+
+**P11 is done and archived**
+(`openspec/changes/archive/2026-09-13-trellis-migrate-category-selection/`;
+modifies `canonical-source-migration` and `onboarding-flow`). `trellis
+migrate --from <agent>` always planned skills and instructions
+together, one unit, no subset selection — no CLI flag, and no
+interactive picker for this choice either. `--only skills|instructions`
+now restricts a run to just one category, filtered inside
+`collectMigratePlan` itself (not computed then discarded) — the
+excluded kind is never read for comparison and never appears in the
+plan. `trellis onboard`'s migrate step gained a checkbox reusing
+`src/lib/terminalPicker.ts` (the same module `trellis-onboard-
+interactive-picker` built), but only offered when the resolved source
+actually has both real skills and real instructions — a source with
+only one real kind, or `--json`, or a terminal that can't support the
+picker all default silently to migrating whichever kind(s) actually
+have content, with no second, numbered-text fallback UI built, since
+this choice never existed before this change to have a fallback for. An
+empty selection is a valid, distinct outcome ("migrate skipped — no
+categories selected"), not an error, and doesn't stop sync/mcp sync/
+secrets audit from running. A real gap named rather than silently
+folded in: `codex`/`pi`/`kiro` as migration sources remain untested —
+`test/unit/migrate.test.ts` only ever exercises `claude-code`, despite
+`collectMigratePlan`'s own dispatch being fully symmetric by design.
+That's P13's job. Verified with 22 new unit tests (275/275 project-wide,
+zero regressions) — no sandbox pass needed, this change touches no
+adapter or native-config write path.
+
+**P12 (✅ done, archived
+[2026-09-13-trellis-canonical-cli-crud](../openspec/changes/archive/2026-09-13-trellis-canonical-cli-crud/)):
+canonical CRUD via CLI.** Neither skills nor MCP servers had any
+command-line add/remove/list surface — `cli.ts`'s `mcp` command
+recognized exactly one subcommand, `sync`, and there was no `skill`
+command at all. `trellis skill list/add/remove` and `trellis mcp
+list/add/remove` are new, canonical-side-only commands (a new
+`canonical-content-management` capability): `skill add`/`mcp add`
+refuse (no write, no `--force`) on an existing name with different
+content, mirroring `migrate`'s own conflict posture exactly, reusing
+the same comparison logic via a newly-extracted
+`decideDirImport(sourceDir, canonicalDir)` (src/lib/dirEquals.ts),
+which also replaced `migrate.ts`'s own inline check
+(behavior-preserving, confirmed by its full pre-existing suite passing
+unmodified). `servers.yaml`'s new writer (`upsertServerYaml`/
+`removeServerYaml` in `canonical.ts`) uses the `yaml` package's
+`Document`-based `parseDocument`/`setIn`/`deleteIn`/`toString`, never a
+full parse-then-restringify, specifically so a hand-authored file's
+comments and untouched entries survive byte-for-byte — verified with a
+dedicated test asserting exactly that. `skill remove` needed zero new
+removal-propagation code: skills already carry an ownership marker (the
+symlink itself), so `sync`'s pre-existing stale-symlink detection
+un-syncs a removed skill automatically on the next run (proven
+end-to-end in a test). `mcp remove` stays canonical-only by design —
+MCP has no such marker yet, so an already-synced agent's native config
+is untouched until P14 closes that gap. `mcp list` never resolves a
+secret: `env` entries print as bare names (never read from
+`process.env`), while `static_env` values print in full since they were
+never secrets by `McpServerDef`'s own contract. Verified with 21 new
+unit tests (296/296 project-wide, zero regressions) plus manual
+smoke-testing of every subcommand (list/add/remove, conflict/
+already-present/invalid-input, `--dry-run`, `--json`) against a
+throwaway sandbox `$HOME` — no sandbox-container pass needed, this
+change touches no adapter or native-config write path.
+
+**P13 (✅ done, archived
+[2026-09-13-trellis-real-sandbox-verification](../openspec/changes/archive/2026-09-13-trellis-real-sandbox-verification/)):
+sandbox verification against this machine's real state.** Every sandbox
+run before this (`scripts/sandbox.sh`, `docker/entrypoint.sh`) mounted
+the same single, git-tracked synthetic fixture (`test/fixtures/home`).
+Compounding this, `test/unit/migrate.test.ts` only ever exercised
+`"claude-code"` as a migration source — codex/pi/kiro had never been
+verified as sources even though `collectMigratePlan`'s `PROBES:
+Record<AgentId, ...>` dispatch is fully symmetric by design (claude-code
+was, however, already covered as a sync/mcp-sync *target*, in
+`test/unit/sync.test.ts`/`test/unit/mcp.test.ts` — the earlier draft of
+this entry claimed otherwise; corrected here after checking, not
+assumed). `scripts/sandbox.sh --real` builds a throwaway snapshot from a
+real `$HOME` using an **allowlist**, not the denylist first sketched here
+— every path each probe (`src/probes/*.ts`) is already confirmed to
+read, and nothing else, since this project has no complete knowledge of
+where third-party agents' own real OAuth token flows store credentials
+(design.md D1 explains the reasoning). Actually running this against a
+real, in-use machine (not just reasoning about it) found two real bugs
+before it could even complete: `sync`'s own real output is a symlink
+back into `~/.trellis/`, which a naive symlink-preserving copy leaves
+dangling once mounted into a container with no such path — fixed by
+dereferencing during copy; and a case-insensitive filesystem (macOS
+default) collides two of pi's own case-sensitive instructions-file
+candidates (`AGENTS.md`/`AGENTS.MD`), which needed a
+dest-already-exists guard to avoid a crash. Before any Docker build, the
+snapshot is gated through `trellis secrets audit`'s own, already-shipped
+`homeDir` seam — on the actual real-machine run, this correctly found 5
+genuine `unexpected-var-name` findings and refused to proceed, exactly
+as designed; clearing that machine's own `secrets.policy.yaml` gap and
+running a full container pass against it remains a separate,
+human-initiated action, not something this change forced through.
+codex/kiro/pi as migrate sources are now covered in
+`test/unit/migrateSources.test.ts`, using each probe's own confirmed
+real dotfile paths. Verified with 10 new unit tests (306/306
+project-wide) plus the fixture-based (default, non-`--real`)
+`scripts/sandbox.sh` re-run end-to-end against Docker to confirm zero
+regression to the existing path.
+
+**P14 (✅ done — removal half only, archived
+[2026-09-13-trellis-mcp-sync-removal](../openspec/changes/archive/2026-09-13-trellis-mcp-sync-removal/);
+migrate-in remains open, see below): MCP server lifecycle parity with
+skills.** Skills have a full migrate (import) + sync (create/repair) +
+conflict story; MCP had sync only. This was always two distinct, real
+gaps, not one — this change closed the harder, more clearly-specified
+half: `resolveMcpPlan` was deliberately create/repair-only
+(`mcpPlan.ts`'s own stated reasoning: a bare TOML/JSON key has no
+ownership marker to prove Trellis, not the user, put it there), so
+removing a server from `servers.yaml` never removed it from any
+agent's native config. A new `src/lib/mcpOwnership.ts` ledger
+(`~/.trellis/mcp/ownership.json`) records, per agent and server name,
+the exact rendered value Trellis itself last wrote; on a later sync, a
+name gone from canonical is only actually removed from an agent's
+native config if that config's current entry still exactly matches
+what the ledger recorded — a hand-edited entry is left alone,
+indefinitely, never forced. Reused rather than rebuilt:
+`src/lib/tomlSection.ts`'s `removeSection` (built earlier for the
+static-env atomic-range work, never wired into an actual removal path
+until now) for Codex, and each JSON agent's own existing `deepEqual`
+for the "unchanged since" check. **Still genuinely open, not done
+here:** MCP *migrate-in* (importing an already-hand-configured server
+into canonical) — each static-config probe (`codex.ts`/`claude-code.ts`/
+`kiro.ts`) still discards a server's complete real definition (e.g.
+`codex mcp list --json`'s `CodexMcpEntry`, with `command`/`args`/
+`env_vars` intact) down to `{name, transport, probe}`
+(`AgentSnapshotMcpServer`) before anything downstream sees it, and
+there is still no conversion from that discarded, richer shape into
+canonical's `McpServerDef`. pi has no static config to read at all —
+inherently import-less; P12's CLI remains its only route in. A real
+gap, named rather than silently dropped, left for a future change.
+Verified with 3 new/rewritten unit tests across both Claude Code's JSON
+path and Codex's TOML path (308/308 project-wide, zero regressions).
+
+**P15 (✅ done — ingestion half only, archived
+[2026-09-13-trellis-memory-sync](../openspec/changes/archive/2026-09-13-trellis-memory-sync/);
+per-agent extraction remains open, see below): shared memory — real
+ingestion and per-agent extraction.** `memories` was parsed
+(`canonical.ts`) into `CanonicalSource.memories: MemoryEntry[]` and
+consumed nowhere — no adapter, no command, no `trellis memory` CLI
+surface existed at all. P6 explicitly left "auto-ingesting
+`~/.trellis/memories/*.md` content into the running memory server's
+store" out of scope; `trellis memory sync` closes that gap (A): each
+canonical memory file becomes one entity
+(`entityType: "trellis-memory"`) in `@modelcontextprotocol/
+server-memory`'s own on-disk JSON-lines graph file (the exact file that
+server itself reads at startup — Trellis never spawns or talks to a
+running server process, a plain file write like everything else this
+project does), requiring `mcp/servers.yaml`'s `memory` server to set
+`static_env.MEMORY_FILE_PATH` explicitly (the server's own unset-env
+default resolves relative to wherever `npx` cached the package, not a
+predictable location). The in-band `entityType` tag is the ownership
+marker — deliberately not a separate ledger file like P14's MCP
+removal, since (unlike per-agent MCP config) every agent connected to
+this one server shares the exact same graph, so there's no per-agent
+render to track. Every entity/relation Trellis didn't create is left
+completely untouched, unconditionally; a name collision with a
+non-Trellis-tagged entity is a conflict, never overwritten. **Still
+genuinely open, not done here (B):** extracting an agent's own
+already-accumulated memory content back into canonical — e.g. Claude
+Code's own per-project memory feature. Investigated, not attempted, for
+two concrete reasons: that content lives under
+`~/.claude/projects/<project-slug>/memory/`, a path
+`trellis-real-sandbox-verification`'s own allowlist already deliberately
+excludes (mixed with real session transcripts); and the project-slug
+encoding scheme Claude Code uses to derive that path from a working
+directory has no authoritative documented source this project could
+verify against, so it was not guessed at (this project's own "verify,
+don't assume" discipline). Kiro's `totalrecallai` (SQLite + local vector
+embeddings) is a further, genuinely different data shape, and was never
+in scope for this half either. A real gap, named rather than silently
+dropped, left for a future change. Verified with 14 new unit tests
+(322/322 project-wide, zero regressions).
+
+**P16 (✅ done, archived
+[2026-09-13-trellis-migrate-mcp-servers](../openspec/changes/archive/2026-09-13-trellis-migrate-mcp-servers/)):
+MCP migrate-in — the gap P14 named.** `trellis migrate --from <agent>`
+gains a third `--only` value, `mcp`: claude-code, kiro, and codex each
+get a new, purpose-built reader (`src/lib/mcpMigrateRead.ts`) that
+converts that agent's real, already-configured MCP servers into
+canonical's `McpServerDef` shape — kept entirely separate from each
+probe's own thin `AgentSnapshotMcpServer` (`doctor`'s read path, left
+untouched). Same conflict posture as skill/instructions migration
+throughout: identical is a no-op, a differing definition under the same
+name is a conflict, never overwritten. pi is still never a migrate-in
+source — no static config to read, unchanged from P14's own framing.
+Two fidelity limits, found by actually running each agent's real
+tooling rather than assumed, are handled by refusing rather than
+guessing: **Codex is stdio-transport only** — `codex mcp list --json`
+had no evidence in this codebase for any other transport shape at
+design time; a real, one-off run against a locally-installed `codex-cli
+0.154.0` during implementation *did* observe a `streamable_http` shape
+(`url`, `bearer_token_env_var`, plus three further undocumented fields)
+for a hand-written `url`-based server — recorded as a concrete lead for
+a future change, not built now, since one data point from one version
+isn't a contract; a non-stdio Codex server is reported
+`skip-unsupported`, named, not silently dropped. **Codex's `static_env`**
+is recovered by reading `[mcp_servers.<name>.env]` directly from
+`config.toml` (a new `readServerEnvTable` in `tomlSection.ts`, the exact
+inverse of that module's own existing writer) since `codex mcp list
+--json` only ever reports variable *names*, never the literal table
+Trellis itself renders separately. **`headers`** — missing from both
+`claude-code.ts`'s and `kiro.ts`'s own probe-facing JSON types despite
+being a real field Trellis's own writer (`jsonMcp.ts`) already produces
+for http/sse servers — is recovered via a parallel, richer local type
+scoped only to this new reader module, leaving both probes' existing,
+`doctor`-tested types untouched. Verified with 19 new unit tests,
+including one exercising the real, locally-installed `codex` binary
+end-to-end against a scratch, HOME-scoped `.codex/config.toml` (341/341
+project-wide, zero regressions). One related, pre-existing gap
+surfaced but deliberately not fixed here (out of scope, named instead):
+`src/probes/codex.ts`'s own `probe()` never scopes its `codex mcp list
+--json` subprocess call to a passed-in `homeDir` via `HOME` env override
+the way this change's own new reader now does — meaning that probe's
+MCP listing always reflects the real machine's real codex config
+regardless of what `homeDir` a caller passes it. This change's own new
+`readCodexMcpDefs` does not have this problem; `codex.ts`'s pre-existing
+`probe()` still does.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
@@ -613,5 +888,17 @@ invocation.
 | P8 | ✅ Kiro `${VAR}` fix: adapter also manages `kiroAgent.mcpApprovedEnvVars`, without which Kiro silently never substitutes any env reference Trellis writes | P2 |
 | P9 | ✅ MCP transport/auth expansion: `headers` field for static bearer/API-key remote auth (Claude Code/Codex/Kiro/pi bridge, each via its own real schema), `sse` transport; real OAuth flows explicitly delegated to each agent's own native support, not reimplemented | P2, P4, P8 |
 | P10 | GUI: evaluate embedding into mcp-router's or skills-hub's existing interface before building anything new | P3–P9 |
+| P11 | ✅ Migrate category selection: `--only skills\|instructions` on `migrate`, same interactive picker `onboard` already uses | P1 |
+| P12 | ✅ Canonical CRUD via CLI: `trellis skill add/remove/list`, `trellis mcp add/remove/list` | P1, P2 |
+| P13 | ✅ Sandbox verification against this machine's real, structurally-relevant state (not just fixtures); every agent verified as both migrate source and sync/mcp-sync target | P0–P2 |
+| P14 | ✅ MCP server lifecycle parity with skills: ownership-tracked safe removal on sync (migrate-in closed separately by P16) | P2, P13 |
+| P15 | ✅ Shared memory: ingest canonical `memories/*.md` into the `server-memory` store's own graph file (per-agent extraction into canonical remains a separate, open gap) | P6 |
+| P16 | ✅ MCP migrate-in: `trellis migrate --only mcp` for claude-code/kiro/codex (stdio only for codex — see prose above), closing the gap P14 named | P12, P14 |
 
 No dates. This is scoped by verification milestones, not calendar time.
+Execution order for P11–P16: P11 → P12 → P13 → P14 → P15 → P16 — CRUD
+(P12) lands before the larger features (P14, P15, P16) so each can be
+adjusted via command line instead of hand-edited files while it's being
+built, and the realistic sandbox (P13) lands before all three so each
+gets verified against real data once, immediately, instead of against
+another synthetic fixture.

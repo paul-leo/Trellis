@@ -52,6 +52,10 @@ function serverHeader(name: string): string {
   return `mcp_servers.${tomlKeySegment(name)}`;
 }
 
+function envHeader(name: string): string {
+  return `${serverHeader(name)}.env`;
+}
+
 /**
  * Finds an existing `[header]` table's exact line range: `start` is the
  * header line itself, `end` is the line before the next table header (any
@@ -88,14 +92,44 @@ export function findSection(content: string, header: string): SectionRange | nul
 }
 
 /**
- * Returns the current stored text of `[mcp_servers.<name>]` (or `null` if
- * it doesn't exist), for comparing against `renderServerSection`'s output
- * to decide create/repair vs. no-op — exact text equality is enough here,
- * no parsing needed on either side.
+ * A server's full owned range: its main `[mcp_servers.<name>]` table,
+ * extended to also cover an immediately-following `[mcp_servers.<name>.env]`
+ * table (skipping only blank/comment padding in between — the same skip
+ * rule `findSection`'s own trailing trim already applies) when one is
+ * present. The two are rendered and managed as one atomic unit whenever
+ * `staticEnv` is set (trellis-mcp-static-env-and-disabled-servers
+ * design.md D3) — create/repair/remove must never touch one without the
+ * other.
+ */
+function findServerRange(content: string, name: string): SectionRange | null {
+  const main = findSection(content, serverHeader(name));
+  if (!main) {
+    return null;
+  }
+
+  const lines = content.split("\n");
+  let i = main.end + 1;
+  while (i < lines.length && (lines[i].trim() === "" || lines[i].trim().startsWith("#"))) {
+    i += 1;
+  }
+  if (i < lines.length && lines[i].trim() === `[${envHeader(name)}]`) {
+    const envRange = findSection(content, envHeader(name));
+    if (envRange) {
+      return { start: main.start, end: envRange.end };
+    }
+  }
+  return main;
+}
+
+/**
+ * Returns the current stored text of a server's full owned range (see
+ * `findServerRange`) — or `null` if it doesn't exist — for comparing
+ * against `renderServerSection`'s output to decide create/repair vs.
+ * no-op. Exact text equality is enough here, no parsing needed on either
+ * side.
  */
 export function currentServerSectionText(content: string, name: string): string | null {
-  const header = serverHeader(name);
-  const range = findSection(content, header);
+  const range = findServerRange(content, name);
   if (!range) {
     return null;
   }
@@ -122,8 +156,10 @@ export function codexBearerTokenEnvVar(def: McpServerDef): string | undefined {
   return BEARER_TOKEN_VALUE_RE.exec(value)?.[1];
 }
 
-/** Renders a `[mcp_servers.<name>]` block for a bounded, known shape —
- * this is templating, not general TOML serialization. */
+/** Renders a `[mcp_servers.<name>]` block (plus, when `staticEnv` is set,
+ * an immediately-adjacent `[mcp_servers.<name>.env]` block — see
+ * `findServerRange`) for a bounded, known shape — this is templating,
+ * not general TOML serialization. */
 export function renderServerSection(name: string, def: McpServerDef): string {
   const lines = [`[${serverHeader(name)}]`];
   if (def.transport === "stdio") {
@@ -135,7 +171,43 @@ export function renderServerSection(name: string, def: McpServerDef): string {
     const bearerEnvVar = codexBearerTokenEnvVar(def);
     if (bearerEnvVar) lines.push(`bearer_token_env_var = ${tomlString(bearerEnvVar)}`);
   }
+  const staticEnvEntries = Object.entries(def.staticEnv ?? {});
+  if (staticEnvEntries.length > 0) {
+    lines.push(`[${envHeader(name)}]`);
+    for (const [key, value] of staticEnvEntries) {
+      lines.push(`${tomlKeySegment(key)} = ${tomlString(value)}`);
+    }
+  }
   return lines.join("\n");
+}
+
+const ENV_TABLE_LINE_RE = /^("(?:[^"\\]|\\.)*"|[A-Za-z0-9_-]+)\s*=\s*("(?:[^"\\]|\\.)*")\s*$/;
+
+/**
+ * Reads a server's `[mcp_servers.<name>.env]` table's literal key-value
+ * pairs directly from real `config.toml` text — the exact inverse of
+ * `renderServerSection`'s own `static_env` block, the only piece of a
+ * Codex server's `static_env` that `codex mcp list --json` cannot ever
+ * report (it only exposes `env_vars`, i.e. names, from the *main*
+ * table — trellis-migrate-mcp-servers design.md D3). Returns `undefined`
+ * if the table doesn't exist; a malformed line inside it is skipped, not
+ * fatal, matching `parseMemoryGraph`'s own tolerant-parse precedent.
+ */
+export function readServerEnvTable(content: string, name: string): Record<string, string> | undefined {
+  const range = findSection(content, envHeader(name));
+  if (!range) {
+    return undefined;
+  }
+  const lines = content.split("\n").slice(range.start + 1, range.end + 1);
+  const result: Record<string, string> = {};
+  for (const line of lines) {
+    const match = ENV_TABLE_LINE_RE.exec(line.trim());
+    if (!match) continue;
+    const rawKey = match[1];
+    const key = rawKey.startsWith('"') ? (JSON.parse(rawKey) as string) : rawKey;
+    result[key] = JSON.parse(match[2]) as string;
+  }
+  return result;
 }
 
 /**
@@ -144,8 +216,7 @@ export function renderServerSection(name: string, def: McpServerDef): string {
  * any line outside the section it locates or the single appended block.
  */
 export function upsertSection(content: string, name: string, def: McpServerDef): string {
-  const header = serverHeader(name);
-  const existing = findSection(content, header);
+  const existing = findServerRange(content, name);
   const newLines = renderServerSection(name, def).split("\n");
 
   if (existing) {
@@ -164,8 +235,7 @@ export function upsertSection(content: string, name: string, def: McpServerDef):
  * No-op if the section doesn't exist — idempotent.
  */
 export function removeSection(content: string, name: string): string {
-  const header = serverHeader(name);
-  const existing = findSection(content, header);
+  const existing = findServerRange(content, name);
   if (!existing) {
     return content;
   }

@@ -29,33 +29,49 @@ byte-for-byte unchanged.
 ### Requirement: MCP server sync supports create and repair, not automatic removal
 The system SHALL create a server definition that doesn't exist on an
 in-scope agent and repair one whose current value differs from canonical.
-The system SHALL NOT automatically remove an MCP server entry from an
-agent's config when it disappears from canonical — unlike a skill's
-symlink (whose realpath proves Trellis created it), a TOML/JSON
-key-value entry carries no ownership marker, so "not in canonical
-anymore" is indistinguishable from "the user configured this directly and
-Trellis has never touched it." Automatic MCP removal is deferred until an
-ownership-tracking mechanism (a lock file recording what Trellis itself
-last wrote) exists to make it provably safe — see design.md D7.
+The system SHALL remove an MCP server entry from an agent's native config
+when it disappears from canonical, but only when
+`src/lib/mcpOwnership.ts`'s ledger proves that agent's current entry is
+still exactly what Trellis itself last wrote there (recorded at the time
+of the create/repair that put it there). An entry the user has since
+edited by hand SHALL be left untouched, indefinitely — the ledger no
+longer matching is treated as "this is no longer provably ours to
+remove," never as a reason to force the removal anyway.
 
 #### Scenario: A new canonical server is created on every in-scope agent
 - **WHEN** a server is added to `mcp/servers.yaml` with no `agents:`
   restriction
 - **THEN** it is written to Claude Code's, Codex's, and Kiro's native MCP
-  config
+  config, and each agent's ownership ledger records what was written
 
 #### Scenario: An existing server whose canonical definition changed is repaired
 - **WHEN** a previously-synced server's `command`/`args`/`env` changes in
   `mcp/servers.yaml`
 - **THEN** the corresponding entry in each in-scope agent's config is
-  updated to match
+  updated to match, and the ledger is updated to the new rendered value
 
-#### Scenario: A server removed from canonical is left in place, not deleted
-- **WHEN** a previously-synced server is deleted from `mcp/servers.yaml`
-  and `trellis mcp sync` runs again
-- **THEN** its entry remains untouched in every agent's config — no
-  automatic removal, since Trellis cannot yet prove it (rather than the
-  user) is the one who put it there
+#### Scenario: A server removed from canonical is removed from an agent's native config, if unchanged since Trellis wrote it
+- **WHEN** a previously-synced server is deleted from `mcp/servers.yaml`,
+  `trellis mcp sync` runs again, and that agent's current native entry
+  for that name still exactly matches what the ownership ledger recorded
+- **THEN** the entry is deleted from that agent's native config, and its
+  ledger record is forgotten
+
+#### Scenario: A server the user hand-edited after Trellis wrote it is never removed
+- **WHEN** a previously-synced server's native entry has been modified by
+  hand (no longer matching the ownership ledger's recorded value), and it
+  is then deleted from `mcp/servers.yaml`
+- **THEN** the entry remains untouched in that agent's config — the
+  ledger mismatch means Trellis can no longer prove it, not the user, is
+  the one who owns that entry
+
+#### Scenario: A server already removed by hand leaves no trace
+- **WHEN** an agent's native config no longer has an entry the ownership
+  ledger still tracks (removed by the user directly, not via `mcp sync`),
+  and that name is also deleted from `mcp/servers.yaml`
+- **THEN** `mcp sync` reports nothing to remove for that name — no error,
+  no plan item — and the stale ledger entry is available for a future
+  cleanup pass, not treated as a failure
 
 ### Requirement: Collision against known_host_injected is refused, not written
 The system SHALL refuse to write a server definition whose name also
@@ -207,4 +223,74 @@ no call site able to bypass it.
   not exist yet on this agent
 - **THEN** the backup session records that the file was newly created,
   with no snapshot file since there was nothing to snapshot
+
+
+### Requirement: Servers marked disabled are defined but never synced
+The system SHALL support `enabled: false` on a canonical MCP server
+definition, and SHALL NOT write that server to any agent's native config
+while it is disabled — the definition SHALL still exist in canonical and
+SHALL be restored to being written the moment `enabled` is removed or
+set to `true`, without needing to be redefined from scratch.
+
+#### Scenario: A disabled server produces no write and no conflict
+- **WHEN** a canonical server has `enabled: false`
+- **THEN** `trellis mcp sync` writes nothing for that server to any
+  agent's config, and reports neither a create/repair nor a conflict for
+  it
+
+#### Scenario: Re-enabling a previously-disabled server writes it normally
+- **WHEN** a server's `enabled: false` is removed (or set to `true`) and
+  `trellis mcp sync` runs again
+- **THEN** the server is created on every in-scope agent exactly as if it
+  had never been disabled
+
+### Requirement: Static env values are written as literal values, not resolved by name
+The system SHALL support a `staticEnv` map on a canonical MCP server
+definition, distinct from the existing name-only `env` list, for values
+that are not secrets and are meant to be written into an agent's native
+config verbatim rather than resolved from an external source at
+run time. A `staticEnv` value SHALL still be refused if it matches a
+known-dangerous credential pattern, identically to every other literal
+field this same guard already covers.
+
+#### Scenario: Codex renders static env values as its native literal-value table
+- **WHEN** a canonical server declares `staticEnv: {TANKA_EMAIL: "a@b.com",
+  TANKA_ENV: "sd-or"}`
+- **THEN** Codex's `config.toml` gains a `[mcp_servers.<name>.env]` table
+  with those exact key/value pairs, alongside that server's
+  `[mcp_servers.<name>]` section, both treated as one unit for
+  create/repair/remove
+
+#### Scenario: Claude Code and Kiro render static values in the same env map as name references
+- **WHEN** a canonical server declares both `env: [SOME_TOKEN]` and
+  `staticEnv: {TANKA_ENV: "sd-or"}`
+- **THEN** the rendered entry's `env` object contains both
+  `"SOME_TOKEN": "${SOME_TOKEN}"` and `"TANKA_ENV": "sd-or"`
+
+#### Scenario: A credential-shaped static value is refused before the write
+- **WHEN** a canonical server's `staticEnv` contains a value matching a
+  known-dangerous credential pattern (e.g. `glpat-...`)
+- **THEN** the write is refused and a conflict is reported, identically
+  to a literal secret found in `command`/`url`/`args`/`headers`
+
+### Requirement: A server whose declared env name cannot resolve to a value is refused before the write
+The system SHALL, before writing any name-only `env` entry to an agent's
+native config, resolve that name through the same mechanism `secrets
+audit` and the pi bridge already use. A name that resolves to no value
+SHALL be refused as a conflict scoped to that one server for that one
+agent, rather than written and left to break the agent's connection to
+that server silently.
+
+#### Scenario: An unresolvable env name blocks that server's write
+- **WHEN** a canonical server declares `env: [SOME_VAR]` and `SOME_VAR`
+  has no value in the resolved secrets source (the configured `env_file`,
+  or process environment if unset)
+- **THEN** `trellis mcp sync` does not write that server for that agent
+  and reports a conflict naming the unresolved variable
+
+#### Scenario: One server's unresolved name does not block other servers or agents
+- **WHEN** one canonical server's env name fails to resolve while another
+  server's env names all resolve
+- **THEN** only the failing server is refused; every other server is
+  still written normally to every in-scope agent
 

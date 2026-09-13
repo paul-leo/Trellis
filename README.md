@@ -148,6 +148,18 @@ result is named future work, not built yet.
   `mcp sync`/`onboard` run that performs a real write adds one more run
   directory, with no cap. Delete old ones by hand for now.
 
+A canonical MCP server can also declare `enabled: false` (kept defined,
+never written to any agent) and `static_env` (a value that was never a
+secret — an email, an environment tag — written verbatim instead of
+resolved by name; still scanned against `reject_patterns` like every
+other literal field). Before ever writing a name-only `env` entry,
+`mcp sync` now checks it actually resolves through the same source
+`secrets audit` and the pi bridge use — an unresolvable name is refused
+as a conflict, not silently written and left to break that server's
+connection once the agent starts it. Both found via real-machine
+dogfooding, not a synthetic fixture — see
+[`schema/servers.example.yaml`](schema/servers.example.yaml).
+
 ## Design principles
 
 1. **One canonical source, many adapters.** Each agent's native config file is

@@ -58,6 +58,23 @@ export interface McpServerDef {
    * docs/research.md "Secrets" and schema/secrets.policy.example.yaml.
    */
   env?: string[];
+  /**
+   * Literal, non-secret values written into the agent's config verbatim
+   * — distinct from `env`'s names-only, resolved-at-runtime contract.
+   * Still scanned against `reject_patterns` like every other literal
+   * field (trellis-mcp-static-env-and-disabled-servers design.md D2):
+   * this is for values that were never secrets (an email address, an
+   * environment tag), not an escape hatch for real credentials.
+   */
+  staticEnv?: Record<string, string>;
+  /**
+   * Defaults to `true`. `false` keeps the definition in canonical
+   * without writing it to any agent — matches a real host config's own
+   * "defined but currently off" state (e.g. Codex's `enabled = false`)
+   * that omitting the definition entirely can't represent, since that
+   * would also throw away the definition itself.
+   */
+  enabled?: boolean;
   /** Omit for "all agents" (the default). See `Scope`. */
   agents?: Scope;
 }

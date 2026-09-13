@@ -23,14 +23,18 @@ export interface AdapterPlanItem {
   /**
    * "create" also covers repair (wrong symlink target, or an MCP server
    * definition that differs from canonical); "remove" is the delete half
-   * for skills/instructions — a Trellis-managed symlink whose canonical
-   * entry is gone or was just scoped away from this agent. MCP server
-   * items never use "remove" (see `kind: "mcp"` below — no ownership
-   * marker exists yet to make that provably safe, trellis-mcp-sync-p2
-   * design.md D7). "conflict" is either a real, non-symlink path
-   * occupying a spot Trellis would otherwise touch, or an MCP server
-   * refused for a collision/secrets-guard reason — reported, never acted
-   * on. See `plan()`'s doc below.
+   * for skills/instructions (a Trellis-managed symlink whose canonical
+   * entry is gone or was just scoped away from this agent) and, since
+   * trellis-mcp-lifecycle-parity, for MCP servers too — but only when
+   * `src/lib/mcpOwnership.ts`'s ledger proves the agent's current native
+   * entry is still exactly what Trellis itself last wrote there
+   * (mcpPlan.ts's own D7 reasoning: a bare TOML/JSON key has no ownership
+   * marker on its own, so this ledger is what makes removal provably
+   * safe instead of guessing). A name whose native content has since
+   * been hand-edited is left alone, never removed. "conflict" is either
+   * a real, non-symlink path occupying a spot Trellis would otherwise
+   * touch, or an MCP server refused for a collision/secrets-guard
+   * reason — reported, never acted on. See `plan()`'s doc below.
    */
   action: "create" | "remove" | "conflict";
   /** Lets `trellis sync skills` / `trellis sync instructions` /
@@ -64,6 +68,10 @@ export interface AdapterPlanItem {
    * `target` (the config file) via that agent's own mechanism (JSON
    * merge or, for Codex, `src/lib/tomlSection.ts`'s splice). */
   mcpWrite?: { name: string; def: McpServerDef };
+  /** Only set (and only meaningful) when `kind === "mcp"` and
+   * `action === "remove"`: the server name to delete from `target` via
+   * that agent's own mechanism. */
+  mcpRemove?: { name: string };
   /** Only set (and only meaningful) when `kind === "kiro-approved-env-vars"`
    * and `action === "create"`: the full, already-deduplicated array to
    * write as `kiroAgent.mcpApprovedEnvVars` — a union of whatever was

@@ -43,9 +43,11 @@ test("kiro approved env vars: a new name is appended, existing entries preserved
   initCanonical(home, "servers:\n  sample:\n    transport: stdio\n    command: node\n    env: [NEW_TOKEN]\n");
   writeKiroSettings(home, { "kiroAgent.mcpApprovedEnvVars": ["EXISTING_TOKEN"] });
 
+  process.env.NEW_TOKEN = "test-value";
   const adapter = new KiroAdapter(home);
   const canonical = loadCanonicalSource(home);
   const plan = await adapter.plan(canonical);
+  delete process.env.NEW_TOKEN;
   const item = plan.find((i) => i.kind === "kiro-approved-env-vars");
   assert.ok(item, "expected a kiro-approved-env-vars plan item");
   assert.equal(item!.action, "create");
@@ -107,9 +109,11 @@ test("kiro approved env vars: a malformed settings.json yields a conflict, never
   mkdirSync(join(home, "Library", "Application Support", "Kiro", "User"), { recursive: true });
   writeFileSync(settingsPath(home), "{ not valid json");
 
+  process.env.SOME_TOKEN = "test-value";
   const adapter = new KiroAdapter(home);
   const canonical = loadCanonicalSource(home);
   const plan = await adapter.plan(canonical);
+  delete process.env.SOME_TOKEN;
   const item = plan.find((i) => i.kind === "kiro-approved-env-vars");
   assert.ok(item, "expected a plan item");
   assert.equal(item!.action, "conflict");
@@ -139,9 +143,11 @@ test("kiro approved env vars: applying preserves every unrelated top-level key",
   initCanonical(home, "servers:\n  sample:\n    transport: stdio\n    command: node\n    env: [SOME_TOKEN]\n");
   writeKiroSettings(home, { "editor.fontSize": 14, "workbench.startupEditor": "none" });
 
+  process.env.SOME_TOKEN = "test-value";
   const adapter = new KiroAdapter(home);
   const canonical = loadCanonicalSource(home);
   const plan = await adapter.plan(canonical);
+  delete process.env.SOME_TOKEN;
   await adapter.apply(plan, openBackupSession(home, "test"));
 
   const written = JSON.parse(readFileSync(settingsPath(home), "utf-8"));
