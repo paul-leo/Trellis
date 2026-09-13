@@ -17,17 +17,23 @@ $ trellis onboard
 
 Runs `init`, detects which of Claude Code/Codex/Kiro/pi are on this machine,
 then resolves two independent choices before running `migrate`, `sync`,
-`mcp sync`, and `secrets audit` — the whole onboarding path, no follow-up
-commands to type by hand:
+`mcp sync`, `memory sync`, and `secrets audit` — the whole onboarding path,
+no follow-up commands to type by hand:
 
 1. **Migration source** — read from, at most one, never written back to.
+   "Real content" means skills, custom instructions, *or* real MCP servers
+   — an agent whose only real content is its MCP servers is still a valid
+   source.
    - **No agent has real content**: skipped — canonical starts from `init`'s
      placeholder.
    - **Exactly one agent has real content**: auto-selected, no prompt.
    - **Two or more**: prompts you to choose (Up/Down or j/k, Enter to confirm,
      on a real terminal that supports it — falls back to a numbered
      type-a-digit prompt otherwise), or pass `--agent <id>` to skip the
-     prompt entirely.
+     prompt entirely. Which *categories* to bring in from that source
+     (skills, instructions, mcp) is its own checkbox, shown only when the
+     source has real content in two or more of them — with just one, that
+     one is migrated unprompted.
 2. **Managed set** — zero or more agents to actually write to. Always an
    explicit choice: pass `--manage <ids>` (comma-separated, e.g. `--manage
    pi,codex`) or `--manage none`, or answer the interactive checkbox prompt
@@ -54,6 +60,9 @@ sync
 mcp sync
   ✅ pi — already in sync
 
+memory sync
+  no "memory" MCP server with static_env.MEMORY_FILE_PATH configured in servers.yaml — see schema/servers.example.yaml
+
 secrets audit
   ✅ no findings — every present agent's real config and every declared env var passed all checks
 ```
@@ -63,9 +72,9 @@ it's present and was the migration source, but it isn't managed, so it's
 never even probed as a sync target, not just left with zero items.
 
 Add `--dry-run` to preview the entire chain — init/migrate/sync/mcp
-sync, including what would be written to `~/.trellis/managed.yaml` — with
-zero writes anywhere (secrets audit is always read-only, with or without
-the flag).
+sync/memory sync, including what would be written to
+`~/.trellis/managed.yaml` — with zero writes anywhere (secrets audit is
+always read-only, with or without the flag).
 
 **A managed agent's own real content still isn't overwritten.** If you
 explicitly include the source in `--manage`, sync still never overwrites

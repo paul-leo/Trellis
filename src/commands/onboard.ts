@@ -34,6 +34,8 @@ import { collectMcpSyncReport, printReport as printMcpSyncReport } from "./mcp.j
 import type { McpSyncReport } from "./mcp.js";
 import { collectSecretsAuditReport, printReport as printSecretsAuditReport } from "./secretsAudit.js";
 import type { SecretsAuditReport } from "./secretsAudit.js";
+import { applyMemorySync, collectMemorySyncResult, printMemorySyncResult } from "./memory.js";
+import type { MemorySyncResult } from "./memory.js";
 import { openBackupSession } from "../lib/backup.js";
 import { confirmAndInstall } from "../lib/installAgent.js";
 import type { ConfirmAndInstallOptions } from "../lib/installAgent.js";
@@ -54,6 +56,13 @@ export interface OnboardAgentSummary {
    * of that agent's own to potentially migrate, not a judgment about
    * its quality or length. */
   hasRealInstructions: boolean;
+  /** How many real MCP servers `migrate --only mcp` would find for this
+   * agent — computed via `collectMigratePlan(agent, homeDir, ["mcp"])`
+   * rather than a second reader dispatch, so this always agrees with
+   * what migrate itself will do (design.md D1, trellis-onboard-mcp-
+   * memory). 0 for pi, which has no MCP reader at all — not a gap here,
+   * the same fact `migrate.ts` already establishes. */
+  mcpServerCount: number;
 }
 
 export async function collectOnboardSummary(homeDir: string = homedir()): Promise<OnboardAgentSummary[]> {
@@ -61,17 +70,18 @@ export async function collectOnboardSummary(homeDir: string = homedir()): Promis
     ALL_AGENTS.map(async (agent) => {
       const snapshot = await PROBES[agent](homeDir);
       if (!snapshot.present) {
-        return { agent, present: false, skillCount: 0, skillNames: [], hasRealInstructions: false };
+        return { agent, present: false, skillCount: 0, skillNames: [], hasRealInstructions: false, mcpServerCount: 0 };
       }
       const skillNames = snapshot.skillRoots.flatMap((root) => root.skills.map((s) => s.name));
       const hasRealInstructions = snapshot.instructionsFile !== undefined && !snapshot.instructionsFile.isSymlink;
-      return { agent, present: true, skillCount: skillNames.length, skillNames, hasRealInstructions };
+      const mcpPlan = await collectMigratePlan(agent, homeDir, ["mcp"]);
+      return { agent, present: true, skillCount: skillNames.length, skillNames, hasRealInstructions, mcpServerCount: mcpPlan.items.length };
     }),
   );
 }
 
 function hasContent(s: OnboardAgentSummary): boolean {
-  return s.skillCount > 0 || s.hasRealInstructions;
+  return s.skillCount > 0 || s.hasRealInstructions || s.mcpServerCount > 0;
 }
 
 export interface RunOnboardOptions {
@@ -129,6 +139,7 @@ export interface OnboardResult {
   migrateSkipped?: string;
   syncReport?: SyncReport;
   mcpSyncReport?: McpSyncReport;
+  memorySyncResult?: MemorySyncResult;
   secretsAuditReport?: SecretsAuditReport;
   refusal?: string;
   /** Only set when no agent is present — the same values `--json` and
@@ -139,7 +150,7 @@ export interface OnboardResult {
 
 function agentSummaryLabel(s: OnboardAgentSummary): string {
   const skills = s.skillCount > 0 ? ` (${s.skillNames.join(", ")})` : "";
-  return `${s.agent} — ${s.skillCount} skill(s)${skills}, instructions: ${s.hasRealInstructions ? "yes" : "no"}`;
+  return `${s.agent} — ${s.skillCount} skill(s)${skills}, instructions: ${s.hasRealInstructions ? "yes" : "no"}, mcp: ${s.mcpServerCount}`;
 }
 
 /** Numbered-typing fallback (trellis-onboard-interactive-picker design.md
@@ -232,46 +243,49 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
 
 /**
  * Resolves which categories (skills, instructions) to migrate from a
- * resolved source (trellis-migrate-category-selection). Unlike the two
- * pickers above, there is no numbered-text fallback to preserve parity
- * with — this concept never existed before this change, so "can't
- * prompt" simply means "default to whichever kind(s) actually have real
- * content, silently" (design.md D4). The picker itself is only offered
- * when the choice is meaningful — both kinds present, a capable
- * terminal, and not a `--json` run (design.md D5). An empty result is a
- * valid answer: "skip migrate for this run" (design.md D6), left for
- * the caller to act on.
+ * resolved source (trellis-migrate-category-selection, extended to a
+ * third category by trellis-onboard-mcp-memory design.md D2). Unlike the
+ * two pickers above, there is no numbered-text fallback to preserve
+ * parity with — this concept never existed before this change, so
+ * "can't prompt" simply means "default to whichever kind(s) actually
+ * have real content, silently" (design.md D4). The picker itself is
+ * only offered when the choice is meaningful — two or more kinds
+ * present, a capable terminal, and not a `--json` run (design.md D5).
+ * An empty result is a valid answer: "skip migrate for this run"
+ * (design.md D6), left for the caller to act on.
  */
 async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOnboardOptions): Promise<MigrateKind[]> {
-  const wantsSkills = source.skillCount > 0;
-  const wantsInstructions = source.hasRealInstructions;
+  // Built dynamically, in skill/instructions/mcp display order — not a
+  // fixed two- or three-slot structure, so a fourth category some day
+  // would only need an entry here, not a rewritten branch (design.md D2).
+  const candidates: { kind: MigrateKind; label: string }[] = [];
+  if (source.skillCount > 0) candidates.push({ kind: "skill", label: "skills" });
+  if (source.hasRealInstructions) candidates.push({ kind: "instructions", label: "instructions" });
+  if (source.mcpServerCount > 0) candidates.push({ kind: "mcp", label: "mcp" });
 
-  // The choice is only meaningful when both kinds are real — same gate
-  // for the injected test seam as for the real picker, mirroring how
-  // `promptForAgent`/`promptForManagedAgents` are only ever consulted
-  // when their own real prompt would actually apply.
-  if (wantsSkills && wantsInstructions && !opts.json) {
+  // The choice is only meaningful when two or more kinds are real — same
+  // gate for the injected test seam as for the real picker, mirroring
+  // how `promptForAgent`/`promptForManagedAgents` are only ever
+  // consulted when their own real prompt would actually apply.
+  if (candidates.length > 1 && !opts.json) {
     if (opts.promptForMigrateCategories) {
       return opts.promptForMigrateCategories(source);
     }
     if (canUseInteractivePicker()) {
       console.log(`Which categories should be migrated from ${source.agent}? Space to toggle, Enter to confirm:`);
-      const indices = await runMultiSelectPicker(["skills", "instructions"], [true, true]);
+      const indices = await runMultiSelectPicker(
+        candidates.map((c) => c.label),
+        candidates.map(() => true),
+      );
       if (indices === null) {
         console.log("cancelled, no changes made");
         process.exit(1);
       }
-      const kinds: MigrateKind[] = [];
-      if (indices.includes(0)) kinds.push("skill");
-      if (indices.includes(1)) kinds.push("instructions");
-      return kinds;
+      return indices.map((i) => candidates[i].kind);
     }
   }
 
-  const kinds: MigrateKind[] = [];
-  if (wantsSkills) kinds.push("skill");
-  if (wantsInstructions) kinds.push("instructions");
-  return kinds;
+  return candidates.map((c) => c.kind);
 }
 
 /** Shared by `--manage` and the interactive prompt's answer — same
@@ -441,6 +455,17 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   const syncReport = await collectSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession });
   const mcpSyncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession });
   backupSession?.finalize();
+
+  // Independent of `managedAgents` — the shared memory server is not
+  // per-agent (design.md D4, trellis-onboard-mcp-memory), unlike
+  // sync/mcp-sync above. Runs unconditionally once reached; an
+  // unconfigured `memory` server is a legitimate "nothing to do yet"
+  // state (design.md D5), not gated on any prior step here.
+  const memorySyncResult = collectMemorySyncResult(homeDir);
+  if (!opts.dryRun) {
+    applyMemorySync(memorySyncResult);
+  }
+
   // Read-only, no dryRun concept — same report either way, run last since
   // it audits the config mcp sync just wrote (or, on --dry-run, whatever
   // was already there before this run).
@@ -456,6 +481,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     migrateSkipped,
     syncReport,
     mcpSyncReport,
+    memorySyncResult,
     secretsAuditReport,
   };
 }
@@ -470,10 +496,12 @@ export async function runOnboard(opts: RunOnboardOptions = {}): Promise<{ exitCo
   }
 
   if (result.refusal) return { exitCode: 1 };
+  const memorySyncConflict = result.memorySyncResult?.configured === true && result.memorySyncResult.plan.items.some((i) => i.action === "conflict");
   const hasConflict =
     (result.migratePlan?.items.some((i) => i.action === "conflict") ?? false) ||
     (result.syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false) ||
     (result.mcpSyncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false) ||
+    memorySyncConflict ||
     (result.secretsAuditReport?.findings.length ?? 0) > 0;
   return { exitCode: hasConflict ? 1 : 0 };
 }
@@ -536,6 +564,11 @@ function printResult(result: OnboardResult, dryRun: boolean): void {
   if (result.mcpSyncReport) {
     console.log("\nmcp sync");
     printMcpSyncReport(result.mcpSyncReport, false);
+  }
+
+  if (result.memorySyncResult) {
+    console.log("\nmemory sync");
+    printMemorySyncResult(result.memorySyncResult, false);
   }
 
   if (result.secretsAuditReport) {

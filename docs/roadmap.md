@@ -899,6 +899,35 @@ byte-identical for both transports, now covered by its own test), so
 that distinction was never stored in the first place. 350/350 tests
 passing.
 
+**P17 (✅ done, archived
+[2026-09-13-trellis-onboard-mcp-memory](../openspec/changes/archive/2026-09-13-trellis-onboard-mcp-memory/)):
+`onboard` catches up to P15/P16 — mcp and memory were never wired into
+its own orchestration.** Found by live dogfooding on a real machine:
+`onboard`'s migrate-category picker hardcoded `["skills",
+"instructions"]` — `mcp` was invisible to it regardless of how many real
+MCP servers the source agent had — and `trellis memory sync` was never
+called anywhere in `onboard`'s chain at all, despite its own docstring
+naming a complete chain. `OnboardAgentSummary` gains an
+`mcpServerCount`, computed via the already-exported
+`collectMigratePlan(agent, homeDir, ["mcp"])` rather than a second reader
+dispatch — so it always agrees with what `migrate` itself would do, and
+an agent whose only real content is MCP servers is now a valid migration
+source (previously invisible to `hasContent` entirely).
+`resolveMigrateCategories` was rewritten from a fixed two-slot structure
+to a dynamically-built list of whichever of skill/instructions/mcp have
+real content, offering the checkbox only when two or more do — not a
+bolted-on special case for a third option. `memory sync` runs as a new
+final chained stage, after `mcp sync` and before `secrets audit`,
+independent of the resolved managed-agent set (the memory server is
+shared, not per-agent); `runMemorySync`'s inline printing was extracted
+into an exported `printMemorySyncResult` so `onboard` reuses the exact
+same output format rather than a second, drifting copy of it —
+`memory.ts`'s own standalone command behavior is unchanged, confirmed by
+its existing tests passing unmodified. No change to `migrate.ts`,
+`mcp.ts`, or `memory.ts`'s own command behavior — purely `onboard`'s
+orchestration layer catching up to commands that already existed. 357/357
+tests passing.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |
@@ -918,6 +947,7 @@ passing.
 | P14 | ✅ MCP server lifecycle parity with skills: ownership-tracked safe removal on sync (migrate-in closed separately by P16) | P2, P13 |
 | P15 | ✅ Shared memory: ingest canonical `memories/*.md` into the `server-memory` store's own graph file (per-agent extraction into canonical remains a separate, open gap) | P6 |
 | P16 | ✅ MCP migrate-in: `trellis migrate --only mcp` for claude-code/kiro/codex (codex remote transport + probe HOME-scoping closed same-day, see prose above), closing the gap P14 named | P12, P14 |
+| P17 | ✅ `onboard` orchestration catches up to P15/P16: three-way migrate-category selection (mcp added), `memory sync` wired in as a chained stage | P15, P16 |
 
 No dates. This is scoped by verification milestones, not calendar time.
 Execution order for P11–P16: P11 → P12 → P13 → P14 → P15 → P16 — CRUD

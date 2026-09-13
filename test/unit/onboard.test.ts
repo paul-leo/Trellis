@@ -48,6 +48,22 @@ function writeClaudeInstructions(home: string, content: string): void {
   writeFileSync(join(home, ".claude", "CLAUDE.md"), content);
 }
 
+/** Gives claude-code one real stdio MCP server — the cheapest fixture
+ * for "this agent has real MCP content" (trellis-onboard-mcp-memory),
+ * writing directly into the same `.claude.json` `mcpServers` shape
+ * `readClaudeCodeMcpDefs` reads. */
+function writeClaudeMcpServer(home: string, name: string): void {
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { [name]: { type: "stdio", command: "some-mcp-server" } } }));
+}
+
+function writeMemoryServer(home: string, graphPath: string): void {
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    `servers:\n  memory:\n    transport: stdio\n    command: npx\n    args: ["-y", "@modelcontextprotocol/server-memory"]\n    static_env:\n      MEMORY_FILE_PATH: "${graphPath}"\n`,
+  );
+}
+
 function readManaged(home: string): string {
   return readFileSync(join(home, ".trellis", "managed.yaml"), "utf-8");
 }
@@ -442,4 +458,112 @@ test("migrate categories: --json never consults the picker seam even with both k
   assert.equal(pickerCalled, false);
   assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
   assert.equal(result.migratePlan?.items.some((i) => i.kind === "instructions"), true);
+});
+
+test("mcp-only source: an agent with zero skills and no real instructions is still a valid, auto-selected source", async () => {
+  const home = scratchHome();
+  writeClaudeMcpServer(home, "gitlab");
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.equal(result.summary.find((s) => s.agent === "claude-code")?.mcpServerCount, 1);
+  assert.equal(result.source, "claude-code");
+  assert.equal(result.sourceReason, "auto-selected");
+  assert.equal(result.migratePlan?.items.find((i) => i.name === "gitlab")?.action, "create");
+});
+
+test("migrate categories: skills + mcp real, no instructions — picker seam sees exactly two candidates, in skill/mcp order", async () => {
+  const home = scratchHome();
+  writeClaudeMcpServer(home, "gitlab");
+  writeClaudeSkill(home, "real-skill", "content\n");
+
+  let seen: string | undefined;
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    agent: "claude-code",
+    manage: "none",
+    promptForMigrateCategories: async (source) => {
+      seen = `${source.skillCount}/${source.hasRealInstructions}/${source.mcpServerCount}`;
+      return ["skill", "mcp"];
+    },
+  });
+
+  assert.equal(seen, "1/false/1", "exactly skills and mcp are real — the seam sees both counts, instructions absent");
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "mcp"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "instructions"), false);
+});
+
+test("migrate categories: all three real, unchecking instructions in the checkbox migrates only skill+mcp", async () => {
+  const home = scratchHome();
+  writeClaudeMcpServer(home, "gitlab");
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real instructions\n");
+
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    agent: "claude-code",
+    manage: "none",
+    promptForMigrateCategories: async () => ["skill", "mcp"],
+  });
+
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "mcp"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "instructions"), false);
+  assert.notEqual(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), "# real instructions\n");
+});
+
+test("migrate categories: all three real, no picker seam and no real TTY migrates all three, unprompted", async () => {
+  const home = scratchHome();
+  writeClaudeMcpServer(home, "gitlab");
+  writeClaudeSkill(home, "real-skill", "content\n");
+  writeClaudeInstructions(home, "# real instructions\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "none" });
+
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "skill"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "instructions"), true);
+  assert.equal(result.migratePlan?.items.some((i) => i.kind === "mcp"), true);
+});
+
+test("memory sync: no 'memory' server configured is reported but does not flip onboard's exit code", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const planResult = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.equal(planResult.memorySyncResult?.configured, false);
+
+  const { exitCode } = await runOnboard({ homeDir: home, manage: "none", json: true });
+  assert.equal(exitCode, 0);
+});
+
+test("memory sync: a configured server with real canonical content gets its graph written on a real run, untouched on --dry-run", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const graphPath = join(home, "graph.jsonl");
+  writeMemoryServer(home, graphPath);
+  writeFileSync(join(home, ".trellis", "memories", "notes.md"), "real memory content\n");
+
+  const dryRunResult = await collectOnboardPlan({ homeDir: home, manage: "none", dryRun: true });
+  assert.equal(dryRunResult.memorySyncResult?.configured, true);
+  assert.equal(existsSync(graphPath), false, "dry-run must not write the memory graph");
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.equal(result.memorySyncResult?.configured, true);
+  assert.ok(existsSync(graphPath));
+  assert.match(readFileSync(graphPath, "utf-8"), /notes/);
+});
+
+test("memory sync: a real conflict (colliding non-trellis entity) makes onboard exit non-zero", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const graphPath = join(home, "graph.jsonl");
+  writeFileSync(graphPath, `${JSON.stringify({ type: "entity", name: "notes", entityType: "person", observations: ["not ours"] })}\n`);
+  writeMemoryServer(home, graphPath);
+  writeFileSync(join(home, ".trellis", "memories", "notes.md"), "canonical content\n");
+
+  const { exitCode } = await runOnboard({ homeDir: home, manage: "none", json: true });
+  assert.equal(exitCode, 1);
+  assert.ok(readFileSync(graphPath, "utf-8").includes("not ours"), "the pre-existing entity must survive untouched");
 });

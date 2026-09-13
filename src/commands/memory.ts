@@ -58,6 +58,27 @@ export function applyMemorySync(result: MemorySyncResult): void {
   writeFileSync(result.graphPath, renderMemoryGraph(result.plan.nextGraph));
 }
 
+/**
+ * Extracted from `runMemorySync` (trellis-onboard-mcp-memory) so
+ * `onboard`'s own chained output can print this stage in the exact same
+ * format without a second, drifting copy — mirrors the
+ * `collect...Report`/`print...Report` export pair every other chained
+ * stage (`sync`, `mcp sync`, `secrets audit`) already has.
+ */
+export function printMemorySyncResult(result: MemorySyncResult, dryRun: boolean): void {
+  if (!result.configured) {
+    console.log(result.reason);
+    return;
+  }
+  console.log(`${dryRun ? "[dry run] " : ""}memory sync — ${result.graphPath}`);
+  if (result.plan.items.length === 0) {
+    console.log("  nothing in canonical memories/ yet");
+  }
+  for (const item of result.plan.items) {
+    console.log(`  [${item.action}] "${item.name}" — ${item.detail}`);
+  }
+}
+
 export function runMemorySync(opts: RunMemorySyncOptions = {}): { exitCode: number } {
   const homeDir = opts.homeDir ?? homedir();
   let result: MemorySyncResult;
@@ -74,16 +95,8 @@ export function runMemorySync(opts: RunMemorySyncOptions = {}): { exitCode: numb
 
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
-  } else if (!result.configured) {
-    console.log(result.reason);
   } else {
-    console.log(`${opts.dryRun ? "[dry run] " : ""}memory sync — ${result.graphPath}`);
-    if (result.plan.items.length === 0) {
-      console.log("  nothing in canonical memories/ yet");
-    }
-    for (const item of result.plan.items) {
-      console.log(`  [${item.action}] "${item.name}" — ${item.detail}`);
-    }
+    printMemorySyncResult(result, opts.dryRun ?? false);
   }
 
   const hasConflict = result.configured && result.plan.items.some((i) => i.action === "conflict");
