@@ -45,6 +45,17 @@ test("readClaudeCodeMcpDefs: converts a real http server with headers", () => {
   rmSync(home, { recursive: true, force: true });
 });
 
+test("readClaudeCodeMcpDefs: converts a real sse server with headers, distinct from http", () => {
+  const home = scratchHome();
+  writeFileSync(
+    join(home, ".claude.json"),
+    JSON.stringify({ mcpServers: { "remote-sse": { type: "sse", url: "https://mcp.example.com/sse", headers: { Authorization: "Bearer ${SSE_TOKEN}" } } } }),
+  );
+  const result = readClaudeCodeMcpDefs(home);
+  assert.deepEqual(result.entries, [{ name: "remote-sse", def: { transport: "sse", url: "https://mcp.example.com/sse", headers: { Authorization: "Bearer ${SSE_TOKEN}" } } }]);
+  rmSync(home, { recursive: true, force: true });
+});
+
 test("readClaudeCodeMcpDefs: no .claude.json or no mcpServers is an empty result, not an error", () => {
   const home = scratchHome();
   assert.deepEqual(readClaudeCodeMcpDefs(home), { entries: [], unsupported: [] });

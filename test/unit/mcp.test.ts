@@ -323,6 +323,20 @@ test("mcp add: a new http/sse server with static_env is added", () => {
   assert.deepEqual(entries.find((e) => e.name === "remote")?.staticEnv, { MODE: "prod", REGION: "us" });
 });
 
+test("mcp add: writing into a fresh `trellis init`-style servers.yaml (servers: {}) renders block style, not one unreadable flow-style line", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers: {}\n");
+
+  applyMcpAddPlan(collectMcpAddPlan("gitlab", { transport: "stdio", command: "npx", env: "GITLAB_PERSONAL_ACCESS_TOKEN" }, home), home);
+  applyMcpAddPlan(collectMcpAddPlan("remote-http", { transport: "http", url: "https://mcp.example.com/http", headers: "Authorization=Bearer ${HTTP_TOKEN}" }, home), home);
+
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  // `${HTTP_TOKEN}` legitimately contains braces (env-var-reference
+  // syntax) — checked precisely below instead of a blanket "no { at all".
+  assert.match(written, /servers:\n {2}gitlab:\n {4}transport: stdio/, `expected block-style, got:\n${written}`);
+  assert.match(written, / {4}headers:\n {6}Authorization: Bearer \$\{HTTP_TOKEN\}/, `expected block-style headers, got:\n${written}`);
+});
+
 test("mcp add: adding over an existing name with different settings refuses, no write (no --force, D4)", () => {
   const home = scratchHome();
   initCanonical(home, "servers:\n  sample:\n    transport: stdio\n    command: node\n");

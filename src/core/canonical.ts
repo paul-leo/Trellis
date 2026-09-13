@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { parse as parseYaml, parseDocument } from "yaml";
+import { isMap, parse as parseYaml, parseDocument } from "yaml";
 import type { AgentId, AgentProfile, CanonicalSource, McpConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
 import { ALL_AGENTS } from "./types.js";
 
@@ -130,6 +130,23 @@ export type ServersYamlWriteResult = { ok: true } | { ok: false; error: string }
  * the touched entry. Refuses (no write) if the file doesn't exist yet
  * (run `trellis init` first) or fails to parse.
  */
+/**
+ * `trellis init`'s starter `servers.yaml` writes `servers: {}` — an empty
+ * flow-style map, since there's nothing to indent yet. `Document#setIn`
+ * inserting into an *existing* flow map keeps rendering it as flow, so
+ * the first `mcp add`/`migrate --only mcp` onto a fresh file — and every
+ * one after it — would render as one unreadable line (found via actually
+ * running the CLI against a fresh `init`, not by inspection). Forcing the
+ * touched map, and the newly-set entry's own map, to block style is a
+ * one-line, local fix — it never touches any sibling entry's own style,
+ * so a file someone deliberately kept flow-style elsewhere is untouched.
+ */
+function forceBlockStyle(node: unknown): void {
+  if (isMap(node)) {
+    node.flow = false;
+  }
+}
+
 export function upsertServerYaml(path: string, name: string, def: McpServerDef): ServersYamlWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
@@ -141,6 +158,8 @@ export function upsertServerYaml(path: string, name: string, def: McpServerDef):
     return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
   }
   doc.setIn(["servers", name], toServerDefYaml(def));
+  forceBlockStyle(doc.get("servers", true));
+  forceBlockStyle(doc.getIn(["servers", name], true));
   writeFileSync(path, doc.toString());
   return { ok: true };
 }

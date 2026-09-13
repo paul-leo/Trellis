@@ -110,6 +110,13 @@ test("upsertSection: an http transport def renders a url, not command/args", () 
   assert.ok(!result.includes("command"));
 });
 
+test("upsertSection: sse renders identically to http on Codex — no distinct sse concept in its own schema (trellis-migrate-mcp-servers)", () => {
+  const httpResult = upsertSection("", "remote", { transport: "http", url: "https://mcp.example.com/x", headers: { Authorization: "Bearer ${TOKEN}" } });
+  const sseResult = upsertSection("", "remote", { transport: "sse", url: "https://mcp.example.com/x", headers: { Authorization: "Bearer ${TOKEN}" } });
+  assert.equal(httpResult, sseResult, "Codex has no transport-specific rendering — sse and http must produce byte-identical TOML");
+  assert.ok(sseResult.includes('bearer_token_env_var = "TOKEN"'));
+});
+
 test("codexBearerTokenEnvVar: recognizes the single Authorization/Bearer/${VAR} shape", () => {
   assert.equal(codexBearerTokenEnvVar({ transport: "http", url: "x", headers: { Authorization: "Bearer ${MY_TOKEN}" } }), "MY_TOKEN");
 });
