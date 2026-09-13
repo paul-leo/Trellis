@@ -133,6 +133,19 @@ which was silently invalid). Trellis's contribution here is `trellis secrets
 audit` — a linter that fails a build if any adapter output contains a raw
 credential — not a new secret store.
 
+A third real incident during migrate-in: a source config's `${VAR}`
+reference doesn't always name itself (`OPENAPI_MCP_HEADERS:
+"${NOTION_OPENAPI_MCP_HEADERS}"`, a real Notion MCP server entry). Migrate's
+read path originally only recognized a same-named reference as one; a
+differently-named reference silently fell through as a literal, unexpanded
+value — harmless on Claude Code/Codex (both expand `${VAR}` themselves from
+their own native config format), but a hard crash on pi, whose bridge has no
+`${VAR}` runtime of its own and merges an unrecognized value verbatim.
+`McpServerDef.envAliases` (target key → source variable name) closes this:
+every agent's adapter renders it through the exact same reference mechanism
+`env` already uses, and the pi bridge resolves it through the exact same
+`resolveSecretEnv` call.
+
 ## pi coding agent — the one place we write real code, not config generation
 
 Reverse-engineered directly from the installed binary

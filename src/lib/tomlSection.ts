@@ -171,7 +171,13 @@ export function renderServerSection(name: string, def: McpServerDef): string {
     const bearerEnvVar = codexBearerTokenEnvVar(def);
     if (bearerEnvVar) lines.push(`bearer_token_env_var = ${tomlString(bearerEnvVar)}`);
   }
-  const staticEnvEntries = Object.entries(def.staticEnv ?? {});
+  // `envAliases`' target key gets a literal `${sourceName}` placeholder
+  // in the same env table `staticEnv` writes to — Codex's own runtime
+  // expands it from its own ambient environment, the same mechanism
+  // `env_vars` already relies on for a same-named reference
+  // (trellis-migrate-env-var-alias D3).
+  const aliasEntries = Object.entries(def.envAliases ?? {}).map(([targetKey, sourceName]) => [targetKey, `\${${sourceName}}`] as const);
+  const staticEnvEntries = [...aliasEntries, ...Object.entries(def.staticEnv ?? {})];
   if (staticEnvEntries.length > 0) {
     lines.push(`[${envHeader(name)}]`);
     for (const [key, value] of staticEnvEntries) {

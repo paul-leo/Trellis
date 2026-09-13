@@ -11,6 +11,12 @@
 #     scanned against `reject_patterns` like everything else, so a real
 #     credential accidentally placed there is still refused, not silently
 #     written (trellis-mcp-static-env-and-disabled-servers).
+#   - `env_aliases` is for a var whose own name differs from the name it
+#     should resolve (`target_key: source_variable_name`) — resolved
+#     through the exact same mechanism as `env`, just delivered under a
+#     different key. Do NOT reach for `static_env` here: a "${SOURCE_NAME}"
+#     string looks like it works but ships unexpanded to any agent with no
+#     `${VAR}` runtime of its own (trellis-migrate-env-var-alias).
 #   - `enabled: false` keeps a server's definition in canonical without
 #     writing it to any agent — for a server you want to keep configured
 #     but not currently active everywhere, matching how a real agent's
@@ -77,6 +83,18 @@ servers:
     command: npx
     args: ["-y", "@zereight/mcp-gitlab"]
     env: [GITLAB_PERSONAL_ACCESS_TOKEN, GITLAB_API_URL]
+
+  # `env_aliases`: the server wants `OPENAPI_MCP_HEADERS`, but your secret
+  # manager holds it under a differently-named variable — a real example
+  # found via migrating an actual Notion MCP server entry. Same resolution
+  # discipline as `env`, just target-key -> source-name instead of
+  # self-named.
+  notion:
+    transport: stdio
+    command: npx
+    args: ["-y", "@notionhq/notion-mcp-server"]
+    env_aliases:
+      OPENAPI_MCP_HEADERS: NOTION_OPENAPI_MCP_HEADERS
 
   # `enabled: false` keeps this definition in canonical without writing it
   # to any agent — for something you want configured but not currently

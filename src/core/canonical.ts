@@ -19,13 +19,14 @@ interface ScopeYaml {
 }
 
 /**
- * The on-disk shape for one server entry — `static_env` (snake_case, like
- * every other multi-word key across `.trellis/*.yaml`) is translated to
- * `McpServerDef.staticEnv` (camelCase) below; every other field happens
- * to already be a single word, so no server-def field needed this
- * treatment before (trellis-mcp-static-env-and-disabled-servers).
+ * The on-disk shape for one server entry — `static_env`/`env_aliases`
+ * (snake_case, like every other multi-word key across `.trellis/*.yaml`)
+ * are translated to `McpServerDef.staticEnv`/`envAliases` (camelCase)
+ * below; every other field happens to already be a single word, so no
+ * server-def field needed this treatment before
+ * (trellis-mcp-static-env-and-disabled-servers, trellis-migrate-env-var-alias).
  */
-type McpServerDefYaml = Omit<McpServerDef, "staticEnv"> & { static_env?: Record<string, string> };
+type McpServerDefYaml = Omit<McpServerDef, "staticEnv" | "envAliases"> & { static_env?: Record<string, string>; env_aliases?: Record<string, string> };
 
 interface ServersYaml {
   servers?: Record<string, McpServerDefYaml>;
@@ -34,17 +35,21 @@ interface ServersYaml {
 }
 
 function fromServerDefYaml(def: McpServerDefYaml): McpServerDef {
-  const { static_env, ...rest } = def;
-  return static_env ? { ...rest, staticEnv: static_env } : rest;
+  const { static_env, env_aliases, ...rest } = def;
+  const out: McpServerDef = { ...rest };
+  if (static_env) out.staticEnv = static_env;
+  if (env_aliases) out.envAliases = env_aliases;
+  return out;
 }
 
 /** Inverse of `fromServerDefYaml` (trellis-canonical-cli-crud) — strips
  * `undefined` fields so the written YAML never gets a literal `null`
  * for an omitted optional. */
 export function toServerDefYaml(def: McpServerDef): McpServerDefYaml {
-  const { staticEnv, ...rest } = def;
+  const { staticEnv, envAliases, ...rest } = def;
   const out: Record<string, unknown> = { ...rest };
   if (staticEnv) out.static_env = staticEnv;
+  if (envAliases) out.env_aliases = envAliases;
   for (const key of Object.keys(out)) {
     if (out[key] === undefined) delete out[key];
   }

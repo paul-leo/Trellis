@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadCanonicalSource } from "../../src/core/canonical.js";
+import { loadCanonicalSource, upsertServerYaml } from "../../src/core/canonical.js";
 
 function tmpHome(): string {
   return mkdtempSync(join(tmpdir(), "trellis-canonical-"));
@@ -82,6 +82,39 @@ test("loadCanonicalSource: a populated mcp/servers.yaml populates canonical.mcp"
   assert.deepEqual(source.mcp.servers["claude-only"].agents, ["claude-code"]);
   assert.deepEqual(source.mcp.knownHostInjected, ["sentry", "memory"]);
   assert.equal(source.mcp.hub?.url, "http://127.0.0.1:37373/mcp");
+});
+
+test("loadCanonicalSource: env_aliases (snake_case on disk) loads into McpServerDef.envAliases (camelCase)", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  writeFileSync(
+    join(root, "mcp", "servers.yaml"),
+    ["servers:", "  notion:", "    transport: stdio", "    command: npx", "    env_aliases:", "      OPENAPI_MCP_HEADERS: NOTION_OPENAPI_MCP_HEADERS", ""].join("\n"),
+  );
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp.servers.notion.envAliases, { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" });
+});
+
+test("upsertServerYaml: writes envAliases as env_aliases (snake_case), and it round-trips back through loadCanonicalSource", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  writeFileSync(join(root, "mcp", "servers.yaml"), "servers: {}\n");
+
+  const result = upsertServerYaml(join(root, "mcp", "servers.yaml"), "notion", {
+    transport: "stdio",
+    command: "npx",
+    envAliases: { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" },
+  });
+  assert.equal(result.ok, true);
+
+  const written = readFileSync(join(root, "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /env_aliases:\n {6}OPENAPI_MCP_HEADERS: NOTION_OPENAPI_MCP_HEADERS/);
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp.servers.notion.envAliases, { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" });
 });
 
 test("loadCanonicalSource: a missing mcp/servers.yaml yields an empty, valid mcp config", () => {

@@ -206,6 +206,23 @@ test("renderServerSection: staticEnv renders an adjacent [mcp_servers.<name>.env
   ]);
 });
 
+test("renderServerSection: envAliases renders as target = \"${sourceName}\" in the same adjacent env table as staticEnv", () => {
+  const section = renderServerSection("notion", {
+    transport: "stdio",
+    command: "npx",
+    envAliases: { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" },
+    staticEnv: { REGION: "us-east-1" },
+  });
+  const lines = section.split("\n");
+  assert.deepEqual(lines, [
+    "[mcp_servers.notion]",
+    'command = "npx"',
+    "[mcp_servers.notion.env]",
+    'OPENAPI_MCP_HEADERS = "${NOTION_OPENAPI_MCP_HEADERS}"',
+    'REGION = "us-east-1"',
+  ]);
+});
+
 test("upsertSection: a new server with staticEnv creates both tables as one unit", () => {
   const result = upsertSection(FIXTURE, "tanka", { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_ENV: "sd-or" } });
   assert.ok(result.includes("[mcp_servers.tanka]"));

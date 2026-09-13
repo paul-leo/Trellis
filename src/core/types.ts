@@ -68,6 +68,18 @@ export interface McpServerDef {
    */
   staticEnv?: Record<string, string>;
   /**
+   * Target env var name -> source variable name, for a reference whose
+   * key differs from the name it resolves (`OPENAPI_MCP_HEADERS:
+   * "${NOTION_OPENAPI_MCP_HEADERS}"` becomes `{ OPENAPI_MCP_HEADERS:
+   * "NOTION_OPENAPI_MCP_HEADERS" }`) — `env`'s self-referencing shape
+   * can't express a differently-named source, and treating this case as
+   * `staticEnv` silently ships the literal, unexpanded placeholder text
+   * to any consumer with no native `${VAR}` runtime of its own
+   * (trellis-migrate-env-var-alias). Resolved through the exact same
+   * mechanism as `env`, never a raw literal.
+   */
+  envAliases?: Record<string, string>;
+  /**
    * Defaults to `true`. `false` keeps the definition in canonical
    * without writing it to any agent — matches a real host config's own
    * "defined but currently off" state (e.g. Codex's `enabled = false`)

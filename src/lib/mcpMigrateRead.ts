@@ -36,30 +36,36 @@ export interface McpMigrateReadResult {
 const EMPTY_RESULT: McpMigrateReadResult = { entries: [], unsupported: [] };
 
 /**
- * Trellis's own `env` (name-only reference) vs. `staticEnv` (literal
- * value) split lives in one JSON object on disk (`jsonMcp.ts`'s
- * `renderJsonServerEntry`) — a value is a "name" entry only when it's
- * exactly `${KEY}` referencing its OWN key, matching exactly what that
- * renderer ever produces; anything else (a literal value, or a `${...}`
- * referencing a *different* name) is treated as a literal `staticEnv`
- * value instead of guessed at.
+ * Trellis's own `env` (self-referencing name) vs. `envAliases`
+ * (differently-named reference) vs. `staticEnv` (literal value) split
+ * lives in one JSON object on disk (`jsonMcp.ts`'s
+ * `renderJsonServerEntry`) — any value matching exactly `${NAME}` is a
+ * reference needing resolution, regardless of whether `NAME` equals its
+ * own key (trellis-migrate-env-var-alias; previously only the
+ * same-name case was recognized, silently shipping a differently-named
+ * reference as an unresolved literal). Anything not shaped like
+ * `${NAME}` at all remains a literal `staticEnv` value.
  */
-const SELF_VAR_REF_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const VAR_REF_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
-function splitJsonEnvMap(env: Record<string, string> | undefined): Pick<McpServerDef, "env" | "staticEnv"> {
+function splitJsonEnvMap(env: Record<string, string> | undefined): Pick<McpServerDef, "env" | "envAliases" | "staticEnv"> {
   if (!env) return {};
   const names: string[] = [];
+  const aliases: Record<string, string> = {};
   const literal: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    const match = SELF_VAR_REF_RE.exec(value);
+    const match = VAR_REF_RE.exec(value);
     if (match && match[1] === key) {
       names.push(key);
+    } else if (match) {
+      aliases[key] = match[1];
     } else {
       literal[key] = value;
     }
   }
-  const result: Pick<McpServerDef, "env" | "staticEnv"> = {};
+  const result: Pick<McpServerDef, "env" | "envAliases" | "staticEnv"> = {};
   if (names.length > 0) result.env = names;
+  if (Object.keys(aliases).length > 0) result.envAliases = aliases;
   if (Object.keys(literal).length > 0) result.staticEnv = literal;
   return result;
 }
@@ -174,8 +180,17 @@ export function buildCodexMcpReadResult(mcpEntries: CodexMcpEntryRich[], tomlCon
     if (entry.transport.args && entry.transport.args.length > 0) def.args = entry.transport.args;
     if (entry.transport.env_vars && entry.transport.env_vars.length > 0) def.env = entry.transport.env_vars;
     if (tomlContent) {
-      const staticEnv = readServerEnvTable(tomlContent, entry.name);
-      if (staticEnv && Object.keys(staticEnv).length > 0) def.staticEnv = staticEnv;
+      const envTable = readServerEnvTable(tomlContent, entry.name);
+      if (envTable && Object.keys(envTable).length > 0) {
+        // Same `${NAME}`-reference-vs-literal classification as the
+        // JSON-source path (trellis-migrate-env-var-alias D2) — Codex's
+        // `[mcp_servers.<name>.env]` table can hold either, same as
+        // Claude Code/Kiro's `env` object can.
+        const classified = splitJsonEnvMap(envTable);
+        if (classified.env) def.env = [...(def.env ?? []), ...classified.env];
+        if (classified.envAliases) def.envAliases = classified.envAliases;
+        if (classified.staticEnv) def.staticEnv = classified.staticEnv;
+      }
     }
     entries.push({ name: entry.name, def });
   }

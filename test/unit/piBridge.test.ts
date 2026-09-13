@@ -121,6 +121,31 @@ test("pi bridge: with no env_file, the spawned server receives the ambient proce
   }
 });
 
+test("pi bridge: envAliases resolves the source name and delivers it under the target key — never the raw ${sourceName} placeholder text (the real notion-on-pi crash)", async () => {
+  const home = scratchHome();
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    `servers:\n  fixture:\n    transport: stdio\n    command: node\n    args:\n      - ${fixtureServer}\n      - ${home}\n    env_aliases:\n      OPENAPI_MCP_HEADERS: NOTION_OPENAPI_MCP_HEADERS\n`,
+  );
+
+  process.env.NOTION_OPENAPI_MCP_HEADERS = '{"Authorization":"Bearer real-token"}';
+  try {
+    const pi = fakePi();
+    await trellisMcpBridge(pi as never, home);
+
+    const envTool = pi.tools.find((t) => t.name === "fixture__env");
+    assert.ok(envTool, "expected fixture__env to be registered");
+    const result = await envTool!.execute("call-1", { name: "OPENAPI_MCP_HEADERS" });
+    assert.equal(result.content[0]?.text, '{"Authorization":"Bearer real-token"}');
+  } finally {
+    delete process.env.NOTION_OPENAPI_MCP_HEADERS;
+    killFixtureChildren(home);
+  }
+});
+
 test("pi bridge: a resolved header actually reaches the outbound HTTP request to a remote server", async () => {
   let capturedHeaders: IncomingHttpHeaders | undefined;
   const server = createServer((req, res) => {

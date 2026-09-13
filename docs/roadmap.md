@@ -948,6 +948,7 @@ tests passing.
 | P15 | ✅ Shared memory: ingest canonical `memories/*.md` into the `server-memory` store's own graph file (per-agent extraction into canonical remains a separate, open gap) | P6 |
 | P16 | ✅ MCP migrate-in: `trellis migrate --only mcp` for claude-code/kiro/codex (codex remote transport + probe HOME-scoping closed same-day, see prose above), closing the gap P14 named | P12, P14 |
 | P17 | ✅ `onboard` orchestration catches up to P15/P16: three-way migrate-category selection (mcp added), `memory sync` wired in as a chained stage | P15, P16 |
+| P18 | ✅ `envAliases`: a migrated `${NAME}` env reference whose name differs from its own key (found via live dogfooding — a real Notion MCP server crashing pi after migrate, not a hypothetical) is now recognized as a reference, not silently shipped as literal unexpanded placeholder text. New `McpServerDef.envAliases` field, threaded through migrate-read (both JSON and Codex TOML sources), every adapter's write path, the pre-write unresolvable-env refusal guard, the pi bridge's runtime resolution, and canonical's own `env_aliases`/`envAliases` on-disk round-trip | P16 |
 
 No dates. This is scoped by verification milestones, not calendar time.
 Execution order for P11–P16: P11 → P12 → P13 → P14 → P15 → P16 — CRUD

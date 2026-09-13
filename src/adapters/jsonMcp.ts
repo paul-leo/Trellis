@@ -28,7 +28,12 @@ export function renderJsonServerEntry(def: McpServerDef): Record<string, unknown
   }
   const entry: Record<string, unknown> = { type: "stdio", command: def.command, args: def.args ?? [] };
   const nameRefs = Object.fromEntries((def.env ?? []).map((name) => [name, `\${${name}}`]));
-  const env = { ...nameRefs, ...(def.staticEnv ?? {}) };
+  // `envAliases`' target key gets a placeholder referencing its (possibly
+  // differently-named) source variable — same literal-placeholder
+  // mechanism as `nameRefs` above, trusting Claude Code/Kiro's own
+  // runtime to expand it (trellis-migrate-env-var-alias D3).
+  const aliasRefs = Object.fromEntries(Object.entries(def.envAliases ?? {}).map(([targetKey, sourceName]) => [targetKey, `\${${sourceName}}`]));
+  const env = { ...nameRefs, ...aliasRefs, ...(def.staticEnv ?? {}) };
   if (Object.keys(env).length > 0) {
     entry.env = env;
   }

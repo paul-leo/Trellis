@@ -34,6 +34,23 @@ test("readClaudeCodeMcpDefs: converts a real stdio server with env names and sta
   rmSync(home, { recursive: true, force: true });
 });
 
+test("readClaudeCodeMcpDefs: a differently-named ${NAME} reference migrates to envAliases, not staticEnv (the real notion case)", () => {
+  const home = scratchHome();
+  writeFileSync(
+    join(home, ".claude.json"),
+    JSON.stringify({
+      mcpServers: {
+        notion: { type: "stdio", command: "npx", args: ["-y", "@notionhq/notion-mcp-server"], env: { OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}" } },
+      },
+    }),
+  );
+  const result = readClaudeCodeMcpDefs(home);
+  assert.deepEqual(result.entries, [
+    { name: "notion", def: { transport: "stdio", command: "npx", args: ["-y", "@notionhq/notion-mcp-server"], envAliases: { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" } } },
+  ]);
+  rmSync(home, { recursive: true, force: true });
+});
+
 test("readClaudeCodeMcpDefs: converts a real http server with headers", () => {
   const home = scratchHome();
   writeFileSync(
@@ -90,6 +107,14 @@ test("buildCodexMcpReadResult: a stdio entry with env_vars and a matching TOML s
   assert.deepEqual(result.entries, [
     { name: "gitlab", def: { transport: "stdio", command: "npx", args: ["-y", "@zereight/mcp-gitlab"], env: ["GITLAB_PERSONAL_ACCESS_TOKEN"], staticEnv: { GITLAB_API_URL: "https://gitlab.example.com" } } },
   ]);
+});
+
+test("buildCodexMcpReadResult: a differently-named ${NAME} reference in the TOML env table migrates to envAliases, not staticEnv", () => {
+  const entries: CodexMcpEntryRich[] = [{ name: "notion", enabled: true, transport: { type: "stdio", command: "npx" } }];
+  const toml = `[mcp_servers.notion]\ncommand = "npx"\n[mcp_servers.notion.env]\nOPENAPI_MCP_HEADERS = "\${NOTION_OPENAPI_MCP_HEADERS}"\n`;
+  const result = buildCodexMcpReadResult(entries, toml);
+  assert.deepEqual(result.unsupported, []);
+  assert.deepEqual(result.entries, [{ name: "notion", def: { transport: "stdio", command: "npx", envAliases: { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" } } }]);
 });
 
 test("buildCodexMcpReadResult: a real streamable_http entry (url only) converts to transport: http", () => {

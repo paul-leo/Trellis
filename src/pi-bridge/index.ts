@@ -97,8 +97,15 @@ async function connectWithCleanup(client: Client, transport: Transport, timeoutM
 
 async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy, timeoutMs: number): Promise<Client> {
   const client = new Client(CLIENT_INFO, { capabilities: {} });
-  const resolved = resolveSecretEnv(def.env ?? [], secretsPolicy);
+  const envAliases = def.envAliases ?? {};
+  // `envAliases`' values are source variable names — resolved through the
+  // exact same call as `env`'s own names, never delivered as the raw
+  // `${sourceName}` placeholder text a consumer with no `${VAR}` runtime
+  // of its own (like this bridge) would otherwise crash on parsing
+  // (trellis-migrate-env-var-alias, the real notion-on-pi bug).
+  const resolved = resolveSecretEnv([...(def.env ?? []), ...Object.values(envAliases)], secretsPolicy);
   const namedEnv = Object.fromEntries((def.env ?? []).map((name) => [name, resolved[name] ?? ""]));
+  const aliasEnv = Object.fromEntries(Object.entries(envAliases).map(([targetKey, sourceName]) => [targetKey, resolved[sourceName] ?? ""]));
   const transport = new StdioClientTransport({
     command: def.command!,
     args: def.args,
@@ -107,7 +114,7 @@ async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy, tim
     // entry's empty-string fallback for the same key — though in practice
     // resolveMcpPlan's D6 refusal never lets an unresolved name reach
     // this point at all (trellis-mcp-static-env-and-disabled-servers).
-    env: { ...getDefaultEnvironment(), ...namedEnv, ...(def.staticEnv ?? {}) },
+    env: { ...getDefaultEnvironment(), ...namedEnv, ...aliasEnv, ...(def.staticEnv ?? {}) },
   });
   return connectWithCleanup(client, transport as Transport, timeoutMs, `connect timed out after ${timeoutMs}ms`);
 }

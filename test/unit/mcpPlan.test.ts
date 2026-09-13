@@ -192,6 +192,21 @@ test("resolveMcpPlan: an unresolvable env name is refused as a conflict, not sil
   assert.match(result.conflicts[0].message, /no resolvable value/);
 });
 
+test("resolveMcpPlan: an unresolvable envAliases source name is refused, naming the source name not the target key", () => {
+  const config = mcp({
+    servers: {
+      notion: { transport: "stdio", command: "npx", envAliases: { OPENAPI_MCP_HEADERS: "DEFINITELY_NOT_SET_ANYWHERE_ALIAS_99999" } },
+    },
+  });
+  delete process.env.DEFINITELY_NOT_SET_ANYWHERE_ALIAS_99999;
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired, []);
+  assert.equal(result.conflicts.length, 1);
+  assert.match(result.conflicts[0].message, /DEFINITELY_NOT_SET_ANYWHERE_ALIAS_99999/);
+  assert.doesNotMatch(result.conflicts[0].message, /OPENAPI_MCP_HEADERS/);
+  assert.match(result.conflicts[0].message, /no resolvable value/);
+});
+
 test("resolveMcpPlan: one server's unresolved env name doesn't block another server or agent", () => {
   const config = mcp({
     servers: {

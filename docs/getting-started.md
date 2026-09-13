@@ -354,6 +354,19 @@ not currently active anywhere; remove the line (or set it `true`) to
 turn it back on everywhere at once. See
 [`schema/servers.example.yaml`](../schema/servers.example.yaml) for both.
 
+If a server's own env var name differs from the one it should resolve
+(a real example: Notion's MCP server wants `OPENAPI_MCP_HEADERS`, but
+your shell/secret manager holds it under `NOTION_OPENAPI_MCP_HEADERS`),
+use `env_aliases` instead of either `env` or `static_env` —
+`target_key: source_variable_name`. It resolves through the exact same
+mechanism as `env` (the same pre-write refusal check, the same agent
+`${VAR}` reference on every target), just delivered under a different
+key. Writing that kind of reference as `static_env` looks like it works
+(the placeholder text is still just a string) but ships the literal,
+unexpanded `${SOURCE_NAME}` text to any agent with no `${VAR}` runtime
+of its own — which is exactly what broke pi's Notion connection before
+this field existed.
+
 ## `trellis memory sync`
 
 Ingests `~/.trellis/memories/*.md` into the actual on-disk file

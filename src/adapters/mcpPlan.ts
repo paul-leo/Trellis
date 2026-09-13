@@ -79,9 +79,16 @@ function findLiteralSecret(def: McpServerDef): string | undefined {
  * proposal.md "Why"). Uses the identical `resolveSecretEnv` `secrets
  * audit`/the pi bridge already call, so this and a later `secrets audit`
  * run can never disagree about what resolves.
+ *
+ * `envAliases`' values are themselves source variable names needing the
+ * exact same resolution — checked in the same pass so a differently-named
+ * reference gets the same pre-write refusal `env` already has, naming the
+ * unresolved *source* name (what the caller must find a value for), not
+ * the target key it would have been written under
+ * (trellis-migrate-env-var-alias).
  */
 function findUnresolvedEnvName(def: McpServerDef, policy: SecretsPolicy): string | undefined {
-  const names = def.env ?? [];
+  const names = [...(def.env ?? []), ...Object.values(def.envAliases ?? {})];
   if (names.length === 0) return undefined;
   const resolved = resolveSecretEnv(names, policy);
   return names.find((name) => !resolved[name]);

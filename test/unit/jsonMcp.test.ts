@@ -25,6 +25,23 @@ test("renderJsonServerEntry: staticEnv values render as literals alongside ${VAR
   assert.deepEqual(entry, { type: "stdio", command: "tanka-mcp", args: [], env: { SOME_TOKEN: "${SOME_TOKEN}", TANKA_ENV: "sd-or" } });
 });
 
+test("renderJsonServerEntry: envAliases renders target key -> ${sourceName}, alongside env and staticEnv in the same map", () => {
+  const entry = renderJsonServerEntry({
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "@notionhq/notion-mcp-server"],
+    env: ["SOME_TOKEN"],
+    envAliases: { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" },
+    staticEnv: { REGION: "us-east-1" },
+  });
+  assert.deepEqual(entry, {
+    type: "stdio",
+    command: "npx",
+    args: ["-y", "@notionhq/notion-mcp-server"],
+    env: { SOME_TOKEN: "${SOME_TOKEN}", OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}", REGION: "us-east-1" },
+  });
+});
+
 test("renderJsonServerEntry: staticEnv alone (no env names) still renders an env map", () => {
   const entry = renderJsonServerEntry({ transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_EMAIL: "a@b.com" } });
   assert.deepEqual(entry, { type: "stdio", command: "tanka-mcp", args: [], env: { TANKA_EMAIL: "a@b.com" } });
