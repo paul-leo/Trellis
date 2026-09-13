@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { KiroAdapter } from "../../src/adapters/kiro.js";
 import { loadCanonicalSource } from "../../src/core/canonical.js";
+import { openBackupSession } from "../../src/lib/backup.js";
 
 function scratchHome(): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-kiro-approved-"));
@@ -24,6 +25,7 @@ function initCanonical(home: string, serversYaml: string): void {
   mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
   writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
   writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), serversYaml);
+  writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [kiro]\n");
 }
 
 function settingsPath(home: string): string {
@@ -49,7 +51,7 @@ test("kiro approved env vars: a new name is appended, existing entries preserved
   assert.equal(item!.action, "create");
   assert.deepEqual(item!.approvedEnvVars, ["EXISTING_TOKEN", "NEW_TOKEN"]);
 
-  await adapter.apply(plan);
+  await adapter.apply(plan, openBackupSession(home, "test"));
   const written = JSON.parse(readFileSync(settingsPath(home), "utf-8"));
   assert.deepEqual(written["kiroAgent.mcpApprovedEnvVars"], ["EXISTING_TOKEN", "NEW_TOKEN"]);
 });
@@ -112,7 +114,7 @@ test("kiro approved env vars: a malformed settings.json yields a conflict, never
   assert.ok(item, "expected a plan item");
   assert.equal(item!.action, "conflict");
 
-  await adapter.apply(plan);
+  await adapter.apply(plan, openBackupSession(home, "test"));
   assert.equal(readFileSync(settingsPath(home), "utf-8"), "{ not valid json");
 });
 
@@ -140,7 +142,7 @@ test("kiro approved env vars: applying preserves every unrelated top-level key",
   const adapter = new KiroAdapter(home);
   const canonical = loadCanonicalSource(home);
   const plan = await adapter.plan(canonical);
-  await adapter.apply(plan);
+  await adapter.apply(plan, openBackupSession(home, "test"));
 
   const written = JSON.parse(readFileSync(settingsPath(home), "utf-8"));
   assert.equal(written["editor.fontSize"], 14);

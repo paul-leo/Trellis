@@ -15,12 +15,21 @@ import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
 import { PiAdapter } from "../adapters/pi.js";
+import { openBackupSession, type BackupSession } from "../lib/backup.js";
 
 export interface RunMcpSyncOptions {
   json?: boolean;
   /** Same test/sandbox-only seam as `RunSyncOptions.homeDir` — never a CLI
    * flag. See docs/architecture.md's testing philosophy. */
   homeDir?: string;
+  /** Compute and report the plan without calling adapter.apply(). */
+  dryRun?: boolean;
+  /** Onboard-only seam — see RunSyncOptions.managedAgents. Never a CLI
+   * flag. */
+  managedAgents?: readonly AgentId[];
+  /** Onboard-only seam — see RunSyncOptions.backupSession. Never a CLI
+   * flag. */
+  backupSession?: BackupSession;
 }
 
 export interface AgentMcpSyncReport {
@@ -33,16 +42,28 @@ export interface McpSyncReport {
   reports: AgentMcpSyncReport[];
 }
 
-function buildAdapters(homeDir: string): TrellisAdapter[] {
-  return [new ClaudeCodeAdapter(homeDir), new CodexAdapter(homeDir), new KiroAdapter(homeDir), new PiAdapter(homeDir)];
+const ADAPTER_FACTORY: Record<AgentId, (homeDir: string) => TrellisAdapter> = {
+  "claude-code": (homeDir) => new ClaudeCodeAdapter(homeDir),
+  codex: (homeDir) => new CodexAdapter(homeDir),
+  kiro: (homeDir) => new KiroAdapter(homeDir),
+  pi: (homeDir) => new PiAdapter(homeDir),
+};
+
+/** Only agents in `canonical.managedAgents` — see src/commands/sync.ts's
+ * own copy of this same restriction (trellis-managed-agents). */
+function buildAdapters(homeDir: string, managedAgents: readonly AgentId[]): TrellisAdapter[] {
+  return managedAgents.map((id) => ADAPTER_FACTORY[id](homeDir));
 }
 
 export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promise<McpSyncReport> {
   const homeDir = opts.homeDir ?? homedir();
-  const canonical = loadCanonicalSource(homeDir);
+  const loaded = loadCanonicalSource(homeDir);
+  const canonical = opts.managedAgents ? { ...loaded, managedAgents: opts.managedAgents } : loaded;
   const reports: AgentMcpSyncReport[] = [];
+  const ownSession = !opts.dryRun && !opts.backupSession ? openBackupSession(homeDir, "mcp-sync") : undefined;
+  const backup = opts.backupSession ?? ownSession;
 
-  for (const adapter of buildAdapters(homeDir)) {
+  for (const adapter of buildAdapters(homeDir, canonical.managedAgents)) {
     const probeResult = await adapter.probe();
     if (!probeResult.present) {
       reports.push({ agent: adapter.id, present: false, items: [] });
@@ -50,10 +71,13 @@ export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promis
     }
 
     const items = (await adapter.plan(canonical)).filter((item) => item.kind === "mcp");
-    await adapter.apply(items);
+    if (!opts.dryRun) {
+      await adapter.apply(items, backup!);
+    }
     reports.push({ agent: adapter.id, present: true, items });
   }
 
+  ownSession?.finalize();
   return { reports };
 }
 
@@ -69,14 +93,22 @@ export async function runMcpSync(opts: RunMcpSyncOptions = {}): Promise<{ exitCo
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    printReport(report);
+    printReport(report, opts.dryRun ?? false);
   }
 
   const hasConflict = report.reports.some((r) => r.items.some((i) => i.action === "conflict"));
   return { exitCode: hasConflict ? 1 : 0 };
 }
 
-function printReport(report: McpSyncReport): void {
+/** Exported so `onboard` prints an mcp-sync report identically to running
+ * `mcp sync` standalone, instead of a second, easily-drifting copy of this
+ * formatting. */
+export function printReport(report: McpSyncReport, dryRun: boolean): void {
+  if (dryRun) console.log("[dry run]");
+  if (report.reports.length === 0) {
+    console.log("No managed agents yet — run `trellis onboard` or list agent ids in ~/.trellis/managed.yaml.");
+    return;
+  }
   for (const { agent, present, items } of report.reports) {
     if (!present) {
       console.log(`—  ${agent} (not installed)`);

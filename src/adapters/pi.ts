@@ -18,6 +18,7 @@ import { isInScope } from "../core/adapter.js";
 import type { CanonicalSource } from "../core/types.js";
 import * as piProbe from "../probes/pi.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
+import type { BackupSession } from "../lib/backup.js";
 
 const BRIDGE_SYMLINK_NAME = "trellis-mcp-bridge.js";
 
@@ -63,7 +64,7 @@ export class PiAdapter implements TrellisAdapter {
     const agentDir = join(this.homeDir, ".pi", "agent");
 
     const desiredSkills = canonical.skills
-      .filter((skill) => isInScope(this.id, skill.scope))
+      .filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
     const skillItems = planSymlinks({
@@ -94,8 +95,8 @@ export class PiAdapter implements TrellisAdapter {
     return [...skillItems, ...instructionsItems, ...extensionItems];
   }
 
-  async apply(plan: AdapterPlanItem[]): Promise<void> {
-    await applySymlinkPlan(plan);
+  async apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
+    await applySymlinkPlan(plan, backup);
   }
 
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {
@@ -105,7 +106,7 @@ export class PiAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope)).map((s) => s.name));
+    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

@@ -28,6 +28,9 @@ export interface RunSecretsAuditOptions {
   /** Same test/sandbox-only seam as every other command — never a CLI
    * flag. See docs/architecture.md's testing philosophy. */
   homeDir?: string;
+  /** Onboard-only seam — see RunSyncOptions.managedAgents. Never a CLI
+   * flag. */
+  managedAgents?: readonly AgentId[];
 }
 
 export interface SecretsFinding {
@@ -50,15 +53,18 @@ interface AuditedAgent {
   extractNames: (content: string) => string[];
 }
 
-function auditedAgents(homeDir: string): AuditedAgent[] {
-  return [
+/** Only agents in `managedAgents` — a present-but-unmanaged agent's config
+ * file is never even read (trellis-managed-agents), same restriction as
+ * `sync`/`mcp sync`. pi has no static, generated MCP config file to audit
+ * regardless of management — its bridge reads mcp/servers.yaml directly at
+ * its own runtime (P4). See design.md Non-Goals in trellis-secrets-audit-p3. */
+function auditedAgents(homeDir: string, managedAgents: readonly AgentId[]): AuditedAgent[] {
+  const all: AuditedAgent[] = [
     { id: "claude-code", probe: () => new ClaudeCodeAdapter(homeDir).probe(), configPath: (h) => join(h, ".claude.json"), extractNames: extractJsonEnvVarNames },
     { id: "codex", probe: () => new CodexAdapter(homeDir).probe(), configPath: (h) => join(h, ".codex", "config.toml"), extractNames: extractTomlEnvVarNames },
     { id: "kiro", probe: () => new KiroAdapter(homeDir).probe(), configPath: (h) => join(h, ".kiro", "settings", "mcp.json"), extractNames: extractJsonEnvVarNames },
-    // pi has no static, generated MCP config file to audit — its bridge
-    // reads mcp/servers.yaml directly at its own runtime (P4). See
-    // design.md Non-Goals in trellis-secrets-audit-p3.
   ];
+  return all.filter((a) => managedAgents.includes(a.id));
 }
 
 /**
@@ -107,9 +113,10 @@ function auditFile(agent: AgentId, file: string, content: string, policy: Secret
 export async function collectSecretsAuditReport(opts: RunSecretsAuditOptions = {}): Promise<SecretsAuditReport> {
   const homeDir = opts.homeDir ?? homedir();
   const canonical = loadCanonicalSource(homeDir);
+  const managedAgents = opts.managedAgents ?? canonical.managedAgents;
   const findings: SecretsFinding[] = [];
 
-  for (const agent of auditedAgents(homeDir)) {
+  for (const agent of auditedAgents(homeDir, managedAgents)) {
     const probeResult = await agent.probe();
     if (!probeResult.present) continue;
 
@@ -143,7 +150,10 @@ export async function runSecretsAudit(opts: RunSecretsAuditOptions = {}): Promis
   return { exitCode: report.findings.length > 0 ? 1 : 0 };
 }
 
-function printReport(report: SecretsAuditReport): void {
+/** Exported so `onboard` prints a secrets-audit report identically to
+ * running `secrets audit` standalone, instead of a second, easily-drifting
+ * copy of this formatting. */
+export function printReport(report: SecretsAuditReport): void {
   if (report.findings.length === 0) {
     console.log("✅ no findings — every present agent's real config and every declared env var passed all checks");
     return;

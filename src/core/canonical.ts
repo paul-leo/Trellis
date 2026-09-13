@@ -30,6 +30,10 @@ interface SecretsPolicyYaml {
   env_file?: string;
 }
 
+interface ManagedYaml {
+  agents?: string[];
+}
+
 function trellisRoot(homeDir: string): string {
   return join(homeDir, ".trellis");
 }
@@ -102,6 +106,26 @@ function loadSecretsPolicyYaml(path: string, homeDir: string): SecretsPolicy {
 /** `undefined` if the name has no entry in scope.yaml's map — "shared with
  * all four agents," the default. A recognized but empty list is left as
  * authored (an explicitly agent-less scope), not coerced to "all". */
+/** Missing file and `agents: []` both resolve to `[]` — zero managed
+ * agents (D1), never "everyone." An unrecognized id is dropped with a
+ * diagnostic, same posture as an unrecognized scope.yaml agent id. */
+function loadManagedYaml(path: string, diagnostics: string[]): AgentId[] {
+  if (!existsSync(path)) {
+    return [];
+  }
+  const parsed = (parseYaml(readFileSync(path, "utf-8")) ?? {}) as ManagedYaml;
+  const raw = parsed.agents ?? [];
+  const valid: AgentId[] = [];
+  for (const id of raw) {
+    if ((ALL_AGENTS as readonly string[]).includes(id)) {
+      valid.push(id as AgentId);
+    } else {
+      diagnostics.push(`managed.yaml: "${id}" is not a recognized agent id — ignored`);
+    }
+  }
+  return valid;
+}
+
 function scopeFor(map: Record<string, AgentId[]> | undefined, name: string): Scope {
   return map?.[name];
 }
@@ -128,6 +152,7 @@ export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSourc
   }
 
   const diagnostics: string[] = [];
+  const managedAgents = loadManagedYaml(join(root, "managed.yaml"), diagnostics);
   const scopeYaml = loadScopeYaml(join(root, "scope.yaml"));
 
   const skillDirs = listSkillDirs(join(root, "skills"));
@@ -167,6 +192,7 @@ export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSourc
 
   return {
     instructionsFile: join(root, "agents.md"),
+    managedAgents,
     skills,
     agents,
     memories,

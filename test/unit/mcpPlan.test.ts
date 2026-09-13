@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { HUB_ENTRY_NAME, resolveMcpPlan } from "../../src/adapters/mcpPlan.js";
+import { ALL_AGENTS } from "../../src/core/types.js";
 import type { McpConfig } from "../../src/core/types.js";
 
 function mcp(overrides: Partial<McpConfig> = {}): McpConfig {
@@ -9,7 +10,7 @@ function mcp(overrides: Partial<McpConfig> = {}): McpConfig {
 
 test("resolveMcpPlan: an unscoped server is desired for every agent", () => {
   const config = mcp({ servers: { tanka: { transport: "stdio", command: "tanka-mcp" } } });
-  const result = resolveMcpPlan("claude-code", config);
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, "tanka");
   assert.deepEqual(result.conflicts, []);
@@ -19,8 +20,8 @@ test("resolveMcpPlan: a server scoped to one agent is excluded elsewhere", () =>
   const config = mcp({
     servers: { "claude-only": { transport: "stdio", command: "node", agents: ["claude-code"] } },
   });
-  assert.equal(resolveMcpPlan("claude-code", config).desired.length, 1);
-  assert.equal(resolveMcpPlan("codex", config).desired.length, 0);
+  assert.equal(resolveMcpPlan("claude-code", config, ALL_AGENTS).desired.length, 1);
+  assert.equal(resolveMcpPlan("codex", config, ALL_AGENTS).desired.length, 0);
 });
 
 test("resolveMcpPlan: a name colliding with known_host_injected is a conflict, not desired", () => {
@@ -28,7 +29,7 @@ test("resolveMcpPlan: a name colliding with known_host_injected is a conflict, n
     servers: { sentry: { transport: "stdio", command: "node" } },
     knownHostInjected: ["sentry", "memory"],
   });
-  const result = resolveMcpPlan("codex", config);
+  const result = resolveMcpPlan("codex", config, ALL_AGENTS);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /url is not supported for stdio/);
@@ -39,7 +40,7 @@ test("resolveMcpPlan: the same collision on a non-Codex agent has no Codex-speci
     servers: { sentry: { transport: "stdio", command: "node" } },
     knownHostInjected: ["sentry"],
   });
-  const result = resolveMcpPlan("claude-code", config);
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.equal(result.conflicts.length, 1);
   assert.ok(!result.conflicts[0].message.includes("url is not supported for stdio"));
 });
@@ -50,7 +51,7 @@ test("resolveMcpPlan: a literal secret in args is refused, not desired", () => {
       leaky: { transport: "stdio", command: "node", args: ["--token", "glpat-abc123def456"] },
     },
   });
-  const result = resolveMcpPlan("claude-code", config);
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /GitLab personal access token/);
@@ -67,7 +68,7 @@ test("resolveMcpPlan: env variable NAMES (not values) never trigger the secrets 
       },
     },
   });
-  const result = resolveMcpPlan("claude-code", config);
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.equal(result.desired.length, 1);
   assert.deepEqual(result.conflicts, []);
 });
@@ -78,7 +79,7 @@ test("resolveMcpPlan: a bearer-token-shaped headers field is desired for Codex",
       remote: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${TOKEN}" } },
     },
   });
-  const result = resolveMcpPlan("codex", config);
+  const result = resolveMcpPlan("codex", config, ALL_AGENTS);
   assert.equal(result.desired.length, 1);
   assert.deepEqual(result.conflicts, []);
 });
@@ -89,12 +90,12 @@ test("resolveMcpPlan: a non-bearer-token headers shape is a Codex-only conflict"
       remote: { transport: "http", url: "https://example.com/mcp", headers: { "X-Api-Key": "${KEY}" } },
     },
   });
-  const codexResult = resolveMcpPlan("codex", config);
+  const codexResult = resolveMcpPlan("codex", config, ALL_AGENTS);
   assert.deepEqual(codexResult.desired, []);
   assert.equal(codexResult.conflicts.length, 1);
   assert.match(codexResult.conflicts[0].message, /no generic headers concept/);
 
-  const claudeResult = resolveMcpPlan("claude-code", config);
+  const claudeResult = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.equal(claudeResult.desired.length, 1);
   assert.deepEqual(claudeResult.conflicts, []);
 });
@@ -105,7 +106,7 @@ test("resolveMcpPlan: a literal secret in a headers value is refused, not desire
       leaky: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "glpat-abc123def456" } },
     },
   });
-  const result = resolveMcpPlan("claude-code", config);
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /GitLab personal access token/);
@@ -119,7 +120,7 @@ test("resolveMcpPlan: hub mode collapses every server to one trellis-hub entry",
     },
     hub: { url: "http://127.0.0.1:37373/mcp" },
   });
-  const result = resolveMcpPlan("claude-code", config);
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, HUB_ENTRY_NAME);
   assert.equal(result.desired[0].def.url, "http://127.0.0.1:37373/mcp");
@@ -131,7 +132,7 @@ test("resolveMcpPlan: hub mode collision check runs only against the hub entry n
     knownHostInjected: [HUB_ENTRY_NAME],
     hub: { url: "http://127.0.0.1:37373/mcp" },
   });
-  const result = resolveMcpPlan("claude-code", config);
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.equal(result.conflicts[0].name, HUB_ENTRY_NAME);

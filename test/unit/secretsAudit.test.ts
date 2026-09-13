@@ -19,10 +19,11 @@ function scratchHome(): string {
   return home;
 }
 
-function initCanonical(home: string, policyYaml: string): void {
+function initCanonical(home: string, policyYaml: string, managed: string[] = ["claude-code", "codex", "kiro"]): void {
   mkdirSync(join(home, ".trellis"), { recursive: true });
   writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
   writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), policyYaml);
+  writeFileSync(join(home, ".trellis", "managed.yaml"), `agents: [${managed.join(", ")}]\n`);
 }
 
 const CLEAN_POLICY = "allowed_vars:\n  - GITLAB_PERSONAL_ACCESS_TOKEN\nreject_patterns:\n  - 'glpat-[A-Za-z0-9_-]{20,}'\n";
@@ -81,6 +82,15 @@ test("secrets audit: an absent agent contributes no findings and its file is nev
     report.findings.filter((f) => f.agent === "claude-code"),
     [],
   );
+});
+
+test("secrets audit: a present-but-unmanaged agent's config is never even read (trellis-managed-agents)", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY, ["claude-code"]);
+  writeFileSync(join(home, ".codex", "config.toml"), 'model = "x"\n\n[mcp_servers.bad]\ncommand = "glpat-abc123def456ghi789"\n');
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  assert.deepEqual(report.findings.filter((f) => f.agent === "codex"), [], "codex is present but not managed — never scanned");
 });
 
 test("secrets audit: never modifies any file it reads", async () => {

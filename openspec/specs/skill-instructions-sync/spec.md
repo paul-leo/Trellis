@@ -4,50 +4,76 @@
 TBD - created by archiving change trellis-sync-p1. Update Purpose after archive.
 ## Requirements
 ### Requirement: Scope filtering excludes out-of-scope items from every plan
+
 Every adapter's `plan()` SHALL filter skills and the instructions file
-through `isInScope` before producing any plan item. An item scoped away
-from an adapter's agent SHALL produce zero plan items for that adapter,
-never a plan item that `apply()` later skips.
+through `isInScope`, resolved against the current managed-agents list
+(`agent-management-scope`'s `resolveScope`), before producing any plan
+item. An item scoped away from an adapter's agent — including an agent
+simply not in the managed set at all, whether or not it's present on this
+machine — SHALL produce zero plan items for that adapter, never a plan
+item that `apply()` later skips.
 
 #### Scenario: A skill scoped to one agent appears only there
-- **WHEN** a skill is scoped to `[claude-code]` in `scope.yaml` and
-  `trellis sync skills` runs against all four agents
+- **WHEN** a skill is scoped to `[claude-code]` in `scope.yaml`, and
+  claude-code is in the managed set
 - **THEN** only the Claude Code adapter's plan contains an item for that
   skill; Codex, Kiro, and pi's plans contain none
+
+#### Scenario: An unscoped skill reaches only the managed set, not every present agent
+- **WHEN** a skill has no `scope` entry, `managed.yaml` lists `[pi]`, and
+  Codex and Kiro are also present on this machine
+- **THEN** `trellis sync` plans an item for pi only — Codex and Kiro,
+  though present, are not built as adapters at all for this run and
+  receive no report line
+
+#### Scenario: An agent absent from the managed set gets no adapter, present or not
+- **WHEN** Codex is present on this machine but not in `managed.yaml`
+- **THEN** `trellis sync` does not probe, plan, or report on Codex at
+  all — it is simply not part of the run, distinct from being probed and
+  found to have zero in-scope items
 
 ### Requirement: apply() creates or repairs a symlink for an in-scope skill
 The system SHALL create a symlink from an agent's skill root to the
 canonical skill's directory when none exists, and SHALL repair it when an
-existing symlink points at the wrong target. Re-running `apply()` against
-an already-correct symlink SHALL be a no-op.
+existing symlink points at the wrong target, recording each create/repair
+through the run's backup session (`trellis-backup-rollback`) before
+performing it. Re-running `apply()` against an already-correct symlink
+SHALL be a no-op and SHALL NOT record anything.
 
 #### Scenario: First sync creates the symlink
 - **WHEN** an in-scope skill has no corresponding entry yet in an agent's
   skill root
 - **THEN** `apply()` creates a symlink there pointing at the canonical
-  skill's directory
+  skill's directory, and the backup session records a `symlink-create`
+  operation for it
 
 #### Scenario: A wrong-target symlink is repaired
 - **WHEN** an agent's skill root already has a symlink for that skill
   name, but it points somewhere other than the canonical skill's directory
-- **THEN** `apply()` repoints it to the correct target
+- **THEN** `apply()` repoints it to the correct target, and the backup
+  session records a `symlink-repair` operation with the symlink's prior
+  target
 
 #### Scenario: Re-running against a correct symlink is a no-op
 - **WHEN** `apply()` runs against a skill whose symlink already points at
   the correct canonical directory
-- **THEN** no filesystem write occurs and no error is raised
+- **THEN** no filesystem write occurs, no error is raised, and nothing is
+  recorded in the backup session
 
 ### Requirement: apply() removes a stale Trellis-managed symlink
 The system SHALL detect a symlink in an agent's skill root whose realpath
 resolves inside the canonical `skills/` root, but whose corresponding
 skill entry no longer exists in canonical or was just scoped away from
-that agent, and SHALL remove it.
+that agent, and SHALL remove it, recording the removal (including the
+symlink's prior target, so it can be recreated) through the run's backup
+session before performing it.
 
 #### Scenario: A deleted canonical skill is removed from every agent it reached
 - **WHEN** a skill previously synced to Claude Code and Kiro is deleted
   from `~/.trellis/skills/`, and `trellis sync skills` runs again
 - **THEN** the corresponding symlink is removed from both Claude Code's and
-  Kiro's skill roots
+  Kiro's skill roots, and a `symlink-remove` operation recording each
+  prior target is added to the run's backup session
 
 #### Scenario: A newly-scoped-away skill is removed from the now-excluded agent
 - **WHEN** a skill previously unscoped (present on all agents) is given

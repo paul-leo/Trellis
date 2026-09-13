@@ -13,7 +13,7 @@
  * the way a symlink's realpath provides for skills).
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
@@ -24,6 +24,7 @@ import { readInstructionsPath } from "../probes/codex.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
 import { resolveMcpPlan } from "./mcpPlan.js";
 import { currentServerSectionText, renderServerSection, upsertSection } from "../lib/tomlSection.js";
+import type { BackupSession } from "../lib/backup.js";
 
 export class CodexAdapter implements TrellisAdapter {
   readonly name = "Codex";
@@ -41,7 +42,7 @@ export class CodexAdapter implements TrellisAdapter {
     const skillsRoot = join(this.homeDir, ".agents", "skills");
 
     const desiredSkills = canonical.skills
-      .filter((skill) => isInScope(this.id, skill.scope))
+      .filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
     const skillItems = planSymlinks({
@@ -73,7 +74,7 @@ export class CodexAdapter implements TrellisAdapter {
   private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
     const configTomlPath = join(this.homeDir, ".codex", "config.toml");
     const content = existsSync(configTomlPath) ? readFileSync(configTomlPath, "utf-8") : "";
-    const { desired, conflicts } = resolveMcpPlan(this.id, canonical.mcp);
+    const { desired, conflicts } = resolveMcpPlan(this.id, canonical.mcp, canonical.managedAgents);
 
     const items: AdapterPlanItem[] = [];
     for (const { name, def } of desired) {
@@ -96,8 +97,11 @@ export class CodexAdapter implements TrellisAdapter {
     return items;
   }
 
-  async apply(plan: AdapterPlanItem[]): Promise<void> {
-    await applySymlinkPlan(plan.filter((item) => item.kind !== "mcp"));
+  async apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
+    await applySymlinkPlan(
+      plan.filter((item) => item.kind !== "mcp"),
+      backup,
+    );
 
     const mcpCreates = plan.filter((item) => item.kind === "mcp" && item.action === "create" && item.mcpWrite);
     if (mcpCreates.length === 0) {
@@ -108,7 +112,7 @@ export class CodexAdapter implements TrellisAdapter {
     for (const item of mcpCreates) {
       content = upsertSection(content, item.mcpWrite!.name, item.mcpWrite!.def);
     }
-    writeFileSync(configTomlPath, content);
+    backup.writeFile(configTomlPath, content);
   }
 
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {
@@ -118,7 +122,7 @@ export class CodexAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope)).map((s) => s.name));
+    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

@@ -24,16 +24,18 @@ test("a fresh machine with no canonical source gets a working one", async () => 
   const home = scratchHome();
   const report = await collectInitReport(home);
 
-  assert.equal(report.files.filter((f) => f.action === "create").length, 3);
+  assert.equal(report.files.filter((f) => f.action === "create").length, 4);
   assert.ok(existsSync(join(home, ".trellis", "agents.md")));
   assert.ok(existsSync(join(home, ".trellis", "mcp", "servers.yaml")));
   assert.ok(existsSync(join(home, ".trellis", "secrets.policy.yaml")));
+  assert.ok(existsSync(join(home, ".trellis", "managed.yaml")));
 
   // loadCanonicalSource no longer refuses.
   const canonical = loadCanonicalSource(home);
   assert.deepEqual(canonical.mcp.knownHostInjected, []);
   assert.deepEqual(canonical.secretsPolicy.allowedVars, []);
   assert.ok(canonical.secretsPolicy.rejectPatterns.length > 0, "expected reject_patterns seeded from schema/secrets.policy.example.yaml");
+  assert.deepEqual(canonical.managedAgents, [], "a fresh init manages zero agents by default (trellis-managed-agents D1)");
 
   // sync/mcp sync/secrets audit all run without a "no canonical source" throw.
   await assert.doesNotReject(() => collectSyncReport({ homeDir: home }));

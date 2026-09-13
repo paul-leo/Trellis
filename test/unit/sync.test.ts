@@ -6,11 +6,12 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectSyncReport } from "../../src/commands/sync.js";
+import { backupsRoot } from "../../src/lib/backup.js";
 
 function scratchHome(): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-sync-"));
@@ -35,9 +36,10 @@ function addCanonicalSkill(home: string, name: string): void {
   writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: fixture\n---\n`);
 }
 
-function initCanonical(home: string): void {
+function initCanonical(home: string, managed: string[] = ["claude-code", "codex", "kiro", "pi"]): void {
   mkdirSync(join(home, ".trellis"), { recursive: true });
   writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
+  writeFileSync(join(home, ".trellis", "managed.yaml"), `agents: [${managed.join(", ")}]\n`);
 }
 
 test("sync: first run against an empty scratch home creates skill and instructions symlinks for every present agent", async () => {
@@ -198,4 +200,55 @@ test("sync: never touches MCP even when canonical has servers configured (regres
   assert.equal(existsSync(join(home, ".claude.json")), true);
   const claudeConfig = await import("node:fs/promises").then((fs) => fs.readFile(join(home, ".claude.json"), "utf-8"));
   assert.equal(claudeConfig, "{}", "bare sync must not write mcpServers into .claude.json");
+});
+
+test("sync: a present-but-unmanaged agent gets no adapter, no report line, no write (trellis-managed-agents)", async () => {
+  const home = scratchHome();
+  initCanonical(home, ["claude-code"]);
+  addCanonicalSkill(home, "shared-skill");
+
+  const report = await collectSyncReport({ homeDir: home });
+  assert.deepEqual(report.reports.map((r) => r.agent), ["claude-code"], "codex/kiro/pi are present but unmanaged");
+  assert.equal(existsSync(join(home, ".codex", "skills", "shared-skill")), false);
+});
+
+test("sync: zero managed agents produces zero reports, exits cleanly", async () => {
+  const home = scratchHome();
+  initCanonical(home, []);
+  addCanonicalSkill(home, "shared-skill");
+
+  const report = await collectSyncReport({ homeDir: home });
+  assert.deepEqual(report.reports, []);
+});
+
+test("sync: a real run that performs writes creates a backup run directory (trellis-backup-rollback)", async () => {
+  const home = scratchHome();
+  initCanonical(home);
+  addCanonicalSkill(home, "shared-skill");
+
+  await collectSyncReport({ homeDir: home });
+  assert.ok(existsSync(backupsRoot(home)), "a backup run directory must exist after a real, writing sync");
+  const runIds = readdirSync(backupsRoot(home));
+  assert.equal(runIds.length, 1);
+  assert.ok(runIds[0].endsWith("-sync"));
+});
+
+test("sync: --dry-run creates no backup at all", async () => {
+  const home = scratchHome();
+  initCanonical(home);
+  addCanonicalSkill(home, "shared-skill");
+
+  await collectSyncReport({ homeDir: home, dryRun: true });
+  assert.equal(existsSync(backupsRoot(home)), false);
+});
+
+test("sync: a fully in-sync run (nothing to do) creates no backup", async () => {
+  const home = scratchHome();
+  // Empty managed set: no adapter is even built, so there is nothing to
+  // create/repair/remove — the no-op case a backup session must not
+  // create a directory for.
+  initCanonical(home, []);
+
+  await collectSyncReport({ homeDir: home });
+  assert.equal(existsSync(backupsRoot(home)), false);
 });

@@ -50,9 +50,10 @@ export function planJsonMcp(opts: {
   parsed: Record<string, unknown> | undefined;
   mcp: McpConfig;
   agentId: AgentId;
+  managedAgents: readonly AgentId[];
 }): AdapterPlanItem[] {
-  const { configPath, parsed, mcp, agentId } = opts;
-  const { desired, conflicts } = resolveMcpPlan(agentId, mcp);
+  const { configPath, parsed, mcp, agentId, managedAgents } = opts;
+  const { desired, conflicts } = resolveMcpPlan(agentId, mcp, managedAgents);
   const existingServers = (parsed?.mcpServers as Record<string, unknown> | undefined) ?? {};
 
   const items: AdapterPlanItem[] = [];

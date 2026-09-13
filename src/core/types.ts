@@ -25,8 +25,17 @@ export const ALL_AGENTS: readonly AgentId[] = [
  */
 export type Scope = AgentId[] | undefined;
 
-export function resolveScope(scope: Scope): readonly AgentId[] {
-  return scope ?? ALL_AGENTS;
+/**
+ * `managedAgents` is the hard outer boundary (trellis-managed-agents
+ * design.md D6): no-scope items resolve to it instead of `ALL_AGENTS`, and
+ * an item WITH an explicit scope is intersected with it, never returned
+ * verbatim — a skill scoped to `[kiro]` must still not reach Kiro if Kiro
+ * isn't in the managed set. Presence on the machine is irrelevant here;
+ * only membership in `managedAgents` is.
+ */
+export function resolveScope(scope: Scope, managedAgents: readonly AgentId[]): readonly AgentId[] {
+  const candidates = scope ?? managedAgents;
+  return candidates.filter((id) => managedAgents.includes(id));
 }
 
 export interface McpServerDef {
@@ -211,6 +220,9 @@ export interface CanonicalSource {
    * that decision.
    */
   instructionsFile: string;
+  /** From `~/.trellis/managed.yaml`. Missing file and `agents: []` both
+   * resolve to `[]` — zero managed agents, never "everyone" (D1). */
+  managedAgents: readonly AgentId[];
   skills: SkillRef[];
   agents: AgentProfile[];
   memories: MemoryEntry[];

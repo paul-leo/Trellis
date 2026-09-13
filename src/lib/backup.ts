@@ -1,0 +1,130 @@
+/**
+ * Structured, timestamped backup of every real write `sync`/`mcp sync`
+ * perform, and the only path any of them writes disk through — see
+ * openspec/changes/trellis-backup-rollback/design.md D3/D5 for why the
+ * write itself lives here rather than at each call site: a call site
+ * that only had to remember to *also* call a record function is exactly
+ * the class of bug trellis-managed-agents found in symlinkPlan.ts. A run
+ * directory is created lazily on the first recorded operation; a session
+ * that never records anything creates nothing on disk.
+ */
+
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readlink, rm, symlink } from "node:fs/promises";
+import { basename, join } from "node:path";
+
+export type BackupOperation =
+  | { kind: "file-create"; path: string; afterHash: string }
+  | { kind: "file-overwrite"; path: string; beforeFile: string; beforeHash: string; afterHash: string }
+  | { kind: "symlink-create"; path: string; afterLinkTarget: string }
+  | { kind: "symlink-repair"; path: string; beforeLinkTarget: string; afterLinkTarget: string }
+  | { kind: "symlink-remove"; path: string; beforeLinkTarget: string };
+
+export interface BackupManifest {
+  runId: string;
+  command: string;
+  startedAt: string;
+  operations: BackupOperation[];
+}
+
+export interface BackupSession {
+  writeFile(path: string, content: string): void;
+  createSymlink(path: string, linkTarget: string): Promise<void>;
+  repairSymlink(path: string, oldLinkTarget: string, newLinkTarget: string): Promise<void>;
+  removeSymlink(path: string, oldLinkTarget: string): Promise<void>;
+  /** Writes manifest.json. No-op (creates nothing) if zero operations
+   * were ever recorded. */
+  finalize(): void;
+}
+
+function sha256(content: string): string {
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+}
+
+/** `:` and `.` are legal in POSIX filenames but awkward across shells and
+ * some tooling; replaced so a run id is safe to pass around bare. */
+function runIdFor(command: string): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${ts}-${command}`;
+}
+
+export function backupsRoot(homeDir: string): string {
+  return join(homeDir, ".trellis", "backups");
+}
+
+export function openBackupSession(homeDir: string, command: string): BackupSession {
+  const runId = runIdFor(command);
+  const runDir = join(backupsRoot(homeDir), runId);
+  const startedAt = new Date().toISOString();
+  const operations: BackupOperation[] = [];
+  let dirCreated = false;
+  let fileIndex = 0;
+
+  function ensureDir(): void {
+    if (dirCreated) return;
+    mkdirSync(join(runDir, "files"), { recursive: true });
+    dirCreated = true;
+  }
+
+  return {
+    writeFile(path: string, content: string): void {
+      ensureDir();
+      const afterHash = sha256(content);
+      if (existsSync(path)) {
+        const before = readFileSync(path, "utf-8");
+        const relSnapshot = join("files", `${fileIndex}-${basename(path)}`);
+        fileIndex += 1;
+        writeFileSync(join(runDir, relSnapshot), before);
+        operations.push({
+          kind: "file-overwrite",
+          path,
+          beforeFile: relSnapshot,
+          beforeHash: sha256(before),
+          afterHash,
+        });
+      } else {
+        operations.push({ kind: "file-create", path, afterHash });
+      }
+      writeFileSync(path, content);
+    },
+
+    async createSymlink(path: string, linkTarget: string): Promise<void> {
+      ensureDir();
+      await rm(path, { force: true });
+      await symlink(linkTarget, path);
+      operations.push({ kind: "symlink-create", path, afterLinkTarget: linkTarget });
+    },
+
+    async repairSymlink(path: string, oldLinkTarget: string, newLinkTarget: string): Promise<void> {
+      ensureDir();
+      await rm(path, { force: true });
+      await symlink(newLinkTarget, path);
+      operations.push({ kind: "symlink-repair", path, beforeLinkTarget: oldLinkTarget, afterLinkTarget: newLinkTarget });
+    },
+
+    async removeSymlink(path: string, oldLinkTarget: string): Promise<void> {
+      ensureDir();
+      await rm(path, { force: true });
+      operations.push({ kind: "symlink-remove", path, beforeLinkTarget: oldLinkTarget });
+    },
+
+    finalize(): void {
+      if (!dirCreated) return;
+      const manifest: BackupManifest = { runId, command, startedAt, operations };
+      writeFileSync(join(runDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    },
+  };
+}
+
+/** Used by `applySymlinkPlan` and every adapter's own read-before-repair
+ * logic — it needs the symlink's current stored target before the
+ * session's own repair/remove overwrites it. Not part of `BackupSession`
+ * itself: it's a read, not a recorded write. */
+export async function currentLinkTarget(path: string): Promise<string | undefined> {
+  try {
+    return await readlink(path);
+  } catch {
+    return undefined;
+  }
+}

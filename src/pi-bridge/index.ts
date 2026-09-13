@@ -23,6 +23,7 @@ import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
 import { extractTemplateVarNames } from "../lib/envVarNames.js";
+import { ALL_AGENTS } from "../core/types.js";
 import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 import { bridgedToolName, toParametersSchema, toPiContent, type McpContentItem } from "./schemaTranslate.js";
 
@@ -173,7 +174,13 @@ export default async function trellisMcpBridge(
   connectTimeoutMs: number = DEFAULT_CONNECT_TIMEOUT_MS,
 ): Promise<void> {
   const canonical = loadCanonicalSource(homeDir);
-  const { desired } = resolveMcpPlan("pi", canonical.mcp);
+  // Deliberately ALL_AGENTS, not canonical.managedAgents: this bridge only
+  // ever runs because pi itself loaded the extension — that's already the
+  // strongest possible consent signal (trellis-managed-agents design.md),
+  // independent of whether `trellis onboard` was ever run to add pi to
+  // managed.yaml. managedAgents governs static config-file writes; this
+  // is pi reading canonical directly at its own runtime, P4's own concern.
+  const { desired } = resolveMcpPlan("pi", canonical.mcp, ALL_AGENTS);
   const clients = new Set<Client>();
 
   const closeClient = async (client: Client): Promise<void> => {

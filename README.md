@@ -45,14 +45,29 @@ trellis onboard
 ```
 
 Creates canonical source, detects which of Claude Code/Codex/Kiro/pi are on
-this machine, picks a base agent to migrate from (auto-selected if only one
-is present; prompts if more than one — pass `--agent <id>` to skip the
-prompt), then runs `migrate` and `sync`. If no agent is detected, it prints
-each supported agent's real install command/URL and stops — it never
-installs anything itself. Add `--dry-run` to preview the whole thing with
-zero writes.
+this machine, then resolves two independent choices: a **migration source**
+(read from — auto-selected if only one present agent has real content,
+prompted with a numbered choice if more than one, skippable if starting
+fresh; pass `--agent <id>` to skip the prompt) and a **managed set** (written
+to — zero or more agents, chosen explicitly; pass `--manage <ids>` or
+`--manage none` to skip the prompt). The source is **not** managed by
+default — importing from Claude Code doesn't mean Trellis starts writing to
+Claude Code too, unless you explicitly include it. Selecting an agent that
+isn't installed yet (e.g. pi) is itself the authorization to install it —
+one confirmation, then a real `npm install -g <package>`; Kiro has no CLI
+package and is refused with its download URL instead. Once resolved, it
+runs `migrate`, `sync`, `mcp sync`, and `secrets audit` against the managed
+set — the whole onboarding path in one command, no follow-up commands to
+type by hand. If no agent is detected, it prints each supported agent's
+real install command/URL and stops — it never installs anything on its own
+initiative. Add `--dry-run` to preview the whole thing with zero writes.
 
-**Or step by step** (what `onboard` is actually doing under the hood):
+```
+trellis onboard --agent claude-code --manage pi
+```
+
+**Or step by step** (what `onboard` is actually doing under the hood, if you
+want to run any one stage on its own):
 
 **Already using Claude Code, Codex, Kiro, or pi and want to migrate what you
 already have?**
@@ -65,24 +80,46 @@ already have?**
    overwrites: an already-identical skill is reported and skipped, a genuine
    conflict is reported and left for you to resolve by hand. Add `--dry-run`
    to preview first.
-3. `trellis sync` — distributes canonical skills/instructions to every agent
-   present on this machine (including the ones you didn't migrate from).
-   Add `--dry-run` to preview first.
+3. `trellis sync` — distributes canonical skills/instructions to every
+   **managed** agent (`~/.trellis/managed.yaml` — empty by default; edit it
+   by hand or let `trellis onboard` write it). An agent that's merely present
+   but not managed is never touched. Add `--dry-run` to preview first.
 4. `trellis mcp sync` — distributes `~/.trellis/mcp/servers.yaml` (see
    [`schema/servers.example.yaml`](schema/servers.example.yaml)) to every
-   agent's native MCP config (create/repair only — see Known limitations).
-5. `trellis secrets audit` — fails non-zero if any agent's real config holds
-   a literal credential or an unexpected env var name.
-6. `trellis doctor` — read-only scan of every present agent's current state;
-   run any time to check for drift.
+   managed agent's native MCP config (create/repair only — see Known
+   limitations).
+5. `trellis secrets audit` — fails non-zero if any managed agent's real
+   config holds a literal credential or an unexpected env var name.
+6. `trellis doctor` — read-only scan of every present agent's current state
+   (managed or not); run any time to check for drift.
 
 **Starting from nothing?** Skip step 2 — `trellis init`'s placeholder
 `agents.md` and empty `skills/` are a fine starting point; edit them by hand.
 
+**Every real write `sync`/`mcp sync`/`onboard` perform is backed up
+first, automatically — no flag to opt in.** Before creating, repairing,
+or removing anything, each is recorded to a structured, timestamped run
+under `~/.trellis/backups/`, with enough information to invert it exactly.
+`trellis rollback` undoes one recorded run — omit a run id for the most
+recent one:
+
+```
+$ trellis rollback
+rollback 2026-09-13T04-52-18-727Z-mcp-sync
+✅ 3 restored, 0 conflict(s), 0 already reverted
+   - [restore] restore /Users/you/.claude.json to its content before this run (...)
+```
+
+If something else touched a path since the backed-up run, that one path
+is a `conflict` — reported, left untouched, never force-restored over —
+while every other path in the same rollback still restores. `--list`
+shows available runs without touching anything; `--dry-run` previews a
+restore with zero writes.
+
 ## Status
 
-**Early, pre-1.0.** All seven CLI commands above (`onboard`, `init`,
-`migrate`, `doctor`, `sync`, `mcp sync`, `secrets audit`) are implemented,
+**Early, pre-1.0.** All eight CLI commands above (`onboard`, `init`,
+`migrate`, `doctor`, `sync`, `mcp sync`, `secrets audit`, `rollback`) are implemented,
 unit-tested, and verified end-to-end against real Docker containers (never a
 developer's own dotfiles during development — see
 [`docs/architecture.md`](docs/architecture.md)'s testing philosophy). See
@@ -107,6 +144,9 @@ result is named future work, not built yet.
 - Automatic removal of an MCP server is deliberately unsupported (create/
   repair only) until an ownership-tracking mechanism exists — see
   `docs/roadmap.md`'s P2 note.
+- `~/.trellis/backups/` has no automatic pruning yet — every `sync`/
+  `mcp sync`/`onboard` run that performs a real write adds one more run
+  directory, with no cap. Delete old ones by hand for now.
 
 ## Design principles
 

@@ -467,6 +467,139 @@ symlink-safe — the reminder here: a real installed-package check is
 not a redundant formality alongside the unit suite, it's the only
 thing in this project that exercises the actual `bin` symlink at all.
 
+**`trellis-managed-agents`, done and archived**
+(`openspec/changes/archive/2026-09-13-trellis-managed-agents/`; adds
+`agent-management-scope`, modifies `onboarding-flow`,
+`skill-instructions-sync`, `mcp-server-sync`, `secrets-audit`). Fixes a
+real gap found using `onboard` for its first real migration (Claude Code
+→ pi, on this project's own developer machine): `sync`/`mcp sync`/
+`secrets audit` acted on **every present agent** unconditionally, with no
+way to say "only manage these ones." New persisted state,
+`~/.trellis/managed.yaml` — absent or `agents: []` both mean zero managed
+agents, never "everyone" (a deliberate pre-1.0 default reversal, no
+back-compat shim). `resolveScope`'s no-scope fallback changed from
+`ALL_AGENTS` to the managed set, and an item's own explicit scope is now
+intersected with it, never used verbatim — the managed set is the hard
+outer boundary every other scoping decision lives inside.
+
+`onboard` splits what used to be one "pick a base agent" choice into two
+independent ones: a **migration source** (read-only, at most one, same
+resolution rules as before) and a **managed set** (zero or more, written
+to). The source is offered in the managed-set prompt but starts
+unchecked by default — importing from Claude Code no longer implies
+Trellis should also manage Claude Code. Selecting an agent that isn't
+installed yet (e.g. pi) is itself the authorization to install it — one
+confirmation, then a real `npm install -g <package>` (`src/lib/
+installAgent.ts`), never silent even under `--manage`; Kiro has no CLI
+package and is refused with its download URL instead. Re-running
+`onboard`'s managed-set selection is a union with whatever was already
+in `managed.yaml`, never a replacement — otherwise a later run adding
+codex, forgetting to reselect pi out of habit, would silently unmanage
+it. `~/.agents` (Codex's own `~/.ai-config`-sourced skill convention) is
+now a directly tested non-goal rather than an incidental consequence of
+the ownership-conflict fix below.
+
+Found and fixed a second real bug in the same investigation, upstream of
+this change's own scope but caught while diagnosing "did the first real
+`onboard` run corrupt anything": `src/adapters/symlinkPlan.ts` treated
+*any* existing symlink at a target path as safe to repair, without
+checking whether its stored target was actually inside Trellis's own
+canonical source. A real `onboard` run silently repointed
+`~/.codex/instructions.md` and `~/.kiro/steering/CLAUDE.md` — both
+previously symlinks into a separate, user-owned `~/.ai-config` setup —
+at `~/.trellis/agents.md` instead, with zero warning. Fixed by checking
+the existing symlink's raw `readlink` target against `canonicalRoot`
+before treating it as repairable; anything pointing elsewhere is now a
+`"conflict"`, left untouched, same as a real non-symlink file always
+was. Verified against the real machine: the two symlinks were restored
+by hand, the fix confirmed via `sync instructions --dry-run` reporting
+conflicts instead of creates, and 194→197 tests passing throughout.
+
+Verified in the real Docker sandbox: baseline `sync` with all four
+fixture agents listed in `managed.yaml` reproduces the exact same output
+this project's earlier sandbox runs documented (no regression), then a
+narrowed `managed.yaml` (`agents: [pi]`) reproduces zero writes and zero
+report lines for the other three, and a full `onboard --agent
+claude-code --manage pi` run reproduces this session's own real
+use case end to end — migrate from claude-code, manage only pi, source
+left completely untouched.
+
+Then run for real, once, on this project's own developer machine (not a
+sandbox): `onboard --agent claude-code --manage pi` genuinely installed
+pi (`npm install -g @earendil-works/pi-coding-agent`, real confirmation
+prompt, real 132-package install), wrote `managed.yaml` as `agents:
+[pi]`, re-ran `migrate --from claude-code` idempotently against already-
+migrated canonical, and left claude-code, codex, and kiro completely
+untouched — including confirming codex's and kiro's instructions files
+are still real symlinks into the developer's own `~/.ai-config`, not
+touched by this run. Surfaced one genuine, undocumented boundary in the
+process: `sync`/`mcp sync` still reported pi as "not installed"
+immediately after the install, because pi's own presence probe
+(`src/probes/pi.ts`) checks for `~/.pi/agent/settings.json` or `~/.pi/
+agent/skills` on disk — neither of which `npm install` creates. pi only
+writes those itself on its own first real invocation (confirmed by
+reading its installed source: `pi list` bootstraps `~/.pi/auth.json` and
+`~/.pi/models-store.json`, but not the `agent/` subdirectory — that
+appears to need pi's own first-time-setup flow, which is interactive and
+out of scope for Trellis to force). This isn't a bug to patch around —
+faking presence would violate this project's own "verify, don't assume"
+principle — but it is a real onboarding-order gap worth documenting: run
+the newly-installed agent once yourself before `trellis sync` can do
+anything for it.
+
+**`trellis-backup-rollback`, done and archived**
+(`openspec/changes/archive/2026-09-13-trellis-backup-rollback/`; adds
+`backup-and-rollback`, modifies `skill-instructions-sync`,
+`mcp-server-sync`, `onboarding-flow`). Direct follow-up to
+`trellis-managed-agents`' own real regression (a foreign symlink silently
+repointed with zero warning): that fix made the *known* unsafe case a
+`conflict` instead, but `mcp sync`'s native-config writes were never
+provably safe the same way — `~/.claude.json`, `~/.codex/config.toml`,
+and Kiro's two settings files are read, merged or TOML-section-patched,
+and rewritten in place, and a bug in that merge/patch logic produces a
+clean write with silently wrong output, not a `conflict` any existing
+check would catch. Two earlier archived changes (`trellis-sync-p1`,
+`trellis-mcp-sync-p2`) each waved at "rollback" by pointing at their own
+create/remove mechanics; `mcp-sync-p2`'s story didn't actually hold —
+automatic MCP server removal still isn't built, so there was no real
+undo path for an `mcp sync` mistake besides hand-editing the file.
+
+Every real write `sync`/`mcp sync` perform is now recorded, before it
+happens, into a structured, timestamped run under `~/.trellis/backups/`
+(new `src/lib/backup.ts`) — enough per operation to invert it exactly:
+a file's prior bytes for an overwrite, a symlink's prior target for a
+repair or removal, or just "this didn't exist before" for a create. The
+write itself moved *into* the backup session (`session.writeFile`/
+`createSymlink`/`repairSymlink`/`removeSymlink`) rather than the session
+being an optional thing call sites remember to also invoke — the same
+lesson `trellis-managed-agents`' symlinkPlan bug taught: a safety check
+that's opt-in gets skipped eventually. `TrellisAdapter.apply()` gained a
+mandatory `BackupSession` parameter across all four adapters; there is no
+code path left that writes one of these files without going through it.
+
+New `trellis rollback [<run-id>] [--list] [--dry-run] [--json]`: restores
+one recorded run, but only where the current on-disk state still matches
+what that run itself left behind — a path touched again since (another
+sync, a hand edit) is a `conflict`, reported and left untouched, same
+"verify, never guess" posture every other conflict in this project
+already holds itself to. One path's conflict never blocks any other path
+in the same rollback. `onboard` opens one session and shares it across
+its whole chained `sync`+`mcp sync` run rather than one per stage, so a
+single `trellis rollback` undoes an entire `onboard` invocation.
+`migrate` is explicitly out of scope — it only ever creates a new
+canonical entry or refuses on conflict, never overwrites existing
+canonical content, so there's nothing real to lose there.
+
+Verified in the real Docker sandbox against `test/fixtures/home`: a real
+`mcp sync` run rewrote `.claude.json`/`.codex/config.toml`/
+`.kiro/settings/mcp.json` with several new servers, `trellis rollback`
+restored all three to their exact original bytes, confirmed byte-for-
+byte; then a second run, followed by a hand-edit simulating something
+else touching `.claude.json` after the fact, confirmed rollback reports
+exactly that one path as a `conflict` (exit 1) while still correctly
+restoring the other two, untouched, unaffected paths in the same
+invocation.
+
 | Phase | Deliverable | Depends on |
 |---|---|---|
 | P0 | ✅ `trellis doctor` — read-only, opt-in-for-handshakes scan of all four agents' current skills/MCP/instructions state, reports drift and duplicates | nothing |

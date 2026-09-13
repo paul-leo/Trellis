@@ -85,14 +85,30 @@ only auditing it after.
   written
 
 ### Requirement: Scope filtering uses each server's inline agents: field
+
 The system SHALL filter MCP servers per adapter using each server
 definition's own inline `agents:` field (not `scope.yaml`), consistent
-with `docs/architecture.md`'s "Private / agent-specific capabilities."
+with `docs/architecture.md`'s "Private / agent-specific capabilities" —
+and, regardless of that field, SHALL only build an adapter and produce
+plan items at all for agents in the current managed-agents list. An
+agent present on this machine but absent from `managed.yaml` SHALL
+receive no plan item, no write, and no report line, even if a server's
+`agents:` field would otherwise include it.
 
 #### Scenario: A server scoped to one agent is written only there
-- **WHEN** a server definition has `agents: [claude-code]`
+- **WHEN** a server definition has `agents: [claude-code]`, and
+  claude-code is in the managed set
 - **THEN** it is written to Claude Code's config only, not Codex's or
   Kiro's
+
+#### Scenario: An unscoped server reaches only the managed set
+- **WHEN** a server has no `agents:` restriction, `managed.yaml` lists
+  `[pi]`, and Claude Code/Codex/Kiro are all present
+- **THEN** `trellis mcp sync` writes nothing to Claude Code, Codex, or
+  Kiro's native config for that server — pi has no native MCP config
+  file to write to (P4's bridge reads canonical directly), so this
+  server effectively has nowhere to be written until another agent is
+  added to the managed set
 
 ### Requirement: Hub mode collapses every server to one entry per agent
 The system SHALL, when `canonical.mcp.hub` is set, write exactly one
@@ -162,4 +178,33 @@ uniformly for headers/url purposes.
 - **THEN** Claude Code's and Kiro's rendered entry has `"type": "sse"`
   (not `"http"`), with `url`/`headers` handled identically to the `http`
   case
+
+### Requirement: Every native-config rewrite goes through the run's backup session
+
+The system SHALL perform every native MCP config file write (Claude
+Code's and Kiro's JSON merges, Codex's TOML section patch, Kiro's
+approved-env-vars settings file) through the run's backup session
+(`trellis-backup-rollback`) rather than writing the file directly — the
+session reads and snapshots the file's current bytes (or records that it
+didn't exist) before the real write happens, on every single write, with
+no call site able to bypass it.
+
+#### Scenario: A Claude Code JSON merge is snapshotted before it's rewritten
+- **WHEN** `trellis mcp sync` is about to merge a new server definition
+  into `~/.claude.json`, which already has real content
+- **THEN** that file's current bytes are copied into the run's backup
+  directory before `~/.claude.json` is overwritten with the merged result
+
+#### Scenario: A Codex TOML section patch is snapshotted before it's rewritten
+- **WHEN** `trellis mcp sync` is about to patch the MCP server section of
+  `~/.codex/config.toml`
+- **THEN** the file's current full bytes (not just the section being
+  patched) are copied into the run's backup directory before the patched
+  content is written back
+
+#### Scenario: A first-ever write to a file that didn't exist records no prior bytes
+- **WHEN** `trellis mcp sync` writes to a native config file that does
+  not exist yet on this agent
+- **THEN** the backup session records that the file was newly created,
+  with no snapshot file since there was nothing to snapshot
 

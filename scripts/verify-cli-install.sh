@@ -44,4 +44,16 @@ ONBOARD_HOME="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH" "$FAKE_HOME" "$FRESH_HOME" "$ONBOARD_HOME"; rm -f agent-trellis-*.tgz' EXIT
 HOME="$ONBOARD_HOME" ./node_modules/.bin/trellis onboard --json
 
-echo "OK: the installed trellis binary runs doctor/init/migrate/onboard without crashing"
+echo "=== trellis onboard --agent/--manage against a real present agent (trellis-managed-agents) ==="
+MANAGED_HOME="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH" "$FAKE_HOME" "$FRESH_HOME" "$ONBOARD_HOME" "$MANAGED_HOME"; rm -f agent-trellis-*.tgz' EXIT
+echo "{}" > "$MANAGED_HOME/.claude.json"
+HOME="$MANAGED_HOME" ./node_modules/.bin/trellis onboard --agent claude-code --manage claude-code
+grep -q "agents: \[claude-code\]" "$MANAGED_HOME/.trellis/managed.yaml"
+
+echo "=== trellis rollback undoes the real write onboard just made (trellis-backup-rollback) ==="
+test -d "$MANAGED_HOME/.trellis/backups" || { echo "FAIL: no backup run directory created by the real onboard run"; exit 1; }
+HOME="$MANAGED_HOME" ./node_modules/.bin/trellis rollback
+test -L "$MANAGED_HOME/.claude/CLAUDE.md" && { echo "FAIL: rollback should have removed the symlink onboard created"; exit 1; }
+
+echo "OK: the installed trellis binary runs doctor/init/migrate/onboard/rollback without crashing"

@@ -9,7 +9,7 @@
  * removal (D7).
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
@@ -18,6 +18,7 @@ import type { CanonicalSource } from "../core/types.js";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
 import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
+import type { BackupSession } from "../lib/backup.js";
 
 export class ClaudeCodeAdapter implements TrellisAdapter {
   readonly name = "Claude Code";
@@ -35,7 +36,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     const skillsRoot = join(this.homeDir, ".claude", "skills");
 
     const desiredSkills = canonical.skills
-      .filter((skill) => isInScope(this.id, skill.scope))
+      .filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
     const skillItems = planSymlinks({
@@ -60,11 +61,14 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
   private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
     const configPath = join(this.homeDir, ".claude.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
-    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id });
+    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents });
   }
 
-  async apply(plan: AdapterPlanItem[]): Promise<void> {
-    await applySymlinkPlan(plan.filter((item) => item.kind !== "mcp"));
+  async apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
+    await applySymlinkPlan(
+      plan.filter((item) => item.kind !== "mcp"),
+      backup,
+    );
 
     const mcpCreates = plan.filter((item) => item.kind === "mcp" && item.action === "create" && item.mcpWrite);
     if (mcpCreates.length === 0) {
@@ -73,7 +77,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     const configPath = mcpCreates[0].target;
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
     const merged = applyJsonMcp(parsed, mcpCreates);
-    writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+    backup.writeFile(configPath, `${JSON.stringify(merged, null, 2)}\n`);
   }
 
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {
@@ -83,7 +87,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope)).map((s) => s.name));
+    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

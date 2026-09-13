@@ -12,9 +12,10 @@ import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync } from "./commands/mcp.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
+import { runRollback } from "./commands/rollback.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "secrets"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "secrets", "rollback"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -23,13 +24,21 @@ Usage:
   trellis <command>
 
 Commands:
-  onboard   Guided flow: init -> detect agents -> pick a base agent ->
-            migrate -> sync, in one command
-              --agent <agent>    non-interactive base-agent choice
-                                 (required with 2+ agents present and
-                                 no terminal to prompt in, e.g. --json)
-              --dry-run          preview the whole flow, write nothing
-              --json             machine-readable output, no report text
+  onboard   Guided flow: init -> detect agents -> pick a migration source ->
+            pick which agents to manage -> migrate -> sync -> mcp sync ->
+            secrets audit, in one command. Source (read from) and managed
+            set (written to) are independent; the source is not managed
+            by default.
+              --agent <agent>       non-interactive migration-source
+                                    choice (required with 2+ candidates
+                                    and no terminal to prompt in)
+              --manage <ids|none>   non-interactive managed-set choice,
+                                    e.g. --manage pi,codex ; --manage none
+                                    means "add nothing new this run"
+                                    (required with no terminal to prompt
+                                    in, e.g. --json)
+              --dry-run             preview the whole flow, write nothing
+              --json                machine-readable output, no report text
   init      Create ~/.trellis/ with a minimal valid skeleton if missing
               (never overwrites an existing file — fills in only what's
               missing) and prints which agents are present
@@ -51,11 +60,21 @@ Commands:
               --json       machine-readable output, no report text
   mcp sync  Distribute MCP servers to each agent's native config
               (create/repair only — no automatic removal, see docs/roadmap.md)
-              --json    machine-readable output, no report text
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
   secrets audit
             Scan each present agent's real MCP config for leaked
             credentials and unexpected env var names
               --json    machine-readable output, no report text
+  rollback [<run-id>]
+            Undo one recorded sync/mcp-sync/onboard run (every real write
+              it performed is backed up first, under
+              ~/.trellis/backups/) — omit <run-id> for the most recent
+              run. Refuses per-path (a conflict, not overwritten) if the
+              path changed since that run.
+              --list       show available backup runs, don't restore
+              --dry-run    preview what would be restored, write nothing
+              --json       machine-readable output, no report text
 
 See docs/roadmap.md for what's built vs. planned.`);
 }
@@ -78,7 +97,9 @@ async function main(argv: string[]): Promise<void> {
   if (command === "onboard") {
     const agentIndex = rest.indexOf("--agent");
     const agent = agentIndex >= 0 ? rest[agentIndex + 1] : undefined;
-    const { exitCode } = await runOnboard({ agent, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
+    const manageIndex = rest.indexOf("--manage");
+    const manage = manageIndex >= 0 ? rest[manageIndex + 1] : undefined;
+    const { exitCode } = await runOnboard({ agent, manage, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
     process.exitCode = exitCode;
     return;
   }
@@ -123,7 +144,7 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const { exitCode } = await runMcpSync({ json: rest.includes("--json") });
+    const { exitCode } = await runMcpSync({ json: rest.includes("--json"), dryRun: rest.includes("--dry-run") });
     process.exitCode = exitCode;
     return;
   }
@@ -136,6 +157,16 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     const { exitCode } = await runSecretsAudit({ json: rest.includes("--json") });
+    process.exitCode = exitCode;
+    return;
+  }
+
+  if (command === "rollback") {
+    const list = rest.includes("--list");
+    const dryRun = rest.includes("--dry-run");
+    const json = rest.includes("--json");
+    const runId = rest.find((arg) => !arg.startsWith("--"));
+    const { exitCode } = await runRollback({ runId, list, dryRun, json });
     process.exitCode = exitCode;
     return;
   }

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { PiAdapter } from "../../src/adapters/pi.js";
+import { openBackupSession } from "../../src/lib/backup.js";
 
 function scratchHome(): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-pi-"));
@@ -34,7 +35,7 @@ test("pi adapter: plan includes exactly one extension item pointing at the real 
   assert.equal(extensionItems[0].action, "create");
   assert.ok(extensionItems[0].linkTarget?.includes("pi-bridge"));
 
-  await adapter.apply(plan);
+  await adapter.apply(plan, openBackupSession(home, "test"));
   const symlinkPath = join(home, ".pi", "agent", "extensions", extensionItems[0].target.split("/").pop()!);
   assert.equal(existsSync(symlinkPath), true);
   assert.equal(readlinkSync(symlinkPath), extensionItems[0].linkTarget);
@@ -46,7 +47,7 @@ test("pi adapter: re-running against an already-synced home produces no extensio
   const canonical = (await import("../../src/core/canonical.js")).loadCanonicalSource(home);
 
   const adapter = new PiAdapter(home);
-  await adapter.apply(await adapter.plan(canonical));
+  await adapter.apply(await adapter.plan(canonical), openBackupSession(home, "test"));
 
   const second = await adapter.plan(canonical);
   assert.deepEqual(

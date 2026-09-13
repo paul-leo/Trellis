@@ -38,8 +38,10 @@ test("sdk: loadCanonicalSource is callable and returns the expected shape", () =
 
 test("sdk: ALL_AGENTS and resolveScope are exported and behave correctly", () => {
   assert.deepEqual([...sdk.ALL_AGENTS], ["claude-code", "codex", "kiro", "pi"]);
-  assert.deepEqual(sdk.resolveScope(undefined), sdk.ALL_AGENTS);
-  assert.deepEqual(sdk.resolveScope(["claude-code"]), ["claude-code"]);
+  assert.deepEqual(sdk.resolveScope(undefined, sdk.ALL_AGENTS), sdk.ALL_AGENTS);
+  assert.deepEqual(sdk.resolveScope(["claude-code"], sdk.ALL_AGENTS), ["claude-code"]);
+  assert.deepEqual(sdk.resolveScope(undefined, ["pi"]), ["pi"], "no-scope falls back to managedAgents, not ALL_AGENTS");
+  assert.deepEqual(sdk.resolveScope(["kiro"], ["pi"]), [], "an explicit scope is intersected with managedAgents, never returned verbatim");
 });
 
 test("sdk: the barrel never re-exports adapter or command internals (design.md D1)", () => {

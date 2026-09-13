@@ -6,9 +6,10 @@
  */
 
 import { existsSync, lstatSync, readdirSync, readlinkSync } from "node:fs";
-import { mkdir, rm, symlink } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { isSymlinkTo } from "../lib/fsIdentity.js";
+import { currentLinkTarget, type BackupSession } from "../lib/backup.js";
 import type { AdapterPlanItem } from "../core/adapter.js";
 
 export interface DesiredSymlink {
@@ -55,14 +56,27 @@ export function planSymlinks(opts: {
       continue; // already correct — no-op
     }
 
-    if (existsSync(path) && !lstatSync(path).isSymbolicLink()) {
-      items.push({
-        action: "conflict",
-        kind,
-        target: path,
-        description: `${path} exists and is not a Trellis-managed symlink — left untouched`,
-      });
-      continue;
+    if (existsSync(path)) {
+      const isSymlink = lstatSync(path).isSymbolicLink();
+      // A symlink whose stored target resolves outside canonicalRoot is
+      // owned by something else (e.g. a user's own dotfile-management
+      // setup) — repairing it as if it were a stale Trellis entry would
+      // silently steal that ownership. Raw readlink, not realpath: a
+      // symlink Trellis itself left pointing at a since-removed canonical
+      // entry is broken by construction and must still be treated as
+      // ours to repair, not thrown out to a conflict by a realpath error.
+      const isForeign = isSymlink && !isUnderRoot(readlinkSync(path), canonicalRootResolved);
+      if (!isSymlink || isForeign) {
+        items.push({
+          action: "conflict",
+          kind,
+          target: path,
+          description: isForeign
+            ? `${path} exists as a symlink to ${readlinkSync(path)}, not owned by Trellis — left untouched`
+            : `${path} exists and is not a Trellis-managed symlink — left untouched`,
+        });
+        continue;
+      }
     }
 
     items.push({
@@ -120,19 +134,29 @@ export function planSymlinks(opts: {
   return items;
 }
 
-/** Executes a `planSymlinks` result. "conflict" is report-only — see
- * src/core/adapter.ts's `apply()` doc for why this never throws. */
-export async function applySymlinkPlan(plan: AdapterPlanItem[]): Promise<void> {
+/** Executes a `planSymlinks` result through the run's backup session
+ * (trellis-backup-rollback) — every create/repair/remove is recorded
+ * before it happens; `backup` performs the actual filesystem write, this
+ * function never calls `fs/promises` itself. "conflict" is report-only —
+ * see src/core/adapter.ts's `apply()` doc for why this never throws. */
+export async function applySymlinkPlan(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
   for (const item of plan) {
     if (item.action === "conflict") continue;
     if (item.action === "remove") {
-      await rm(item.target, { force: true });
+      const oldTarget = await currentLinkTarget(item.target);
+      if (oldTarget === undefined) continue; // already gone — no-op, nothing to record
+      await backup.removeSymlink(item.target, oldTarget);
       continue;
     }
-    // "create": rootDir may not exist yet (first sync ever for this agent)
+    // "create" also covers repair — rootDir may not exist yet (first
+    // sync ever for this agent).
     if (!item.linkTarget) continue;
     await mkdir(resolve(item.target, ".."), { recursive: true });
-    await rm(item.target, { force: true }); // clear a wrong-target symlink before repointing
-    await symlink(item.linkTarget, item.target);
+    const oldTarget = await currentLinkTarget(item.target);
+    if (oldTarget === undefined) {
+      await backup.createSymlink(item.target, item.linkTarget);
+    } else {
+      await backup.repairSymlink(item.target, oldTarget, item.linkTarget);
+    }
   }
 }

@@ -64,7 +64,7 @@ function findLiteralSecret(def: McpServerDef): string | undefined {
   return undefined;
 }
 
-export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig): McpPlanResult {
+export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[]): McpPlanResult {
   if (mcp.hub) {
     if (mcp.knownHostInjected.includes(HUB_ENTRY_NAME)) {
       return { desired: [], conflicts: [{ name: HUB_ENTRY_NAME, message: collisionMessage(HUB_ENTRY_NAME, agentId) }] };
@@ -76,7 +76,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig): McpPlanResult 
   const conflicts: McpConflict[] = [];
 
   for (const [name, def] of Object.entries(mcp.servers)) {
-    if (!isInScope(agentId, def.agents)) {
+    if (!isInScope(agentId, def.agents, managedAgents)) {
       continue;
     }
 

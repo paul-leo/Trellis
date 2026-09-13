@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyJsonMcp, planJsonMcp, renderJsonServerEntry } from "../../src/adapters/jsonMcp.js";
 import type { McpConfig } from "../../src/core/types.js";
+import { ALL_AGENTS } from "../../src/core/types.js";
 
 function mcp(overrides: Partial<McpConfig> = {}): McpConfig {
   return { servers: {}, knownHostInjected: [], ...overrides };
@@ -41,6 +42,7 @@ test("planJsonMcp: a server missing from the existing config produces one create
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
     agentId: "claude-code",
+    managedAgents: ALL_AGENTS,
   });
   assert.equal(items.length, 1);
   assert.equal(items[0].action, "create");
@@ -54,6 +56,7 @@ test("planJsonMcp: an entry already matching rendered output is a no-op (idempot
     parsed: { mcpServers: { sample: { command: "node", type: "stdio", args: [] } } },
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
     agentId: "claude-code",
+    managedAgents: ALL_AGENTS,
   });
   assert.deepEqual(items, []);
 });
@@ -64,6 +67,7 @@ test("planJsonMcp: a changed def against an existing entry produces an update cr
     parsed: { mcpServers: { sample: { type: "stdio", command: "old-command", args: [] } } },
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "new-command" } } }),
     agentId: "claude-code",
+    managedAgents: ALL_AGENTS,
   });
   assert.equal(items.length, 1);
   assert.ok(items[0].description.includes("updated"));
@@ -75,6 +79,7 @@ test("planJsonMcp: a collision with known_host_injected produces a conflict, not
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } }, knownHostInjected: ["sample"] }),
     agentId: "claude-code",
+    managedAgents: ALL_AGENTS,
   });
   assert.equal(items.length, 1);
   assert.equal(items[0].action, "conflict");
@@ -87,6 +92,7 @@ test("applyJsonMcp: merges create items under mcpServers, preserving every other
     parsed,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
     agentId: "claude-code",
+    managedAgents: ALL_AGENTS,
   });
   const merged = applyJsonMcp(parsed, items);
   assert.equal(merged.someOtherKey, "preserve-me");
@@ -100,6 +106,7 @@ test("applyJsonMcp: starting from undefined parsed produces a fresh object with 
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
     agentId: "claude-code",
+    managedAgents: ALL_AGENTS,
   });
   const merged = applyJsonMcp(undefined, items);
   assert.deepEqual(Object.keys(merged), ["mcpServers"]);
@@ -111,6 +118,7 @@ test("applyJsonMcp: ignores conflict items — never writes a colliding server",
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } }, knownHostInjected: ["sample"] }),
     agentId: "claude-code",
+    managedAgents: ALL_AGENTS,
   });
   const merged = applyJsonMcp(undefined, items);
   assert.deepEqual(merged.mcpServers, {});

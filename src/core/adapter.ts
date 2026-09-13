@@ -11,6 +11,7 @@
 
 import type { AgentId, CanonicalSource, McpServerDef } from "./types.js";
 import { resolveScope } from "./types.js";
+import type { BackupSession } from "../lib/backup.js";
 
 export interface AdapterProbeResult {
   present: boolean;
@@ -95,7 +96,7 @@ export interface TrellisAdapter {
    * entries, MCP servers) through its `scope` field before planning any
    * change for it — an item scoped away from `this.id` must produce no
    * plan item at all, not a plan item that's later skipped. Use
-   * `resolveScope(item.scope).includes(this.id)`. See docs/architecture.md
+   * `isInScope(this.id, item.scope, canonical.managedAgents)`. See docs/architecture.md
    * "Private / agent-specific capabilities" — the default (`scope`
    * omitted) is "all agents," so this filter is a no-op for the common
    * case and only actually excludes anything when a capability was
@@ -128,8 +129,14 @@ export interface TrellisAdapter {
    * item in the same plan from being applied. The caller (e.g. `trellis
    * sync`) is responsible for surfacing conflicts and failing the overall
    * command (non-zero exit), not `apply()` per item.
+   *
+   * MUST perform every real write through `backup` (`writeFile`/
+   * `createSymlink`/`repairSymlink`/`removeSymlink`), never directly —
+   * `backup` is the only thing that may call `fs`/`fs/promises` to
+   * mutate a path this method touches (trellis-backup-rollback design.md
+   * D3/D5). Mandatory, not optional: the caller always has one open.
    */
-  apply(plan: AdapterPlanItem[]): Promise<void>;
+  apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void>;
 
   /** Re-read the agent's own state and confirm it matches canonical. */
   verify(canonical: CanonicalSource): Promise<AdapterVerifyResult>;
@@ -137,6 +144,6 @@ export interface TrellisAdapter {
 
 /** Convenience used by every adapter's `plan()` — see the scope-filtering
  * obligation documented above. */
-export function isInScope(id: AgentId, scope: Parameters<typeof resolveScope>[0]): boolean {
-  return resolveScope(scope).includes(id);
+export function isInScope(id: AgentId, scope: Parameters<typeof resolveScope>[0], managedAgents: readonly AgentId[]): boolean {
+  return resolveScope(scope, managedAgents).includes(id);
 }

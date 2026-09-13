@@ -100,6 +100,17 @@ ${patternLines}
 `;
 }
 
+/** Zero managed agents is the correct starting point (trellis-managed-agents
+ * design.md D1) — `trellis onboard`'s managed-set selection is what
+ * populates this, never `init` guessing on its behalf. */
+function managedYamlTemplate(): string {
+  return `# Agents Trellis is authorized to write to. Empty means none yet —
+# run \`trellis onboard\` or list agent ids here yourself, e.g.:
+# agents: [pi, codex]
+agents: []
+`;
+}
+
 /**
  * Trellis never spawns an installer itself (global package installs are
  * exactly the kind of irreversible, system-wide action that needs the
@@ -134,6 +145,7 @@ export async function collectInitReport(homeDir: string = homedir()): Promise<In
     ensureFile(join(root, "agents.md"), AGENTS_MD_TEMPLATE),
     ensureFile(join(root, "mcp", "servers.yaml"), serversYamlTemplate()),
     ensureFile(join(root, "secrets.policy.yaml"), secretsPolicyYamlTemplate()),
+    ensureFile(join(root, "managed.yaml"), managedYamlTemplate()),
   ];
 
   const probes: { agent: AgentId; run: () => Promise<{ present: boolean }> }[] = [

@@ -15,7 +15,7 @@
  * additive only.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
@@ -26,6 +26,7 @@ import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
 import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
 import { resolveMcpPlan } from "./mcpPlan.js";
 import { declaredEnvNames } from "../lib/envVarNames.js";
+import type { BackupSession } from "../lib/backup.js";
 
 /** VS-Code-family global settings path. macOS only — see
  * trellis-kiro-approved-env-vars proposal.md Non-Goals: Linux/Windows
@@ -53,7 +54,7 @@ export class KiroAdapter implements TrellisAdapter {
     const skillsRoot = join(this.homeDir, ".kiro", "skills");
 
     const desiredSkills = canonical.skills
-      .filter((skill) => isInScope(this.id, skill.scope))
+      .filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
     const skillItems = planSymlinks({
@@ -79,14 +80,14 @@ export class KiroAdapter implements TrellisAdapter {
   private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
     const configPath = join(this.homeDir, ".kiro", "settings", "mcp.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
-    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id });
+    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents });
   }
 
   /** Names come from `resolveMcpPlan`, not a raw scan of `canonical.mcp.servers`
    * (design.md D2) — a server scoped away from Kiro, or refused for a
    * known_host_injected collision, never contributes a name here either. */
   private desiredApprovedEnvVars(canonical: CanonicalSource): string[] {
-    const { desired } = resolveMcpPlan(this.id, canonical.mcp);
+    const { desired } = resolveMcpPlan(this.id, canonical.mcp, canonical.managedAgents);
     const names = new Set<string>();
     for (const { def } of desired) {
       for (const name of declaredEnvNames(def)) names.add(name);
@@ -131,8 +132,11 @@ export class KiroAdapter implements TrellisAdapter {
     ];
   }
 
-  async apply(plan: AdapterPlanItem[]): Promise<void> {
-    await applySymlinkPlan(plan.filter((item) => item.kind === "skill" || item.kind === "instructions"));
+  async apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
+    await applySymlinkPlan(
+      plan.filter((item) => item.kind === "skill" || item.kind === "instructions"),
+      backup,
+    );
 
     const mcpCreates = plan.filter((item) => item.kind === "mcp" && item.action === "create" && item.mcpWrite);
     if (mcpCreates.length > 0) {
@@ -140,7 +144,7 @@ export class KiroAdapter implements TrellisAdapter {
       const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
       const merged = applyJsonMcp(parsed, mcpCreates);
       mkdirSync(dirname(configPath), { recursive: true });
-      writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+      backup.writeFile(configPath, `${JSON.stringify(merged, null, 2)}\n`);
     }
 
     const approvedEnvVarsCreate = plan.find((item) => item.kind === "kiro-approved-env-vars" && item.action === "create" && item.approvedEnvVars);
@@ -149,7 +153,7 @@ export class KiroAdapter implements TrellisAdapter {
       const parsed = existsSync(settingsPath) ? (JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>) : {};
       const merged = { ...parsed, [APPROVED_ENV_VARS_KEY]: approvedEnvVarsCreate.approvedEnvVars };
       mkdirSync(dirname(settingsPath), { recursive: true });
-      writeFileSync(settingsPath, `${JSON.stringify(merged, null, 2)}\n`);
+      backup.writeFile(settingsPath, `${JSON.stringify(merged, null, 2)}\n`);
     }
   }
 
@@ -160,7 +164,7 @@ export class KiroAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope)).map((s) => s.name));
+    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {
