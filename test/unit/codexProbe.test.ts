@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { probe } from "../../src/probes/codex.js";
+import { SKIP_NO_CODEX } from "./realCodexAvailable.js";
 
 function scratchHomeWithServer(serverName: string): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-codex-probe-"));
@@ -24,7 +25,7 @@ function scratchHomeWithServer(serverName: string): string {
   return home;
 }
 
-test("probe: the MCP server listing is scoped to the passed-in homeDir, not this process's real $HOME", async () => {
+test("probe: the MCP server listing is scoped to the passed-in homeDir, not this process's real $HOME", { skip: SKIP_NO_CODEX }, async () => {
   const homeA = scratchHomeWithServer("server-a");
   const homeB = scratchHomeWithServer("server-b");
 

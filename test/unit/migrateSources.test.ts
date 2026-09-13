@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { collectInitReport } from "../../src/commands/init.js";
 import { applyMigratePlan, collectMigratePlan } from "../../src/commands/migrate.js";
+import { SKIP_NO_CODEX } from "./realCodexAvailable.js";
 
 function scratchHome(): string {
   return mkdtempSync(join(tmpdir(), "trellis-migrate-sources-"));
@@ -89,7 +90,7 @@ test("pi: a real skill and real instructions are both migrated (src/probes/pi.ts
   assert.equal(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), "# Pi instructions\nreal content\n");
 });
 
-test("codex: a real stdio MCP server (with static_env) is migrated via the real codex binary (trellis-migrate-mcp-servers)", async () => {
+test("codex: a real stdio MCP server (with static_env) is migrated via the real codex binary (trellis-migrate-mcp-servers)", { skip: SKIP_NO_CODEX }, async () => {
   const home = scratchHome();
   await collectInitReport(home);
 
@@ -118,7 +119,7 @@ test("codex: a real stdio MCP server (with static_env) is migrated via the real 
   assert.match(written, /GITLAB_API_URL/);
 });
 
-test("codex: a real remote (url + bearer_token_env_var) MCP server migrates via the real codex binary (trellis-migrate-mcp-servers follow-up)", async () => {
+test("codex: a real remote (url + bearer_token_env_var) MCP server migrates via the real codex binary (trellis-migrate-mcp-servers follow-up)", { skip: SKIP_NO_CODEX }, async () => {
   const home = scratchHome();
   await collectInitReport(home);
 
