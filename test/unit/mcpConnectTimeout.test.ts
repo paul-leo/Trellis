@@ -21,7 +21,15 @@ import trellisMcpBridge, { withTimeout } from "../../src/pi-bridge/index.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const hangingFixture = join(here, "..", "fixtures", "hanging-mcp-server.js");
 const sampleFixture = join(here, "..", "fixtures", "sample-mcp-server.js");
-const SHORT_TIMEOUT_MS = 3000;
+// Widened from 3000ms after a real, reproducible flake under full-suite
+// concurrent load: the "normal" fixture server's own real subprocess
+// spawn + stdio round trip occasionally exceeded a 3000ms budget shared
+// with every other test file's own spawned children, timing out via
+// this same bridge's own withTimeout — not a bridge regression (verified:
+// this file passes reliably in isolation, and connect attempts are
+// already independently caught per-server with no code-level coupling).
+// Still far below the untested-by-waiting 10s production default.
+const SHORT_TIMEOUT_MS = 8000;
 
 interface CapturedTool {
   name: string;
