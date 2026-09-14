@@ -14,7 +14,7 @@ import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, parseMcpAddArgs } from
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
 import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
-import { runMemorySync } from "./commands/memory.js";
+import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
 const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "skill", "memory", "secrets", "rollback"] as const;
@@ -105,6 +105,14 @@ Commands:
               servers.yaml — see schema/servers.example.yaml; a no-op,
               not an error, if unconfigured). Never touches an entity
               or relation this didn't create.
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
+  memory extract
+            The reverse direction: read the same graph file's real,
+              non-Trellis entities (agent-accumulated content, never
+              Trellis's own) and write each as a new canonical
+              memories/*.md file — readable markdown, not meant to
+              round-trip byte-for-byte back through memory sync.
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   secrets audit
@@ -256,13 +264,18 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "memory") {
     const [subcommand, ...memoryRest] = rest;
-    if (subcommand !== "sync") {
-      console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory sync\n`);
-      process.exitCode = 1;
+    const json = memoryRest.includes("--json");
+    const dryRun = memoryRest.includes("--dry-run");
+    if (subcommand === "sync") {
+      process.exitCode = runMemorySync({ json, dryRun }).exitCode;
       return;
     }
-    const { exitCode } = runMemorySync({ json: memoryRest.includes("--json"), dryRun: memoryRest.includes("--dry-run") });
-    process.exitCode = exitCode;
+    if (subcommand === "extract") {
+      process.exitCode = runMemoryExtraction({ json, dryRun }).exitCode;
+      return;
+    }
+    console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory sync|extract\n`);
+    process.exitCode = 1;
     return;
   }
 

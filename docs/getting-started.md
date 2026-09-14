@@ -391,12 +391,47 @@ the graph that Trellis didn't create, the command refuses that one entry
 (reported as a conflict) rather than overwriting it, same posture as
 every other conflict in this project.
 
-**Known limitation, named rather than silently worked around:** this only
-ingests canonical's *own* `memories/*.md` files into the shared store —
-it does not (yet) extract an agent's own already-accumulated memory
-content (e.g. Claude Code's own per-project memory feature) back into
-canonical. That extraction is a real, separate, still-open gap — see
-`docs/roadmap.md`'s P15 entry.
+This only ingests canonical's *own* `memories/*.md` files into the shared
+store — the reverse direction (an agent's own already-accumulated content
+in that same shared graph, not yet represented in canonical) is
+`trellis memory extract`, below.
+
+## `trellis memory extract`
+
+The other direction: reads the same graph file's real entities — not
+Trellis's own (anything an agent created directly, via its own MCP tool
+calls against the shared memory server, before or outside of canonical) —
+and writes each as a new canonical `memories/*.md` file. Requires the
+same `memory` server configuration `memory sync` does; refuses with the
+identical message when it's missing.
+
+```
+$ trellis memory extract
+memory extract — /Users/you/.trellis/memories/graph.jsonl
+  [create] "Sprint Tasks Q2" (sprint-tasks-q2.md) — will create a new canonical memory file
+```
+
+A rendered file is a readable markdown transcription — heading,
+observations as a list, relations as a short list when the entity has
+any — not a format meant to round-trip byte-for-byte back through
+`memory sync`: re-syncing an extracted file later turns it into a single,
+flat observation, the same as any other canonical memory file. This is a
+one-way trip from "richer, live graph" to "durable, reviewable,
+version-controllable prose," not a lossless mirror.
+
+Same conflict discipline as everywhere else: a target file that already
+exists with different content is reported as a conflict and left
+untouched, never silently overwritten — including when two different
+entities' names would slug to the same filename. Not wired into
+`trellis onboard`'s automatic chain (unlike `memory sync`) — this is a
+deliberate, occasional action you run, the same posture `migrate` already
+has.
+
+**Note:** this is unrelated to any project-level "auto memory" feature an
+agent may have of its own (e.g. Claude Code's own per-project memory
+files) — those are a different, agent-specific mechanism entirely, not
+the shared `@modelcontextprotocol/server-memory` server Trellis manages
+here.
 
 ## `trellis secrets audit`
 

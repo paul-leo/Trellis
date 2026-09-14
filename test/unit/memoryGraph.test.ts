@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseMemoryGraph, planMemorySync, renderMemoryGraph, TRELLIS_MEMORY_ENTITY_TYPE } from "../../src/lib/memoryGraph.js";
+import { parseMemoryGraph, planMemoryExtraction, planMemorySync, renderExtractedMemoryFile, renderMemoryGraph, TRELLIS_MEMORY_ENTITY_TYPE } from "../../src/lib/memoryGraph.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,4 +99,73 @@ test("planMemorySync: every other entity and every relation is passed through co
   assert.ok(plan.nextGraph);
   assert.ok(plan.nextGraph!.some((l) => JSON.stringify(l) === JSON.stringify(otherEntity)));
   assert.ok(plan.nextGraph!.some((l) => JSON.stringify(l) === JSON.stringify(relation)));
+});
+
+test("renderExtractedMemoryFile: an entity with observations and no relations renders without a Relations section", () => {
+  const entity = { type: "entity" as const, name: "Sprint Tasks Q2", entityType: "project", observations: ["task A", "task B"] };
+  const rendered = renderExtractedMemoryFile(entity, []);
+  assert.equal(
+    rendered,
+    ["# Sprint Tasks Q2", "", "**Type:** project", "", "## Observations", "- task A", "- task B", ""].join("\n"),
+  );
+});
+
+test("renderExtractedMemoryFile: relations in both directions are included", () => {
+  const entity = { type: "entity" as const, name: "alice", entityType: "person", observations: ["works on web series"] };
+  const relations = [
+    { type: "relation" as const, from: "alice", to: "web-series", relationType: "works-on" },
+    { type: "relation" as const, from: "bob", to: "alice", relationType: "manages" },
+    { type: "relation" as const, from: "unrelated", to: "someone-else", relationType: "knows" },
+  ];
+  const rendered = renderExtractedMemoryFile(entity, relations);
+  assert.match(rendered, /## Relations/);
+  assert.match(rendered, /- works-on -> web-series/);
+  assert.match(rendered, /- bob -> manages -> this entity/);
+  assert.doesNotMatch(rendered, /unrelated/);
+});
+
+test("planMemoryExtraction: a real, non-trellis-memory entity with observations is a create candidate", () => {
+  const graph = [{ type: "entity" as const, name: "alice", entityType: "person", observations: ["knows the codebase"] }];
+  const plan = planMemoryExtraction(graph, () => undefined);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].action, "create");
+  assert.equal(plan.items[0].slug, "alice");
+  assert.ok(plan.items[0].content?.includes("knows the codebase"));
+});
+
+test("planMemoryExtraction: a trellis-memory entity is never a candidate", () => {
+  const graph = [{ type: "entity" as const, name: "notes", entityType: TRELLIS_MEMORY_ENTITY_TYPE, observations: ["already canonical"] }];
+  const plan = planMemoryExtraction(graph, () => undefined);
+  assert.equal(plan.items.length, 0);
+});
+
+test("planMemoryExtraction: an entity with zero observations is never extracted as its own file", () => {
+  const graph = [{ type: "entity" as const, name: "empty-type-node", entityType: "category", observations: [] }];
+  const plan = planMemoryExtraction(graph, () => undefined);
+  assert.equal(plan.items.length, 0);
+});
+
+test("planMemoryExtraction: an existing file with identical rendered content is already-extracted, not created", () => {
+  const graph = [{ type: "entity" as const, name: "alice", entityType: "person", observations: ["knows the codebase"] }];
+  const rendered = renderExtractedMemoryFile(graph[0], []);
+  const plan = planMemoryExtraction(graph, (slug) => (slug === "alice" ? rendered : undefined));
+  assert.equal(plan.items[0].action, "already-extracted");
+});
+
+test("planMemoryExtraction: an existing file with different content is a conflict, not overwritten", () => {
+  const graph = [{ type: "entity" as const, name: "alice", entityType: "person", observations: ["knows the codebase"] }];
+  const plan = planMemoryExtraction(graph, (slug) => (slug === "alice" ? "hand-written, unrelated content\n" : undefined));
+  assert.equal(plan.items[0].action, "conflict");
+  assert.match(plan.items[0].detail, /already exists with different content/);
+});
+
+test("planMemoryExtraction: two entities slugging to the same filename is a conflict, not a silent merge", () => {
+  const graph = [
+    { type: "entity" as const, name: "Alice B", entityType: "person", observations: ["first"] },
+    { type: "entity" as const, name: "alice-b", entityType: "person", observations: ["second, different entity"] },
+  ];
+  const plan = planMemoryExtraction(graph, () => undefined);
+  assert.equal(plan.items[0].action, "create");
+  assert.equal(plan.items[1].action, "conflict");
+  assert.match(plan.items[1].detail, /collides with entity "Alice B"/);
 });

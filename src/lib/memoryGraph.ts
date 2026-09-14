@@ -24,6 +24,7 @@
 
 import { readFileSync } from "node:fs";
 import type { CanonicalSource } from "../core/types.js";
+import { slugify } from "./slug.js";
 
 export interface MemoryEntity {
   type: "entity";
@@ -140,4 +141,86 @@ export function planMemorySync(canonical: Pick<CanonicalSource, "memories">, cur
     return { items };
   }
   return { items, nextGraph: [...untouchedLines, ...nextTrellisEntities] };
+}
+
+/**
+ * Renders one extraction candidate as readable markdown — the entity's
+ * real (unslugged) name as a heading, its type, its observations as a
+ * list, and (only when it participates in any) its relations as a short
+ * list. Not a serialization format meant to round-trip byte-for-byte
+ * back through `planMemorySync` (trellis-memory-extraction design.md
+ * D2/Non-Goals) — canonical's own memory model is a single flat blob per
+ * file, strictly less expressive than the graph's typed-entity-plus-
+ * relations shape.
+ */
+export function renderExtractedMemoryFile(entity: MemoryEntity, relations: readonly MemoryRelation[]): string {
+  const lines = [`# ${entity.name}`, "", `**Type:** ${entity.entityType}`, "", "## Observations"];
+  for (const observation of entity.observations) {
+    lines.push(`- ${observation}`);
+  }
+  const related = relations.filter((r) => r.from === entity.name || r.to === entity.name);
+  if (related.length > 0) {
+    lines.push("", "## Relations");
+    for (const r of related) {
+      lines.push(r.from === entity.name ? `- ${r.relationType} -> ${r.to}` : `- ${r.from} -> ${r.relationType} -> this entity`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export type MemoryExtractionAction = "create" | "already-extracted" | "conflict";
+
+export interface MemoryExtractionItem {
+  /** The entity's real, unslugged name. */
+  name: string;
+  /** The derived target filename, without the `.md` extension. */
+  slug: string;
+  action: MemoryExtractionAction;
+  detail: string;
+  /** Only set when `action === "create"` — the file content to write. */
+  content?: string;
+}
+
+export interface MemoryExtractionPlan {
+  items: MemoryExtractionItem[];
+}
+
+/**
+ * Pure: given the graph's parsed lines and a way to read an existing
+ * canonical memory file by its (already-slugged) name, computes which
+ * non-`trellis-memory` entities (D1) should become new canonical files.
+ * `readCanonicalFile` returning `undefined` means "no such file yet" —
+ * the same "create vs. already-there vs. differs" three-way split
+ * `planMcpServer`/skill-migrate already use elsewhere in this codebase,
+ * applied to a new content type (trellis-memory-extraction design.md D4).
+ */
+export function planMemoryExtraction(graphLines: readonly MemoryGraphLine[], readCanonicalFile: (slug: string) => string | undefined): MemoryExtractionPlan {
+  const entities = graphLines.filter((line): line is MemoryEntity => line.type === "entity");
+  const relations = graphLines.filter((line): line is MemoryRelation => line.type === "relation");
+  const candidates = entities.filter((e) => e.entityType !== TRELLIS_MEMORY_ENTITY_TYPE && e.observations.length > 0);
+
+  const items: MemoryExtractionItem[] = [];
+  const claimedSlugs = new Map<string, string>();
+
+  for (const entity of candidates) {
+    const slug = slugify(entity.name);
+    const claimedBy = claimedSlugs.get(slug);
+    if (claimedBy !== undefined) {
+      items.push({ name: entity.name, slug, action: "conflict", detail: `slug "${slug}" collides with entity "${claimedBy}" — resolve by hand` });
+      continue;
+    }
+    claimedSlugs.set(slug, entity.name);
+
+    const content = renderExtractedMemoryFile(entity, relations);
+    const existing = readCanonicalFile(slug);
+    if (existing === undefined) {
+      items.push({ name: entity.name, slug, action: "create", detail: "will create a new canonical memory file", content });
+    } else if (existing === content) {
+      items.push({ name: entity.name, slug, action: "already-extracted", detail: "canonical file content is already identical" });
+    } else {
+      items.push({ name: entity.name, slug, action: "conflict", detail: `~/.trellis/memories/${slug}.md already exists with different content — resolve by hand` });
+    }
+  }
+
+  return { items };
 }

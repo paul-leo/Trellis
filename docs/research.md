@@ -120,6 +120,17 @@ clients." Mature, but needs Docker + an LLM key. Documented as the
 upgrade path for cross-machine or richer semantic memory, alongside
 `totalrecallai` as a second real option in that same category.
 
+Two commands, one direction each: `trellis memory sync` (canonical
+`memories/*.md` → the shared graph file) and `trellis memory extract`
+(the graph's own real, non-Trellis entities → new canonical files) —
+closing P15's own explicitly-named "per-agent extraction into canonical
+remains a separate, open gap." The two are not symmetric round-trips:
+canonical's memory model is one flat blob per file, the graph's native
+model is typed entities plus a relation graph, so extraction is a
+one-way, lossy-in-structure (not in substance) transcription, not a
+serialization format — see `docs/getting-started.md`'s `memory extract`
+section for the exact trade-off.
+
 ## Secrets (formalize existing practice, don't build new infra)
 
 The 2026 consensus across 1Password, Vault, Infisical writeups is uniform:
