@@ -15,7 +15,7 @@ import * as piProbe from "../probes/pi.js";
 import { AGENTS_MD_TEMPLATE } from "./init.js";
 import { decideDirImport } from "../lib/dirEquals.js";
 import { deepEqual } from "../lib/deepEqual.js";
-import { readClaudeCodeMcpDefs, readCodexMcpDefs, readKiroMcpDefs } from "../lib/mcpMigrateRead.js";
+import { readClaudeCodeMcpDefs, readCodexMcpDefs, readKiroMcpDefs, resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
 import { loadCanonicalSource, upsertServerYaml } from "../core/canonical.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpServerDef } from "../core/types.js";
@@ -36,7 +36,7 @@ const MCP_READERS: Partial<Record<AgentId, (homeDir: string) => { entries: { nam
   codex: readCodexMcpDefs,
 };
 
-export type MigrateAction = "create" | "skip-symlink" | "skip-case-broken" | "skip-unsupported" | "already-migrated" | "conflict";
+export type MigrateAction = "create" | "skip-symlink" | "skip-case-broken" | "skip-unsupported" | "already-migrated" | "reclassify" | "conflict";
 
 /** Internal kind naming, unchanged since before `--only` existed
  * (trellis-migrate-category-selection design.md D2) — the CLI-facing
@@ -105,12 +105,34 @@ function planInstructions(snapshot: AgentSnapshot, canonicalAgentsMd: string): M
   return { kind: "instructions", name: "agents.md", action: "conflict", detail: "canonical agents.md already has different real content — resolve by hand" };
 }
 
+/**
+ * True when `existing` and `def` differ ONLY in which of `env`/
+ * `envAliases`/`staticEnv` an env value is filed under, while every
+ * other field and every value's resolved literal/reference text stays
+ * identical — the exact shape a migrate-read classification fix (like
+ * `trellis-migrate-env-var-alias`) leaves behind on already-migrated
+ * canonical data. Not a real conflict: the underlying value never
+ * changed, only Trellis's own bucketing of it got more precise
+ * (trellis-migrate-reclassify-repair). Anything this doesn't cover — a
+ * real value change, a different command, an added/removed field —
+ * still conflicts, unchanged.
+ */
+export function isSafeReclassification(existing: McpServerDef, def: McpServerDef): boolean {
+  const { env: _e1, envAliases: _ea1, staticEnv: _se1, ...restExisting } = existing;
+  const { env: _e2, envAliases: _ea2, staticEnv: _se2, ...restDef } = def;
+  if (!deepEqual(restExisting, restDef)) return false;
+  return deepEqual(resolvedEnvTextMap(existing), resolvedEnvTextMap(def));
+}
+
 function planMcpServer(name: string, def: McpServerDef, existing: McpServerDef | undefined): MigratePlanItem {
   if (existing === undefined) {
     return { kind: "mcp", name, action: "create", detail: "will add to servers.yaml", mcpDef: def };
   }
   if (deepEqual(existing, def)) {
     return { kind: "mcp", name, action: "already-migrated", detail: "canonical definition is already identical" };
+  }
+  if (isSafeReclassification(existing, def)) {
+    return { kind: "mcp", name, action: "reclassify", detail: "same value, only its internal classification changed — safe to update", mcpDef: def };
   }
   return { kind: "mcp", name, action: "conflict", detail: `canonical mcp/servers.yaml already has a different definition for "${name}" — resolve by hand` };
 }
@@ -166,7 +188,7 @@ export async function collectMigratePlan(agent: AgentId, homeDir: string = homed
 export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir()): void {
   const canonicalRoot = join(homeDir, ".trellis");
   for (const item of plan.items) {
-    if (item.action !== "create") continue;
+    if (item.action !== "create" && item.action !== "reclassify") continue;
     if (item.kind === "skill" && item.sourceDir) {
       const dest = join(canonicalRoot, "skills", item.name);
       mkdirSync(dest, { recursive: true });

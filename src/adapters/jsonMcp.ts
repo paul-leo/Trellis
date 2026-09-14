@@ -10,6 +10,7 @@
 import type { AgentId, McpConfig, McpServerDef, SecretsPolicy } from "../core/types.js";
 import type { AdapterPlanItem } from "../core/adapter.js";
 import { deepEqual } from "../lib/deepEqual.js";
+import { resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
 import { resolveMcpPlan } from "./mcpPlan.js";
 
 /** Renders the native JSON shape Claude Code/Kiro's `mcpServers` map
@@ -27,13 +28,7 @@ export function renderJsonServerEntry(def: McpServerDef): Record<string, unknown
     return entry;
   }
   const entry: Record<string, unknown> = { type: "stdio", command: def.command, args: def.args ?? [] };
-  const nameRefs = Object.fromEntries((def.env ?? []).map((name) => [name, `\${${name}}`]));
-  // `envAliases`' target key gets a placeholder referencing its (possibly
-  // differently-named) source variable — same literal-placeholder
-  // mechanism as `nameRefs` above, trusting Claude Code/Kiro's own
-  // runtime to expand it (trellis-migrate-env-var-alias D3).
-  const aliasRefs = Object.fromEntries(Object.entries(def.envAliases ?? {}).map(([targetKey, sourceName]) => [targetKey, `\${${sourceName}}`]));
-  const env = { ...nameRefs, ...aliasRefs, ...(def.staticEnv ?? {}) };
+  const env = resolvedEnvTextMap(def);
   if (Object.keys(env).length > 0) {
     entry.env = env;
   }

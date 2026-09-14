@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { AGENTS_MD_TEMPLATE, collectInitReport } from "../../src/commands/init.js";
-import { applyMigratePlan, collectMigratePlan, runMigrate } from "../../src/commands/migrate.js";
+import { applyMigratePlan, collectMigratePlan, isSafeReclassification, runMigrate } from "../../src/commands/migrate.js";
 
 function scratchHome(): string {
   return mkdtempSync(join(tmpdir(), "trellis-migrate-"));
@@ -309,6 +309,52 @@ test("mcp: a canonical server with a different definition is a conflict, not ove
   const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
   assert.match(written, /command: npx/);
   assert.doesNotMatch(written, /different-command/);
+});
+
+test("isSafeReclassification: a staticEnv value that now classifies as envAliases (same resolved text) is safe", () => {
+  const existing = { transport: "stdio" as const, command: "npx", staticEnv: { OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}" } };
+  const def = { transport: "stdio" as const, command: "npx", envAliases: { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" } };
+  assert.equal(isSafeReclassification(existing, def), true);
+});
+
+test("isSafeReclassification: a difference in command alongside an otherwise-identical env classification is not safe", () => {
+  const existing = { transport: "stdio" as const, command: "npx", staticEnv: { OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}" } };
+  const def = { transport: "stdio" as const, command: "different-command", envAliases: { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" } };
+  assert.equal(isSafeReclassification(existing, def), false);
+});
+
+test("isSafeReclassification: an identical classification with a genuinely different resolved value is not safe", () => {
+  const existing = { transport: "stdio" as const, command: "npx", staticEnv: { OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}" } };
+  const def = { transport: "stdio" as const, command: "npx", staticEnv: { OPENAPI_MCP_HEADERS: "${SOME_OTHER_HEADERS}" } };
+  assert.equal(isSafeReclassification(existing, def), false);
+});
+
+test("mcp: a stale staticEnv entry that now classifies as envAliases is a safe reclassification, not a conflict", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  // Simulates canonical data migrated before trellis-migrate-env-var-alias
+  // shipped: the differently-named reference was misclassified as a
+  // literal staticEnv value.
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    'servers:\n  notion:\n    transport: stdio\n    command: npx\n    static_env:\n      OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}"\n',
+  );
+  writeClaudeMcpServer(home, "notion", { type: "stdio", command: "npx", env: { OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}" } });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].action, "reclassify");
+  assert.equal(plan.items[0].name, "notion");
+
+  applyMigratePlan(plan, home);
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /env_aliases:/);
+  assert.match(written, /OPENAPI_MCP_HEADERS: NOTION_OPENAPI_MCP_HEADERS/);
+  assert.doesNotMatch(written, /static_env:/);
+
+  const second = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(second.items.length, 1);
+  assert.equal(second.items[0].action, "already-migrated", "must not re-reclassify forever — the repaired entry is now the stable state");
 });
 
 test("mcp: --only skills or --only instructions excludes every MCP server from the plan", async () => {

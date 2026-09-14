@@ -48,6 +48,23 @@ const EMPTY_RESULT: McpMigrateReadResult = { entries: [], unsupported: [] };
  */
 const VAR_REF_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
+/**
+ * Inverse of `splitJsonEnvMap`: the resolved literal/reference text every
+ * env-classification key would produce on disk, regardless of which of
+ * `env`/`envAliases`/`staticEnv` it's currently filed under — a self-
+ * referencing `env` name and a differently-named `envAliases` entry
+ * both resolve to a `${...}` placeholder, a `staticEnv` entry resolves
+ * to its own literal text as-is. Shared by `renderJsonServerEntry` (the
+ * JSON write path) and migrate's own safe-reclassification check
+ * (`trellis-migrate-reclassify-repair`) — the same mechanism, not two
+ * independent derivations of it.
+ */
+export function resolvedEnvTextMap(def: Pick<McpServerDef, "env" | "envAliases" | "staticEnv">): Record<string, string> {
+  const nameRefs = Object.fromEntries((def.env ?? []).map((name) => [name, `\${${name}}`]));
+  const aliasRefs = Object.fromEntries(Object.entries(def.envAliases ?? {}).map(([targetKey, sourceName]) => [targetKey, `\${${sourceName}}`]));
+  return { ...nameRefs, ...aliasRefs, ...(def.staticEnv ?? {}) };
+}
+
 function splitJsonEnvMap(env: Record<string, string> | undefined): Pick<McpServerDef, "env" | "envAliases" | "staticEnv"> {
   if (!env) return {};
   const names: string[] = [];
