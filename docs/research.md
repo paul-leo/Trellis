@@ -232,6 +232,83 @@ switch in the type, only a URL" — apply the same discipline here: don't
 build sync-engine abstraction ahead of validating that git alone doesn't
 already solve it.
 
+### Letta Cloud's "Agent state" — evaluated as a hosted-state model, not adopted
+
+Surveyed 2026-09-16 after recognizing the shape from
+[letta-ai/letta-code](https://github.com/letta-ai/letta-code): Letta Cloud
+keeps an agent's memory, identity, and conversation history entirely
+server-side; any machine (laptop, Cloud VM, Mac Mini, GitHub Actions) can
+run the `letta server` harness against that same state
+([README](https://github.com/letta-ai/letta-code/blob/main/README.md),
+[Constellation docs](https://docs.letta.com/letta-code/constellation)).
+Confirmed by reading the actual mechanism, not just the marketing diagram:
+
+- **Attach is outbound-only.** `letta server --env-name "work-laptop"`
+  opens one outbound WebSocket to Letta Cloud — no inbound port, ever
+  ([BYOM docs](https://docs.letta.com/platform/computers/byom)). OAuth
+  device-flow credentials persist under `~/.letta/` so reconnects are
+  silent.
+- **"Teleportation" (moving execution between machines) is a sequenced
+  single-writer handoff, never concurrent.** The source machine finishes
+  its current tool call, stops accepting new work, and releases before
+  the destination starts; "a conversation can have only one teleport in
+  flight at a time," and a failed handoff leaves the conversation on the
+  source rather than in a split state
+  ([Teleportation docs](https://docs.letta.com/platform/computers/teleportation)).
+  Memory, message history, pending tool approvals, credentials, and
+  permission mode move with it; files, working directories, running
+  processes, and installed dependencies do not — the destination
+  reconstructs its own environment rather than receiving a filesystem
+  snapshot.
+- **Even with a fully hosted state store, Letta's own docs still tell
+  users to mirror agent memory to GitHub** via `/memory-repository` as a
+  backup. The vendor that built the hosted-state alternative does not
+  treat it as a substitute for a plain, git-friendly copy.
+
+**Not adopted as a model for Trellis's own cross-machine problem, and the
+reason is structural, not a maturity/cost judgment**: Letta's "agent
+state" is the runtime state of an agent Letta itself executes — its own
+first-party memory and conversation loop. Trellis has no equivalent to
+host: canonical (`~/.trellis`) is *configuration projected into* other
+vendors' agents (Claude Code, Codex, Kiro), whose own sessions, auth, and
+runtime state Trellis never touches and has no execution loop of its own
+to hand off. There is no "conversation" for a Trellis-hosted service to
+teleport — Trellis's job ends at writing correct config to disk on the
+one machine it's invoked on. Building a hosted canonical-state service to
+mirror Letta's shape would mean Trellis becoming a resident,
+account-backed service — the same "material shift... needs its own
+explicit sign-off" line `trellis-mcp-gateway-hosting`'s proposal.md
+already drew around operating so much as a spawned subprocess, applied
+here to something with a much larger blast radius (a user's actual
+configuration data, not a per-session child process).
+
+**Two mechanisms are worth recording anyway — not as new ideas to adopt,
+but as independent confirmation that designs already committed to
+elsewhere in this project land on the same shape a production
+multi-machine system converged on:**
+
+1. Outbound-only, no-daemon-to-babysit attach is exactly
+   `trellis-mcp-gateway-hosting`'s own shape (design.md D2/D13) — an
+   agent spawns `trellis mcp-gateway`, it connects out, it exits with the
+   session. Letta using the identical pattern for "any machine attaches
+   to hosted state" is evidence the shape generalizes, not a coincidence
+   worth re-deriving from scratch if problem #2 (a shared runtime
+   substrate) is ever built.
+2. Sequenced single-writer handoff — finish, release, then let the next
+   party proceed — is exactly the OAuth refresh lock's shape
+   (`trellis-mcp-gateway-hosting` design.md D16, `withServerLock`:
+   acquire, re-read to check whether the work is already done, act, or
+   defer). Same problem (two parties who might touch shared state at
+   once), same answer (serialize, never split), arrived at independently
+   in a completely different subsystem.
+
+**Standing recommendation unchanged**: git remains the right transport
+for problem #1. This survey is a reason to be confident in that choice,
+not a reason to revisit it — the hosted-state alternative was evaluated
+on its merits and excluded on structural grounds, and even its own
+vendor keeps a git-based fallback for the same category of data Trellis
+already treats git-friendly YAML/Markdown as the source of truth for.
+
 ### Sandbox / execution substrate landscape — problem #2
 
 Surveyed for "a place agents actually run" rather than "a place config
