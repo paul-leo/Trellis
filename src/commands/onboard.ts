@@ -618,8 +618,15 @@ export async function runOnboard(opts: RunOnboardOptions = {}): Promise<{ exitCo
     // Always last — including on a fully clean run and on a refusal —
     // so the terminal state of the run is never a green line from
     // whichever stage happened to print last (spec: "Every run
-    // terminates in a verdict that matches its exit code").
-    printVerdict(result.verdict, homeDir);
+    // terminates in a verdict that matches its exit code"). A refusal
+    // never populates `result.verdict` (every early-return path sets it
+    // to `[]`), so it has to be folded in here explicitly — otherwise
+    // the verdict would print "nothing needs attention, exit code: 0"
+    // directly underneath a real refusal that returns exit code 1: the
+    // exact contradiction this whole mechanism exists to prevent, just
+    // reached from a different direction.
+    const verdictForDisplay = result.refusal ? [...result.verdict, { stage: "onboard", severity: "blocked" as const, message: result.refusal }] : result.verdict;
+    printVerdict(verdictForDisplay, homeDir);
   }
 
   if (result.refusal) return { exitCode: 1 };

@@ -208,6 +208,30 @@ test("two present agents, no --agent, no TTY: refuses cleanly with no writes", a
   assert.deepEqual(readdirSync(join(home, ".trellis", "skills")), before);
 });
 
+test("refusal: the printed verdict matches the real exit code — never a false 'nothing needs attention'", async () => {
+  // Found via real-machine dogfooding: a refusal returns exit code 1,
+  // but result.verdict is always [] on every refusal path (nothing was
+  // collected yet), so the verdict block used to print "nothing needs
+  // attention... exit code: 0" directly under a real refusal — the exact
+  // contradiction this whole mechanism exists to prevent, reached from a
+  // path the original tests never exercised (refusal, not a conflict).
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeSkill(home, "claude-only", "content\n");
+  markCodexHasRealContent(home);
+  await collectInitReport(home);
+
+  const lines = await captureStdout(() => runOnboard({ homeDir: home, isTTY: false, json: false }).then(() => {}));
+
+  const verdictLines = lines.slice(lines.indexOf("verdict"));
+  assert.ok(
+    verdictLines.some((line) => /blocking issue/.test(line)),
+    `expected the refusal to appear as a blocking issue, got: ${JSON.stringify(verdictLines)}`,
+  );
+  assert.ok(!verdictLines.some((line) => /nothing needs attention/.test(line)));
+  assert.ok(verdictLines.some((line) => /^exit code: 1/.test(line)), "the printed exit-code line must match what runOnboard actually returns");
+});
+
 test("two present agents, no --agent, --json: refuses cleanly even if isTTY is true", async () => {
   const home = scratchHome();
   markClaudeCodePresent(home);
