@@ -53,6 +53,49 @@ const CTRL_C = "\u0003";
 const HIDE_CURSOR = `${ESC}[?25l`;
 const SHOW_CURSOR = `${ESC}[?25h`;
 
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g;
+
+/** A row's *visible* width, excluding the color codes wrapped around it —
+ * they add characters that occupy zero terminal columns. Needed to
+ * compute how many physical lines a row actually wraps to (see
+ * `physicalLineCount`); counting `row.length` directly would overcount
+ * and under-clear on the next redraw. */
+export function visibleWidth(row: string): number {
+  return row.replace(ANSI_ESCAPE_RE, "").length;
+}
+
+/**
+ * How many physical terminal lines one logical row occupies once the
+ * terminal wraps it — `Math.ceil(visibleWidth / columns)`, at least 1.
+ * `clearLines`/`moveCursorUp` need this, not `rows.length`: a picker
+ * item whose rendered text is longer than the terminal is wide (a long
+ * agent summary, a narrow terminal, or both) wraps onto more than one
+ * physical line, and erasing/moving by the *logical* row count instead
+ * leaves the wrapped remainder of the previous frame on screen — found
+ * via a real mirasim terminal session where a (much longer,
+ * pre-truncation) row's wrapped tail was never cleared, so every redraw
+ * appended a new, only-partially-overwritten copy instead of replacing
+ * the old one.
+ */
+export function physicalLineCount(row: string, columns: number): number {
+  if (columns <= 0) return 1;
+  return Math.max(1, Math.ceil(visibleWidth(row) / columns));
+}
+
+export function totalPhysicalLines(rows: readonly string[], columns: number): number {
+  return rows.reduce((sum, row) => sum + physicalLineCount(row, columns), 0);
+}
+
+/** `output.columns` only exists on a real TTY; test-injected plain
+ * streams (`PickerStreams`) have none. Defaulting to 80 — the standard
+ * terminal width, and this project's own test fixtures — keeps the
+ * wrap-aware math above exercised (and testable) even without a real
+ * terminal, rather than silently reverting to "assume no row ever wraps"
+ * for every non-TTY stream. */
+function columnsOf(output: NodeJS.WriteStream | Writable): number {
+  return (output as NodeJS.WriteStream).columns ?? 80;
+}
+
 type Key = "up" | "down" | "toggle" | "confirm" | "cancel" | null;
 
 /** Parses one raw input chunk into a single logical key — arrow escape
@@ -105,17 +148,31 @@ function clearLines(output: NodeJS.WriteStream | Writable, lines: number): void 
   moveCursorUp(output, lines - 1);
 }
 
-function renderRows(output: NodeJS.WriteStream | Writable, rows: string[], previousRowCount: number): void {
-  if (previousRowCount > 0) {
-    clearLines(output, previousRowCount);
+/**
+ * `previousPhysicalLines` must be the actual on-screen line count the
+ * *previous* call to this function produced (`totalPhysicalLines` of
+ * that frame's rows), not `rows.length` — see `physicalLineCount`'s doc
+ * comment for why a wrapped row makes those two numbers diverge.
+ */
+function renderRows(output: NodeJS.WriteStream | Writable, rows: string[], previousPhysicalLines: number): void {
+  if (previousPhysicalLines > 0) {
+    clearLines(output, previousPhysicalLines);
   }
   for (const row of rows) {
     output.write(`${row}\n`);
   }
 }
 
+/**
+ * A real foreground color (bold cyan), not just reverse video —
+ * differentiating the highlighted row must not depend on a host
+ * terminal correctly inverting fore/background, which a real mirasim
+ * terminal session showed no visible effect from at all. The `>`/`  `
+ * marker stays regardless, as a plain-text fallback for a host that
+ * strips color entirely.
+ */
 function highlightRow(text: string, isHighlighted: boolean): string {
-  return isHighlighted ? `> ${ESC}[7m${text}${ESC}[0m` : `  ${text}`;
+  return isHighlighted ? `> ${ESC}[1;36m${text}${ESC}[0m` : `  ${text}`;
 }
 
 /**
@@ -130,12 +187,13 @@ export async function runSingleSelectPicker(items: string[], streams: PickerStre
   return withRawMode(streams, () => {
     return new Promise<number | null>((resolve) => {
       let highlighted = 0;
-      let rowCount = 0;
+      let physicalLines = 0;
+      const columns = columnsOf(output);
 
       const draw = () => {
         const rows = items.map((label, i) => highlightRow(label, i === highlighted));
-        renderRows(output, rows, rowCount);
-        rowCount = rows.length;
+        renderRows(output, rows, physicalLines);
+        physicalLines = totalPhysicalLines(rows, columns);
       };
       draw();
 
@@ -176,12 +234,13 @@ export async function runMultiSelectPicker(
     return new Promise<number[] | null>((resolve) => {
       let highlighted = 0;
       let checked = [...initiallyChecked];
-      let rowCount = 0;
+      let physicalLines = 0;
+      const columns = columnsOf(output);
 
       const draw = () => {
         const rows = items.map((label, i) => highlightRow(`[${checked[i] ? "x" : " "}] ${label}`, i === highlighted));
-        renderRows(output, rows, rowCount);
-        rowCount = rows.length;
+        renderRows(output, rows, physicalLines);
+        physicalLines = totalPhysicalLines(rows, columns);
       };
       draw();
 

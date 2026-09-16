@@ -236,9 +236,13 @@ function logProgress(opts: RunOnboardOptions, stage: (typeof PROGRESS_STAGES)[nu
   console.error(`[${index}/${PROGRESS_STAGES.length}] ${stage}`);
 }
 
+/** A count only, never the full skill name list — with 30+ skills this
+ * used to render as one unreadable, wrapping wall of text per row
+ * (found via a real mirasim terminal session). The full names are still
+ * available from `trellis doctor`/`--json`; a picker row's job is to
+ * let you tell agents apart at a glance, not enumerate everything. */
 function agentSummaryLabel(s: OnboardAgentSummary): string {
-  const skills = s.skillCount > 0 ? ` (${s.skillNames.join(", ")})` : "";
-  return `${s.agent} — ${s.skillCount} skill(s)${skills}, instructions: ${s.hasRealInstructions ? "yes" : "no"}, mcp: ${s.mcpServerCount}`;
+  return `${s.agent} — ${s.skillCount} skill(s), instructions: ${s.hasRealInstructions ? "yes" : "no"}, mcp: ${s.mcpServerCount}`;
 }
 
 /** Numbered-typing fallback (trellis-onboard-interactive-picker design.md
