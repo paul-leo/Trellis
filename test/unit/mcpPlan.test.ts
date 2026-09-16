@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HUB_ENTRY_NAME, resolveMcpPlan } from "../../src/adapters/mcpPlan.js";
+import { GATEWAY_COMMAND, GATEWAY_ENTRY_NAME, HUB_ENTRY_NAME, resolveMcpPlan } from "../../src/adapters/mcpPlan.js";
 import { ALL_AGENTS } from "../../src/core/types.js";
 import type { McpConfig, SecretsPolicy } from "../../src/core/types.js";
 
@@ -236,4 +236,117 @@ test("resolveMcpPlan: hub mode collision check runs only against the hub entry n
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.equal(result.conflicts[0].name, HUB_ENTRY_NAME);
+});
+
+// --- gateway mode (trellis-mcp-gateway-hosting tasks.md 3.4) ---
+
+const THREE_SERVERS = {
+  a: { transport: "stdio" as const, command: "node" },
+  b: { transport: "stdio" as const, command: "node" },
+  c: { transport: "http" as const, url: "https://example.test/mcp" },
+};
+
+test("resolveMcpPlan: gateway mode collapses every server to one entry regardless of server count", () => {
+  const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true } });
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+
+  assert.equal(result.desired.length, 1);
+  assert.equal(result.desired[0].name, GATEWAY_ENTRY_NAME);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test("resolveMcpPlan: the gateway entry is an ordinary stdio command carrying the resolving agent's own id", () => {
+  const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true } });
+
+  for (const agentId of ALL_AGENTS) {
+    const [entry] = resolveMcpPlan(agentId, config, ALL_AGENTS, POLICY).desired;
+    assert.equal(entry.def.transport, "stdio");
+    assert.equal(entry.def.command, GATEWAY_COMMAND);
+    // The gateway is one shared process shape, but the tool view it serves
+    // is per-agent — so the agent id has to travel in the entry itself
+    // (design.md D14). A bare `trellis mcp-gateway` could not know who
+    // spawned it.
+    assert.deepEqual(entry.def.args, ["mcp-gateway", "--agent", agentId]);
+  }
+});
+
+test("resolveMcpPlan: gateway defaults to every managed agent, and only managed ones", () => {
+  const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true } });
+  const managed = ["claude-code", "codex"] as const;
+
+  assert.equal(resolveMcpPlan("claude-code", config, managed, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
+  assert.equal(resolveMcpPlan("codex", config, managed, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
+  // kiro isn't managed, so it gets nothing — not a gateway entry, and not
+  // the per-server entries either. Gateway mode inherits the managed-agent
+  // boundary rather than becoming a way around it: Trellis writing into an
+  // unmanaged agent's config is exactly what that boundary exists to
+  // prevent (trellis-managed-agents).
+  const kiro = resolveMcpPlan("kiro", config, managed, POLICY);
+  assert.deepEqual(kiro.desired, []);
+  assert.deepEqual(kiro.conflicts, []);
+});
+
+test("resolveMcpPlan: an explicit agents list narrows gateway mode, leaving the rest in direct mode", () => {
+  const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true, agents: ["claude-code"] } });
+
+  assert.equal(resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
+  const codex = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.equal(codex.desired.length, 3, "codex still receives one native entry per server");
+});
+
+test("resolveMcpPlan: enabled:false leaves every agent exactly as it was", () => {
+  const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: false } });
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  assert.equal(result.desired.length, 3);
+});
+
+test("resolveMcpPlan: gateway and hub coexist — gateway wins where it applies, hub serves the rest", () => {
+  const config = mcp({
+    servers: THREE_SERVERS,
+    hub: { url: "http://127.0.0.1:37373/mcp" },
+    gateway: { enabled: true, agents: ["claude-code"] },
+  });
+
+  // Both set is not an error: they mean different things and neither
+  // requires the other to change (design.md D5/D6).
+  assert.equal(resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
+  const codex = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.equal(codex.desired[0].name, HUB_ENTRY_NAME);
+  assert.deepEqual(codex.conflicts, []);
+});
+
+test("resolveMcpPlan: a host-injected name equal to the gateway entry name is a conflict, not a silent write", () => {
+  const config = mcp({
+    servers: THREE_SERVERS,
+    knownHostInjected: [GATEWAY_ENTRY_NAME],
+    gateway: { enabled: true },
+  });
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+
+  assert.deepEqual(result.desired, [], "shadowing a host-injected server is refused, exactly as hub mode refuses it");
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(result.conflicts[0].name, GATEWAY_ENTRY_NAME);
+});
+
+test("resolveMcpPlan: in gateway mode Codex's headers-shape limitation no longer applies", () => {
+  // In direct mode this exact server is a codex-only conflict: Codex can
+  // express only { Authorization: "Bearer ${VAR}" }. In gateway mode Codex
+  // never receives the headers at all — the gateway holds and sends them
+  // on its behalf, so there is nothing for Codex's format to fail to
+  // express.
+  const servers = {
+    "multi-header": {
+      transport: "http" as const,
+      url: "https://example.test/mcp",
+      headers: { Authorization: "Bearer ${TOKEN}", "X-Extra": "${OTHER}" },
+    },
+  };
+
+  const direct = resolveMcpPlan("codex", mcp({ servers }), ALL_AGENTS, POLICY);
+  assert.equal(direct.conflicts.length, 1, "precondition: this is a real conflict in direct mode");
+
+  const gateway = resolveMcpPlan("codex", mcp({ servers, gateway: { enabled: true } }), ALL_AGENTS, POLICY);
+  assert.deepEqual(gateway.conflicts, []);
+  assert.equal(gateway.desired.length, 1);
+  assert.equal(gateway.desired[0].name, GATEWAY_ENTRY_NAME);
 });

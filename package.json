@@ -26,8 +26,9 @@
     "build": "tsc -p tsconfig.json && node scripts/build-pi-bridge.mjs",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/unit/**/*.test.ts",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "pretest": "node scripts/build-pi-bridge.mjs",
+    "test": "tsx --test \"test/unit/**/*.test.ts\"",
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
   },
   "engines": {
     "node": ">=20"

@@ -179,6 +179,95 @@ Reverse-engineered directly from the installed binary
   genuine code, not config templating — see
   [`src/adapters/pi/`](../src/adapters/pi).
 
+## Cross-machine / cloud sharing — surveyed 2026-09-15, future direction confirmed
+
+Trellis today is single-machine-only (`docs/architecture.md`'s "Global vs.
+workspace scope" section deliberately scopes out project-local merge, but
+says nothing about cross-*machine* sync — that's a separate, real gap, not
+something already decided against). **Cloud/cross-machine sharing is
+confirmed as a future requirement, not a maybe** — the open question is
+sequencing and substrate choice, not whether to build it.
+
+Two genuinely different problems got explored together and need to stay
+separate in any design that follows:
+
+1. **Keeping `~/.trellis` canonical source consistent across a person's own
+   multiple machines** (config sync — small files, low write frequency).
+2. **Coordinating agent execution across machines / providing a shared
+   runtime substrate** (running-process orchestration — a different problem
+   with different failure modes, not a natural extension of #1).
+
+### `cloudflare/computer` — evaluated, not adopted
+
+[cloudflare/computer](https://github.com/cloudflare/computer) gives an
+agent a durable virtual filesystem (SQLite inside a Durable Object,
+`@cloudflare/dofs`) plus a pluggable execution backend (container FUSE
+mount, isolate shell via `just-bash`, or isolate JS in a Dynamic Worker) —
+one `workspace.runtime.exec(source, { backend })` entrypoint. Aimed at
+SaaS-scale "give every concurrent agent task its own cheap, horizontally-
+scalable workspace," not at syncing a handful of config files between a
+person's own laptop and desktop.
+
+Explicitly **PREVIEW ONLY** per the project's own README: "APIs are
+unstable... NOT suitable for production use at this time." That alone
+rules it out as a dependency today, separate from the architectural
+mismatch.
+
+The one reusable idea, if problem #1 above is tackled with a real sync
+protocol later rather than git: `@cloudflare/dofs`'s sync building blocks
+(`applyChanges`/`stageBlob`/`materialiseChange`/`fetchChanges`/
+`buildManifest`/`currentRev`/watermark cursors) are a clean change-set +
+content-addressed-blob + watermark model worth studying as a *design
+reference*, not a dependency — adopting the package itself means adopting
+Cloudflare Durable Objects as a required backend, which is a vendor
+commitment Trellis has never needed for anything else it does (everything
+else runs as a local CLI against local files).
+
+**Recommendation for problem #1**: start with git as the sync transport
+(`~/.trellis` is already just markdown/YAML — a natural git repo; `trellis
+sync` gains a `git pull --rebase`/`git push` step, conflicts resolved by
+git's own mechanism) before building or adopting any bespoke sync engine.
+Matches the project's own existing principle for MCP hub mode — "no engine
+switch in the type, only a URL" — apply the same discipline here: don't
+build sync-engine abstraction ahead of validating that git alone doesn't
+already solve it.
+
+### Sandbox / execution substrate landscape — problem #2
+
+Surveyed for "a place agents actually run" rather than "a place config
+gets copied to":
+
+| Project | Model | License / status | Notes |
+|---|---|---|---|
+| [dagger/container-use](https://github.com/dagger/container-use) | MCP server; each agent gets an isolated container + its own git branch | Apache-2.0-adjacent, early/active | Works with *any* MCP-compatible agent, no vendor lock-in per its own README; `git checkout <branch>` to review any agent's work. Lightest-weight fit for Trellis's existing "MCP is the one place we write real integration code" model — could ship as a documented default MCP server entry with zero new adapter code, the same way `memory` (P6) was added |
+| [awslabs/cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator) (CAO) | Local `cao-server` + per-agent isolated tmux sessions; supervisor/worker delegation; Web UI, HTTP API, PTY WebSocket; K8s deployment (shared workspace, per-pod state, credential delivery) | Apache-2.0, active (AWS) | **Directly supports Kiro CLI, Claude Code, and Codex CLI** — three of Trellis's four managed agents by name. Closest existing match to "run agents more smoothly + fleet management," and the closest existing candidate for problem #2 (cross-machine coordination) via its K8s deployment story. Not yet verified against Trellis's own canonical source/scope model — CAO has its own agent-profile concept, which is a second place "what an agent is configured to do" could live, the exact fragmentation class `docs/research.md`'s mcp-router incident (§ MCP aggregation) already warns about |
+| [daytonaio/daytona](https://github.com/daytonaio/daytona) | Firecracker-level sandbox infra, multi-language SDKs | Open-source repo, **but its own README states core development moved to a private codebase as of June 2026 — "no longer maintained"** | Ruled out: not an active open-source target to build on |
+| [e2b-dev/E2B](https://github.com/e2b-dev/E2B), [opensandbox-group/OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) | Firecracker microVM / Docker+K8s one-shot code-execution sandboxes | E2B mostly managed (weak self-host story); OpenSandbox self-hostable | Both model "spin up a sandbox per code execution," not "keep a long-lived agent runtime consistent across a person's machines" — weaker fit than container-use/CAO for Trellis's actual use case |
+
+### Recommended path, not yet built
+
+1. **Cheapest, ships now, zero new adapter code**: document `container-use`
+   as an optional MCP server entry in `schema/servers.example.yaml`
+   (same pattern P6 used for `memory`) — every managed agent gets isolated,
+   disposable containers per task through the exact mechanism Trellis
+   already has for distributing MCP config. No cross-machine claim yet,
+   just "agents run more safely/smoothly," which is this session's own
+   stated ask.
+2. **Validate cross-machine config sync with git before building anything
+   bespoke** (problem #1) — smallest possible experiment, no new runtime
+   dependency.
+3. **Evaluate CAO as the substrate for problem #2** (cross-machine
+   coordination) only after #1 and #2 are separately validated as real,
+   distinct needs — specifically check whether its agent-profile model can
+   be made to read Trellis's canonical source rather than becoming a
+   second source of truth. This is new-project-scale work, not an
+   incremental Trellis phase — should get its own openspec proposal with
+   explicit success criteria before any code is written.
+
+None of the above is built yet. This section exists so the next design
+pass starts from "what was already checked" instead of re-surveying the
+same ground.
+
 ## Codex — three hard constraints learned by breaking them
 
 All three below came from real incidents, not upfront design, and any Codex

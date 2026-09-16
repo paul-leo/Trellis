@@ -128,15 +128,32 @@ known_host_injected:
   - memory
   - mirasim
 
-# How the servers above reach the four agents. Omit this whole block for
+# How the servers above reach the four agents. Omit BOTH blocks below for
 # direct mode (today's default: every agent gets all N server definitions
 # written straight into its native config).
 #
-# Set it to route every agent through a single HTTP endpoint instead —
-# every adapter then writes exactly ONE entry (this URL), not N. What runs
-# behind the URL is not Trellis's concern: could be a self-hosted
-# github.com/ravitemer/mcp-hub instance, a hosted mcp-router account,
-# anything else speaking MCP over HTTP. No engine/product switch to
-# maintain — see docs/architecture.md "MCP hub mode".
+# `hub` routes an agent through a single HTTP endpoint you operate
+# somewhere else — the adapter then writes exactly ONE entry (this URL),
+# not N. What runs behind the URL is not Trellis's concern: could be a
+# self-hosted github.com/ravitemer/mcp-hub instance, a hosted mcp-router
+# account, anything else speaking MCP over HTTP. No engine/product switch
+# to maintain — see docs/architecture.md "MCP hub mode".
 hub:
   url: "http://127.0.0.1:37373/mcp"
+
+# `gateway` also collapses an agent to one entry, but what sits behind it
+# is a local subprocess Trellis itself spawns (`trellis mcp-gateway`), not
+# a URL you operate. It connects out to the servers above once, resolves
+# their secrets through secrets.policy.yaml exactly as direct mode does,
+# and exposes their tools as `<server>__<tool>`. There is nothing to start
+# or stop: the agent spawns it like any other stdio MCP server, and it
+# exits when the session ends.
+#
+# `gateway` and `hub` are independent and may both be present; gateway
+# wins for any agent it covers. Omit `agents:` — the normal case — and it
+# applies to every managed agent; list them to leave the rest in direct or
+# hub mode.
+#
+# gateway:
+#   enabled: true
+#   agents: [claude-code, codex]

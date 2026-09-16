@@ -113,3 +113,31 @@ test("run directory name embeds the command, sorts lexically after an earlier ru
   assert.ok(runIds[0].endsWith("-sync") && !runIds[0].endsWith("-mcp-sync"), runIds[0]);
   assert.ok(runIds[1].endsWith("-mcp-sync"), runIds[1]);
 });
+
+test("run ids stay in chronological order even when opened within the same millisecond", () => {
+  // The test above only exercises the collision when two sessions happen to
+  // land in the same millisecond — it passed on slower runs and failed on
+  // fast ones. This forces the case: a tight loop is guaranteed to reuse a
+  // timestamp, and the command names are chosen so that a tie would be
+  // broken by command name in the WRONG direction ("a" sorts before "b",
+  // but runs in reverse order here).
+  const home = scratchHome();
+  const commands = ["zzz", "mmm", "aaa"];
+  const created: string[] = [];
+  for (const [index, command] of commands.entries()) {
+    const session = openBackupSession(home, command);
+    session.writeFile(join(home, `f${index}.json`), "1");
+    session.finalize();
+    created.push(command);
+  }
+
+  const runIds = readdirSync(backupsRoot(home));
+  assert.equal(runIds.length, 3, "three distinct run directories, not two collided into one");
+  assert.deepEqual(
+    [...runIds].sort().map((id) => id.replace(/^.*Z-\d+-/, "")),
+    created,
+    // rollback.ts resolves "the most recent run" by taking the last of a
+    // lexical sort; if this ordering is wrong it restores the wrong run.
+    "lexical sort must reproduce creation order, not command-name order",
+  );
+});

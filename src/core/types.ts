@@ -103,20 +103,47 @@ export interface HubConfig {
   url: string;
 }
 
+/**
+ * Converge an agent's MCP config onto one local stdio process Trellis
+ * itself spawns (`trellis mcp-gateway --agent <id>`), instead of writing
+ * one native entry per server.
+ *
+ * Deliberately NOT the same field as `hub`: `hub` names an HTTP endpoint
+ * the user operates somewhere else and Trellis never starts; this names a
+ * subprocess Trellis owns. Overloading one field to mean both would force
+ * every future reader to disambiguate two unrelated concepts by context
+ * (trellis-mcp-gateway-hosting design.md D5).
+ */
+export interface GatewayConfig {
+  enabled: boolean;
+  /**
+   * Which agents converge through the gateway. Omit — the expected normal
+   * case — and `enabled` applies to every managed agent; which agents
+   * converge is not a question a user should have to answer to get the
+   * feature. Present, it narrows to exactly these, leaving the rest in
+   * direct or hub mode.
+   */
+  agents?: AgentId[];
+}
+
 export interface McpConfig {
   servers: Record<string, McpServerDef>;
   /**
    * Server names a host environment (e.g. mirasim) is known to inject at
    * runtime. Checked against every server name Trellis would write per
-   * agent when `hub` is unset; against the single hub entry name only when
-   * `hub` is set (there's nothing else to collide) — see docs/research.md
-   * "Codex — three hard constraints" for why a same-name collision is not
-   * a soft failure on every agent.
+   * agent in direct mode; against the single converged entry name only in
+   * hub or gateway mode (there's nothing else to collide) — see
+   * docs/research.md "Codex — three hard constraints" for why a same-name
+   * collision is not a soft failure on every agent.
    */
   knownHostInjected: string[];
   /** Omit for direct mode (today's default: every agent gets all N server
    * definitions written into its native config). See `HubConfig`. */
   hub?: HubConfig;
+  /** Omit for direct mode. See `GatewayConfig`. Independent of `hub`: the
+   * two mean different things and may both be set, in which case gateway
+   * wins per agent (trellis-mcp-gateway-hosting design.md D5/D6). */
+  gateway?: GatewayConfig;
 }
 
 export interface SkillRef {

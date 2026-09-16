@@ -11,13 +11,15 @@ import { runMigrate } from "./commands/migrate.js";
 import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, parseMcpAddArgs } from "./commands/mcp.js";
+import { parseMcpGatewayArgs, runMcpGateway } from "./commands/mcpGateway.js";
+import { runMcpAuth } from "./commands/mcpAuth.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
 import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
 import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "skill", "memory", "secrets", "rollback"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "skill", "memory", "secrets", "rollback"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -80,6 +82,14 @@ Commands:
               [--enabled true|false]
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
+  mcp auth <server-name>
+            Authorize a remote (http/sse) MCP server that uses OAuth —
+              opens a browser once, stores the result 0600 under
+              ~/.trellis/mcp/oauth/. A still-valid token is a no-op; an
+              expired one is refreshed without a browser. The gateway
+              refreshes silently on its own and never prompts.
+              --force   re-authorize even if the stored token is valid
+              --json    machine-readable output, no report text
   mcp remove <name>
             Remove a canonical MCP server (canonical-side only — does
               not touch any agent's already-synced native config)
@@ -179,6 +189,21 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  // Spawned by an agent, never typed by a person: stdout is the MCP
+  // protocol stream for the rest of this process's life, so nothing here
+  // may print to it (trellis-mcp-gateway-hosting design.md D2).
+  if (command === "mcp-gateway") {
+    const parsed = parseMcpGatewayArgs(rest);
+    if ("error" in parsed) {
+      console.error(parsed.error);
+      process.exitCode = 1;
+      return;
+    }
+    const { exitCode } = await runMcpGateway({ agentId: parsed.agentId });
+    process.exitCode = exitCode;
+    return;
+  }
+
   if (command === "sync") {
     const { target, unknownArg } = parseSyncArgs(rest);
     if (unknownArg) {
@@ -221,7 +246,20 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = runMcpRemove(name, { json, dryRun }).exitCode;
       return;
     }
-    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|remove <name>\n`);
+
+    if (subcommand === "auth") {
+      const [serverName] = mcpRest;
+      if (!serverName || serverName.startsWith("--")) {
+        console.error("Usage: trellis mcp auth <server-name>");
+        process.exitCode = 1;
+        return;
+      }
+      const { exitCode } = await runMcpAuth({ serverName, force: mcpRest.includes("--force"), json });
+      process.exitCode = exitCode;
+      return;
+    }
+
+    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|remove <name>|auth <name>\n`);
     process.exitCode = 1;
     return;
   }

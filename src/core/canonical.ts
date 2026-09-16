@@ -9,7 +9,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { isMap, parse as parseYaml, parseDocument } from "yaml";
-import type { AgentId, AgentProfile, CanonicalSource, McpConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
+import type { AgentId, AgentProfile, CanonicalSource, GatewayConfig, McpConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
 import { ALL_AGENTS } from "./types.js";
 
 interface ScopeYaml {
@@ -32,6 +32,7 @@ interface ServersYaml {
   servers?: Record<string, McpServerDefYaml>;
   known_host_injected?: string[];
   hub?: { url: string };
+  gateway?: { enabled?: boolean; agents?: AgentId[] };
 }
 
 function fromServerDefYaml(def: McpServerDefYaml): McpServerDef {
@@ -121,7 +122,22 @@ function loadServersYaml(path: string): McpConfig {
     servers,
     knownHostInjected: parsed.known_host_injected ?? [],
     hub: parsed.hub,
+    gateway: fromGatewayYaml(parsed.gateway),
   };
+}
+
+/**
+ * A `gateway:` block with no `enabled` key reads as off, not as on — the
+ * only safe default for a field whose whole effect is to stop writing the
+ * per-server entries an agent is currently working with. Absent entirely,
+ * the field stays `undefined` so `resolveMcpPlan` can tell "never
+ * configured" from "explicitly disabled" if that ever matters.
+ */
+function fromGatewayYaml(gateway: ServersYaml["gateway"]): GatewayConfig | undefined {
+  if (!gateway) return undefined;
+  const out: GatewayConfig = { enabled: gateway.enabled === true };
+  if (gateway.agents) out.agents = gateway.agents;
+  return out;
 }
 
 export type ServersYamlWriteResult = { ok: true } | { ok: false; error: string };

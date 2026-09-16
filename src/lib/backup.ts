@@ -42,11 +42,40 @@ function sha256(content: string): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
-/** `:` and `.` are legal in POSIX filenames but awkward across shells and
- * some tooling; replaced so a run id is safe to pass around bare. */
+let lastTimestamp = "";
+let sameMillisecondSeq = 0;
+
+/**
+ * `<iso-timestamp>-<seq>-<command>`.
+ *
+ * `:` and `.` are legal in POSIX filenames but awkward across shells and
+ * some tooling; replaced so a run id is safe to pass around bare.
+ *
+ * The sequence number is what makes `rollback.ts`'s "lexical sort is
+ * chronological sort" assumption actually true. Without it, two sessions
+ * opened in the same millisecond tie on the timestamp and the *command
+ * name* decides the order — so `...469Z-mcp-sync` sorts before
+ * `...469Z-sync` even though it ran second, and `trellis rollback` with
+ * no run id restores the wrong run. It is always present, never omitted
+ * for the first run of a millisecond: an id that sometimes has the field
+ * and sometimes doesn't reintroduces the same tie-break-by-command bug
+ * between those two shapes.
+ *
+ * Scope of the guarantee: within one process. Two separate `trellis`
+ * invocations landing in the same millisecond would still tie — not
+ * realistically reachable for a CLI that reads canonical and touches the
+ * filesystem before opening a session, and no worse than the behavior
+ * this replaces.
+ */
 function runIdFor(command: string): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${ts}-${command}`;
+  if (ts === lastTimestamp) {
+    sameMillisecondSeq += 1;
+  } else {
+    lastTimestamp = ts;
+    sameMillisecondSeq = 0;
+  }
+  return `${ts}-${String(sameMillisecondSeq).padStart(3, "0")}-${command}`;
 }
 
 export function backupsRoot(homeDir: string): string {

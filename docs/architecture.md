@@ -234,28 +234,97 @@ one header simply can't reach Codex through Trellis, and is refused
 there (not silently dropped) while still reaching every other agent.
 
 **Real OAuth** (browser redirect, short-lived access token, refresh
-token) is not implemented anywhere in Trellis, on purpose. All three
-native-config agents already have their own real, working flow for it:
+token) was, for most of this project's life, deliberately not built:
+all three native-config agents already have their own working flow —
+Claude Code's `claude mcp add --client-id/--client-secret/--callback-port`,
+Codex's `codex mcp login`/`logout` pair, Kiro's `oauth`/`oauthScopes`
+fields — and pi, whose bridge is Trellis's own code, simply couldn't
+reach such a server at all.
 
-- Claude Code: `claude mcp add --client-id/--client-secret/--callback-port`
-- Codex: a dedicated `codex mcp login`/`codex mcp logout` pair
-- Kiro: `oauth`/`oauthScopes` fields in its own real
-  `~/.kiro/settings/mcp.json` schema
+That changed with gateway mode (below), which made it unavoidable: in
+gateway mode the agent connects to Trellis, and Trellis connects to the
+remote server, so the agent's own OAuth flow is no longer on the path.
+Trellis now implements the client half itself — discovery (RFC 8414 /
+RFC 9728), dynamic client registration (RFC 7591), authorization code
+with PKCE S256 (RFC 7636), and the refresh grant — in `src/lib/oauth/`.
 
-pi has none of this — its bridge is Trellis's own code, and the MCP
-SDK's `authProvider: OAuthClientProvider` option is a full
-redirect-and-refresh flow that doesn't fit a synchronously-loaded
-extension's lifecycle. A remote server that requires real OAuth simply
-isn't reachable through the pi bridge today — a real, stated limitation,
-not something papered over with a partial implementation.
+Two rules shape it, both from the constraint that the gateway is spawned
+silently by an agent with no terminal attached:
+
+- **Only `trellis mcp auth <server>` ever opens a browser.** It is run by
+  a human, once. The gateway never initiates an interactive flow under
+  any circumstance; a server with no stored credential is skipped the
+  same way an unreachable one is.
+- **Refreshing is silent, and serialized by a lock.** A `refresh_token`
+  grant needs neither a browser nor a callback, so the gateway does it
+  at connect time. The lock (`~/.trellis/mcp/oauth/<name>.lock`) exists
+  because most authorization servers rotate the refresh token and
+  invalidate its predecessor — two concurrent refreshes would leave one
+  party holding a credential that is already dead.
+
+Tokens live one-file-per-server at `~/.trellis/mcp/oauth/<name>.json`,
+mode 0600, never in `servers.yaml` and never in the OS keychain (macOS's
+`security add-generic-password` fails with exit 152/154 in exactly the
+non-interactive, no-GUI-session context the gateway runs in — measured,
+not assumed).
+
+In direct mode nothing here applies: each agent keeps using its own
+native OAuth flow, exactly as before.
+
+## MCP gateway mode
+
+Gateway mode collapses an agent's MCP config to one entry, like hub mode
+— but what sits behind it is a local subprocess Trellis owns
+(`trellis mcp-gateway --agent <id>`), not a URL someone operates. Set
+`mcp.gateway.enabled` in `mcp/servers.yaml`; add `mcp.gateway.agents` to
+narrow it to specific agents, or omit it to cover every managed agent.
+`gateway` and `hub` are independent fields and may both be set — gateway
+wins for any agent it covers.
+
+**Lifecycle: there isn't one.** The agent spawns it like any other stdio
+MCP server and it exits when the session ends. No daemon, no
+start/stop/status command, nothing to monitor. Two things make that
+true rather than aspirational:
+
+- The gateway watches its own stdin for EOF and tears everything down.
+  The MCP SDK's `StdioServerTransport` binds only `'data'` and
+  `'error'`, so it never reports EOF, and POSIX re-parents orphans to
+  launchd rather than killing them — without explicit teardown every
+  session would leak a gateway plus its whole upstream set, forever.
+- Upstream failures are isolated. One server that is unreachable,
+  misconfigured, or permanently hanging is logged and skipped; every
+  other server's tools are still served.
+
+**What it does:** resolves the same in-scope server set direct mode
+would have written for that agent (same `resolveMcpPlan`, so per-server
+`agents:` scope, `enabled: false`, host-injected collisions,
+literal-secret refusals and unresolved `env` names all behave
+identically), connects each one, and exposes their tools as
+`<server>__<tool>`. Secrets resolve through `resolveSecretEnv` exactly as
+in direct mode — the gateway introduces no second path by which a value
+could reach disk.
+
+**What it changes for the agents:** Codex's single-`bearer_token_env_var`
+limitation stops applying, because Codex no longer receives any server's
+`headers` — the gateway holds them. Remote servers needing real OAuth
+become reachable from every agent, including pi, for the same reason.
+
+**The seam.** `src/commands/mcpGateway.ts` depends on a `GatewayBackend`
+interface and nothing below it — never a connection, transport, or
+server definition. Today the only implementation connects upstreams
+in-process, one gateway per agent session. The confirmed direction is a
+single shared service holding one connection set for all agents, with
+the per-session process becoming a thin client forwarding over a Unix
+socket, speaking MCP itself (so no second protocol to own). That is a
+substitution at one construction site: the entry written into each
+agent's config is identical either way, so converging later requires no
+re-sync and nothing the user notices.
 
 ## What Trellis explicitly does not build
 
-- An MCP aggregator/gateway's actual routing/proxy logic (hub mode above
-  lets you point every agent at one, but Trellis doesn't implement one)
-- Real OAuth for remote MCP servers (browser redirect, token storage,
-  refresh) — every agent that has its own native flow keeps using it;
-  see "Static header auth vs. real OAuth" above
+- A resident MCP gateway daemon. Gateway mode above is a per-session
+  subprocess with no lifecycle; hub mode points at something you operate.
+  Neither is a service Trellis starts, supervises, or keeps running.
 - A memory backend (defaults to `@modelcontextprotocol/server-memory`,
   documented in `schema/servers.example.yaml`; mem0/OpenMemory and
   totalrecallai-class semantic-search servers documented as opt-in

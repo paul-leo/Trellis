@@ -23,6 +23,25 @@ import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
 
 export const HUB_ENTRY_NAME = "trellis-hub";
+export const GATEWAY_ENTRY_NAME = "trellis-gateway";
+
+/** The command an agent spawns in gateway mode. Bare `trellis` rather than
+ * an absolute path: the entry has to keep working across reinstalls and
+ * version bumps, and every agent resolves it through the same PATH the
+ * user installed the CLI onto. */
+export const GATEWAY_COMMAND = "trellis";
+
+/**
+ * Gateway mode applies to every managed agent when `agents` is omitted —
+ * the expected normal case (design.md D14). An explicit list narrows it,
+ * letting some agents stay in direct or hub mode.
+ */
+export function isGatewayAgent(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[]): boolean {
+  const gateway = mcp.gateway;
+  if (!gateway?.enabled) return false;
+  if (gateway.agents) return gateway.agents.includes(agentId);
+  return managedAgents.includes(agentId);
+}
 
 export interface DesiredMcpEntry {
   name: string;
@@ -95,6 +114,25 @@ function findUnresolvedEnvName(def: McpServerDef, policy: SecretsPolicy): string
 }
 
 export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[], policy: SecretsPolicy): McpPlanResult {
+  // Checked before `hub`: only one entry can be "the" MCP entry for an
+  // agent, and gateway is the newer, purpose-built path (design.md D6).
+  // `hub` stays available, unchanged, for anyone pointing an agent at an
+  // externally-operated endpoint — including a different agent in the
+  // same canonical source.
+  if (isGatewayAgent(agentId, mcp, managedAgents)) {
+    if (mcp.knownHostInjected.includes(GATEWAY_ENTRY_NAME)) {
+      return { desired: [], conflicts: [{ name: GATEWAY_ENTRY_NAME, message: collisionMessage(GATEWAY_ENTRY_NAME, agentId) }] };
+    }
+    // Every per-server check (enabled, scope, literal secrets, unresolved
+    // env names, Codex's header shape) still runs — but at gateway
+    // *startup*, inside the subcommand, since no adapter sees an
+    // individual server in this mode (design.md D6).
+    return {
+      desired: [{ name: GATEWAY_ENTRY_NAME, def: { transport: "stdio", command: GATEWAY_COMMAND, args: ["mcp-gateway", "--agent", agentId] } }],
+      conflicts: [],
+    };
+  }
+
   if (mcp.hub) {
     if (mcp.knownHostInjected.includes(HUB_ENTRY_NAME)) {
       return { desired: [], conflicts: [{ name: HUB_ENTRY_NAME, message: collisionMessage(HUB_ENTRY_NAME, agentId) }] };

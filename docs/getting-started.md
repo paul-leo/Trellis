@@ -315,7 +315,8 @@ below.
 Distributes `~/.trellis/mcp/servers.yaml` to every **managed** agent's
 native MCP config — same restriction as `sync`, see above. See [`schema/servers.example.yaml`](../schema/servers.example.yaml)
 for the full documented shape — server definitions, per-agent scoping,
-known-host-injected collision avoidance, and hub mode.
+known-host-injected collision avoidance, hub mode, and gateway mode
+(below).
 
 ```
 $ trellis mcp sync
@@ -366,6 +367,63 @@ key. Writing that kind of reference as `static_env` looks like it works
 unexpanded `${SOURCE_NAME}` text to any agent with no `${VAR}` runtime
 of its own — which is exactly what broke pi's Notion connection before
 this field existed.
+
+## Gateway mode — one entry per agent instead of N
+
+Add this to `servers.yaml` and every managed agent's config collapses to
+a single MCP entry:
+
+```yaml
+gateway:
+  enabled: true
+```
+
+Then re-run `trellis mcp sync`. Instead of one native entry per server,
+each agent gets one stdio entry pointing at `trellis mcp-gateway`. The
+agent spawns it like any other stdio MCP server; it connects out to your
+servers, and exits when the session ends. There is nothing to start,
+stop, or monitor.
+
+Your servers' tools appear to the agent as `<server>__<tool>` — the
+`gitlab` server's `search` becomes `gitlab__search`.
+
+Add `agents: [claude-code, codex]` under `gateway:` to narrow it, leaving
+the rest in direct mode. Gateway mode and `hub` are independent; both can
+be set, and gateway wins for any agent it covers.
+
+Two things stop being problems in gateway mode. Codex can normally only
+express a single `Authorization: Bearer ${VAR}` header, so a server
+needing more than one was refused for Codex — in gateway mode Codex never
+sees any server's headers, so it just works. And remote servers requiring
+real OAuth become reachable from every agent, including pi.
+
+### `trellis mcp auth <server-name>`
+
+For a remote (`http`/`sse`) server that uses OAuth, authorize it once:
+
+```
+$ trellis mcp auth notion-remote
+✅ notion-remote — authorized (expires 2026-09-16T11:24:03.000Z)
+   credentials: ~/.trellis/mcp/oauth/notion-remote.json
+```
+
+This opens your browser, completes the flow, and stores the result 0600
+under `~/.trellis/mcp/oauth/` — never in `servers.yaml`, so canonical
+stays safe to read, diff, and commit.
+
+Run it once per server. After that the gateway refreshes the token
+silently whenever it expires; it never opens a browser and never prompts,
+because it is spawned by an agent with no terminal attached. Re-running
+this command when the stored token is still valid does nothing (`--force`
+overrides); when it has expired but is renewable, it refreshes without a
+browser.
+
+If a server has no stored credential, the gateway skips that one server
+and keeps serving every other — it does not fail to start.
+
+This command only applies to `http`/`sse` servers. stdio servers get
+their credentials from `env`/`env_aliases` as described above; running
+`mcp auth` on one tells you so rather than opening a pointless browser.
 
 ## `trellis memory sync`
 

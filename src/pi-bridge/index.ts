@@ -13,19 +13,18 @@
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TSchema } from "typebox";
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveMcpPlan } from "../adapters/mcpPlan.js";
-import { resolveSecretEnv } from "../lib/secretEnv.js";
-import { extractTemplateVarNames } from "../lib/envVarNames.js";
+import { connectServer, withTimeout, DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
 import { ALL_AGENTS } from "../core/types.js";
-import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 import { bridgedToolName, toParametersSchema, toPiContent, type McpContentItem } from "./schemaTranslate.js";
+
+/** Re-exported so `trellis-mcp-connect-timeout`'s existing test keeps
+ * importing it from the module it was written against — proving the
+ * extraction changed nothing it could observe. */
+export { withTimeout };
 
 interface PiToolResult {
   content: ReturnType<typeof toPiContent>;
@@ -45,114 +44,7 @@ interface PiExtensionAPI {
   on?(event: "session_shutdown", handler: () => Promise<void> | void): void;
 }
 
-const CLIENT_INFO = { name: "trellis-mcp-bridge", version: "0.0.0" };
-const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
-
-/**
- * A hanging server (process alive, protocol response never sent) leaves
- * `promise` permanently unsettled — indistinguishable from "still
- * starting up" without a bound. Racing against a timeout converts that
- * into an ordinary rejection, which every caller here already knows how
- * to isolate (design.md D1, trellis-mcp-connect-timeout).
- */
-export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    );
-  });
-}
-
-/**
- * A timed-out (or otherwise failed) connect attempt must not leak the
- * transport's own resources — for `StdioClientTransport` specifically,
- * an unclosed transport means an orphaned child process that outlives
- * this failed attempt indefinitely (confirmed by a real leaked
- * subprocess during this change's own test run). `transport.close()` is
- * best-effort: a transport that never fully connected may itself error
- * on close, but the original connect failure is what the caller needs
- * to see, not a secondary cleanup error.
- */
-async function connectWithCleanup(client: Client, transport: Transport, timeoutMs: number, message: string): Promise<Client> {
-  try {
-    await withTimeout(client.connect(transport), timeoutMs, message);
-    return client;
-  } catch (err) {
-    try {
-      await transport.close();
-    } catch {
-      // best-effort; the original connect failure is what matters
-    }
-    throw err;
-  }
-}
-
-async function connectStdio(def: McpServerDef, secretsPolicy: SecretsPolicy, timeoutMs: number): Promise<Client> {
-  const client = new Client(CLIENT_INFO, { capabilities: {} });
-  const envAliases = def.envAliases ?? {};
-  // `envAliases`' values are source variable names — resolved through the
-  // exact same call as `env`'s own names, never delivered as the raw
-  // `${sourceName}` placeholder text a consumer with no `${VAR}` runtime
-  // of its own (like this bridge) would otherwise crash on parsing
-  // (trellis-migrate-env-var-alias, the real notion-on-pi bug).
-  const resolved = resolveSecretEnv([...(def.env ?? []), ...Object.values(envAliases)], secretsPolicy);
-  const namedEnv = Object.fromEntries((def.env ?? []).map((name) => [name, resolved[name] ?? ""]));
-  const aliasEnv = Object.fromEntries(Object.entries(envAliases).map(([targetKey, sourceName]) => [targetKey, resolved[sourceName] ?? ""]));
-  const transport = new StdioClientTransport({
-    command: def.command!,
-    args: def.args,
-    // staticEnv merges last: a literal, intentionally-plain value (an
-    // email, an environment tag) always wins over an unresolved name-only
-    // entry's empty-string fallback for the same key — though in practice
-    // resolveMcpPlan's D6 refusal never lets an unresolved name reach
-    // this point at all (trellis-mcp-static-env-and-disabled-servers).
-    env: { ...getDefaultEnvironment(), ...namedEnv, ...aliasEnv, ...(def.staticEnv ?? {}) },
-  });
-  return connectWithCleanup(client, transport as Transport, timeoutMs, `connect timed out after ${timeoutMs}ms`);
-}
-
-function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Record<string, string> | undefined {
-  if (!def.headers || Object.keys(def.headers).length === 0) return undefined;
-  const names = Object.keys(def.headers).flatMap((key) => extractTemplateVarNames(def.headers![key]));
-  const resolved = resolveSecretEnv(names, secretsPolicy);
-  const result: Record<string, string> = {};
-  for (const [key, template] of Object.entries(def.headers)) {
-    result[key] = template.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name) => resolved[name] ?? "");
-  }
-  return result;
-}
-
-async function connectHttp(def: McpServerDef, secretsPolicy: SecretsPolicy, timeoutMs: number): Promise<Client> {
-  const client = new Client(CLIENT_INFO, { capabilities: {} });
-  const headers = resolveHeaders(def, secretsPolicy);
-  const opts = headers ? { requestInit: { headers } } : undefined;
-  return connectWithCleanup(
-    client,
-    new StreamableHTTPClientTransport(new URL(def.url!), opts) as Transport,
-    timeoutMs,
-    `connect timed out after ${timeoutMs}ms`,
-  );
-}
-
-async function connectSse(def: McpServerDef, secretsPolicy: SecretsPolicy, timeoutMs: number): Promise<Client> {
-  const client = new Client(CLIENT_INFO, { capabilities: {} });
-  const headers = resolveHeaders(def, secretsPolicy);
-  const opts = headers ? { requestInit: { headers } } : undefined;
-  return connectWithCleanup(
-    client,
-    new SSEClientTransport(new URL(def.url!), opts) as Transport,
-    timeoutMs,
-    `connect timed out after ${timeoutMs}ms`,
-  );
-}
+const CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-bridge", version: "0.0.0" };
 
 function registerServerTools(pi: PiExtensionAPI, serverName: string, client: Client, timeoutMs: number): Promise<void> {
   return withTimeout(client.listTools(), timeoutMs, `listTools timed out after ${timeoutMs}ms`).then((result) => {
@@ -227,13 +119,7 @@ export default async function trellisMcpBridge(
     desired.map(async ({ name, def }) => {
       let client: Client;
       try {
-        if (def.transport === "http") {
-          client = await connectHttp(def, canonical.secretsPolicy, connectTimeoutMs);
-        } else if (def.transport === "sse") {
-          client = await connectSse(def, canonical.secretsPolicy, connectTimeoutMs);
-        } else {
-          client = await connectStdio(def, canonical.secretsPolicy, connectTimeoutMs);
-        }
+        client = await connectServer(def, canonical.secretsPolicy, connectTimeoutMs, CLIENT_INFO);
       } catch (err) {
         // One unreachable/misconfigured (including permanently hanging —
         // trellis-mcp-connect-timeout) server must never prevent every
