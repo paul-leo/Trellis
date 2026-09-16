@@ -28,7 +28,8 @@
     "typecheck": "tsc --noEmit",
     "pretest": "node scripts/build-pi-bridge.mjs",
     "test": "tsx --test \"test/unit/**/*.test.ts\"",
-    "prepublishOnly": "npm run typecheck && npm run build && npm test"
+    "verify-pack": "node scripts/verify-pack.mjs",
+    "prepublishOnly": "npm run typecheck && npm run build && npm test && npm run verify-pack"
   },
   "engines": {
     "node": ">=20"
