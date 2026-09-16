@@ -16,10 +16,15 @@ $ trellis onboard
 ```
 
 Runs `init`, detects which of Claude Code/Codex/Kiro/pi are on this machine,
-then resolves two independent choices before running `migrate`, `sync`,
-`mcp sync`, `memory sync`, `secrets audit`, and a final health scan — the
-whole onboarding path, no follow-up commands to type by hand, and no need
-to run `trellis doctor` separately to know whether it actually worked.
+then resolves two interactive choices and two flag-only ones before running
+`migrate`, `sync`, `mcp sync`, `memory sync`, `secrets audit`, and a final
+health scan — the whole onboarding path, no follow-up commands to type by
+hand, and no need to run `trellis doctor` separately to know whether it
+actually worked. This is also the one command for reconfiguring an
+already-onboarded machine later: every one of the four choices below reads
+what's already there first, so a bare `trellis onboard` re-run changes
+nothing about them, and re-running with a new flag value updates exactly
+that.
 
 1. **Migration source** — read from, at most one, never written back to.
    "Real content" means skills, custom instructions, *or* real MCP servers
@@ -44,11 +49,36 @@ to run `trellis doctor` separately to know whether it actually worked.
    Selecting an agent that isn't installed yet is itself the authorization to
    install it (one confirmation, then a real `npm install -g <package>`);
    Kiro has no CLI package and is refused with its download URL instead.
+3. **MCP mode** — direct (the default), hub, or gateway. Flag-only, never
+   prompted: pass `--mcp-mode direct|hub|gateway` to change it (`--hub-url
+   <url>` is required with `hub`; `--gateway-agents <ids>` is optional with
+   `gateway`, omitted meaning every managed agent). Omitting `--mcp-mode`
+   entirely leaves whatever's already configured untouched — on a fresh
+   machine that's direct, on one you've already switched that's whatever
+   you last set — so a plain `trellis onboard` re-run never resets it. This
+   is the only supported way to turn gateway or hub mode on or off; there's
+   no reason to hand-edit `~/.trellis/mcp/servers.yaml`'s `hub`/`gateway`
+   keys directly.
+4. **The shared memory server** — off by default. Pass `--memory on` to add
+   the default `@modelcontextprotocol/server-memory` definition (refused if
+   a host on this machine already injects a connector named `memory` — see
+   [`trellis memory sync`](#trellis-memory-sync) below) or
+   `--memory off` to remove it. Omitting `--memory` preserves whatever's
+   already configured, same rule as MCP mode. Turning it on and seeing it
+   actually reach every managed agent and get populated from canonical
+   `memories/*.md` happens in the very same run — no second command needed.
+
+Both flags print a one-line status on a real terminal (`mcp mode: direct
+(unchanged) — pass --mcp-mode hub|gateway to change`, or `memory: on
+(changed from off)`) so they stay discoverable without turning into a
+prompt you have to answer on every run.
 
 ```
 $ trellis onboard --agent claude-code --manage pi
 Using claude-code as the migration source (--agent).
 Managed agents: pi
+mcp mode: direct (unchanged) — pass --mcp-mode direct|hub|gateway to change
+memory: off (unchanged) — pass --memory on to change
 
 migrate --from claude-code
   [create] skill "my-skill" — will copy from /Users/you/.claude/skills/my-skill
@@ -123,7 +153,8 @@ entirely under `--json` or when stdout isn't a real terminal.
 
 Add `--dry-run` to preview the entire chain — init/migrate/sync/mcp
 sync/memory sync, including what would be written to
-`~/.trellis/managed.yaml` — with zero writes anywhere (secrets audit and
+`~/.trellis/managed.yaml` and to `servers.yaml`'s mode/memory keys — with
+zero writes anywhere (secrets audit and
 the health scan are always read-only, with or without the flag; the
 write-verification step above has nothing to check on a dry run and is
 skipped entirely). On a real terminal, a `--dry-run` ends by offering to
@@ -490,7 +521,10 @@ the gap between "memory entries exist in canonical" and "the running
 memory server actually knows about them." Requires a `memory` server in
 `servers.yaml` with `static_env.MEMORY_FILE_PATH` set explicitly (see
 [`schema/servers.example.yaml`](../schema/servers.example.yaml)); without
-one, this is a no-op, not an error.
+one, this is a no-op, not an error. `trellis onboard --memory on` is the
+easiest way to get that entry there — no hand-editing `servers.yaml`
+required — and this stage is already chained into `onboard`, so enabling
+it and syncing real canonical content into it happens in one run.
 
 ```
 $ trellis memory sync

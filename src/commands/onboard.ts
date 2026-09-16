@@ -24,7 +24,8 @@ import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot } from "../core/types.js";
-import { loadCanonicalSource } from "../core/canonical.js";
+import { loadCanonicalSource, removeServerYaml, upsertServerYaml, writeMcpModeYaml } from "../core/canonical.js";
+import type { McpMode } from "../core/canonical.js";
 import { INSTALL_HINTS, collectInitReport } from "./init.js";
 import { applyMigratePlan, collectMigratePlan, printPlan as printMigratePlan } from "./migrate.js";
 import type { MigrateKind, MigratePlan } from "./migrate.js";
@@ -34,7 +35,7 @@ import { collectMcpSyncReport, printReport as printMcpSyncReport } from "./mcp.j
 import type { McpSyncReport } from "./mcp.js";
 import { collectSecretsAuditReport, printReport as printSecretsAuditReport } from "./secretsAudit.js";
 import type { SecretsAuditReport } from "./secretsAudit.js";
-import { applyMemorySync, collectMemorySyncResult, printMemorySyncResult } from "./memory.js";
+import { applyMemorySync, collectMemorySyncResult, printMemorySyncResult, DEFAULT_MEMORY_SERVER_DEF, MEMORY_SERVER_NAME } from "./memory.js";
 import type { MemorySyncResult } from "./memory.js";
 import { collectDoctorReport, printReport as printDoctorReport, resolveKnownHostInjected } from "./doctor.js";
 import type { DoctorReport } from "./doctor.js";
@@ -104,6 +105,20 @@ export interface RunOnboardOptions {
    * the literal string "none" for "add nothing new this run" — distinct
    * from omitting the flag, which requires a prompt or refuses. */
   manage?: string;
+  /** Non-interactive MCP-mode choice (trellis-onboard-mcp-mode). Omitted
+   * leaves whatever canonical already has untouched and prompts for
+   * nothing — "no change requested," not "please choose" (design.md
+   * D1), unlike `agent`/`manage` above. */
+  mcpMode?: string;
+  /** Required when `mcpMode === "hub"`; refused if given otherwise. */
+  hubUrl?: string;
+  /** Optional when `mcpMode === "gateway"` (comma-separated agent ids;
+   * omitted = every managed agent); refused if given otherwise. */
+  gatewayAgents?: string;
+  /** Non-interactive shared-memory-server toggle: `"on"` or `"off"`.
+   * Omitted leaves whatever's already configured untouched — same
+   * no-prompt posture as `mcpMode` (design.md D12). */
+  memory?: string;
   dryRun?: boolean;
   json?: boolean;
   /** Defaults to the real `~`; overridable for tests only. */
@@ -177,6 +192,17 @@ export interface OnboardResult {
    * inconsistent across agents independent of this run.
    */
   doctorReport?: DoctorReport;
+  /**
+   * The resolved MCP mode after this run (trellis-onboard-mcp-mode
+   * design.md D7) — `current` reflects canonical's state whether or not
+   * this run changed it, `changed` is `true` only when `--mcp-mode` was
+   * given and differed from what canonical had before this run. Absent
+   * on every early-refusal path before mode resolution is reached.
+   */
+  mcpMode?: { current: "direct" | "hub" | "gateway"; previous: "direct" | "hub" | "gateway"; changed: boolean };
+  /** The resolved shared-memory-server state after this run, mirroring
+   * `mcpMode` (design.md D13). */
+  memory?: { current: "on" | "off"; previous: "on" | "off"; changed: boolean };
   refusal?: string;
   /** Only set when no agent is present — the same values `--json` and
    * text output both surface, so a machine caller doesn't have to
@@ -376,6 +402,127 @@ function parseManagedSelection(raw: string, candidates: OnboardAgentSummary[]): 
   return { agents: [...new Set(agents)] };
 }
 
+type McpModeValue = "direct" | "hub" | "gateway";
+
+/** Comma-separated agent ids only — unlike `parseManagedSelection`, no
+ * numbered-index shorthand, since `--gateway-agents` never has a
+ * numbered list on screen to refer back to (it's flag-only, never
+ * prompted; design.md D1/D4). */
+function parseAgentIdList(raw: string): AgentId[] | { error: string } {
+  const tokens = raw.split(",").map((t) => t.trim()).filter((t) => t.length > 0);
+  const agents: AgentId[] = [];
+  for (const token of tokens) {
+    if (!(ALL_AGENTS as readonly string[]).includes(token)) {
+      return { error: `"${token}" is not a valid agent id — use one of ${ALL_AGENTS.join(", ")}` };
+    }
+    agents.push(token as AgentId);
+  }
+  return [...new Set(agents)];
+}
+
+/**
+ * Validates `--mcp-mode`/`--hub-url`/`--gateway-agents` together, before
+ * any other work (trellis-onboard-mcp-mode design.md D4) — a bad
+ * combination refuses the whole run rather than being discovered
+ * partway through. `mode` is only set when `mcpMode` was actually
+ * given; omitted resolves to `{}`, meaning "no change requested," not
+ * an error (design.md D1) — distinct from every other field on
+ * `RunOnboardOptions`, where omission usually requires a prompt.
+ */
+function validateMcpModeOption(opts: Pick<RunOnboardOptions, "mcpMode" | "hubUrl" | "gatewayAgents">): { mode?: McpMode } | { error: string } {
+  const { mcpMode, hubUrl, gatewayAgents } = opts;
+  if (mcpMode === undefined) {
+    if (hubUrl !== undefined) return { error: "--hub-url was given without --mcp-mode hub" };
+    if (gatewayAgents !== undefined) return { error: "--gateway-agents was given without --mcp-mode gateway" };
+    return {};
+  }
+  if (mcpMode !== "direct" && mcpMode !== "hub" && mcpMode !== "gateway") {
+    return { error: `--mcp-mode must be one of direct, hub, gateway (got "${mcpMode}")` };
+  }
+  if (mcpMode !== "hub" && hubUrl !== undefined) {
+    return { error: "--hub-url was given without --mcp-mode hub" };
+  }
+  if (mcpMode !== "gateway" && gatewayAgents !== undefined) {
+    return { error: "--gateway-agents was given without --mcp-mode gateway" };
+  }
+  if (mcpMode === "direct") return { mode: { kind: "direct" } };
+  if (mcpMode === "hub") {
+    if (!hubUrl) return { error: "--mcp-mode hub requires --hub-url <url>" };
+    return { mode: { kind: "hub", url: hubUrl } };
+  }
+  // mcpMode === "gateway"
+  if (gatewayAgents === undefined) return { mode: { kind: "gateway" } };
+  const agents = parseAgentIdList(gatewayAgents);
+  if ("error" in agents) return agents;
+  return { mode: { kind: "gateway", agents } };
+}
+
+/** Same "omitted means no change requested" posture as
+ * `validateMcpModeOption` (design.md D12). */
+function validateMemoryOption(memory: string | undefined): { value?: "on" | "off" } | { error: string } {
+  if (memory === undefined) return {};
+  if (memory !== "on" && memory !== "off") return { error: `--memory must be "on" or "off" (got "${memory}")` };
+  return { value: memory };
+}
+
+function mcpModeValueOf(mcp: { gateway?: { enabled: boolean }; hub?: { url: string } }): McpModeValue {
+  if (mcp.gateway?.enabled) return "gateway";
+  if (mcp.hub) return "hub";
+  return "direct";
+}
+
+interface McpModeResolution {
+  current: McpModeValue;
+  previous: McpModeValue;
+  changed: boolean;
+  /** Set whenever `--mcp-mode` was given at all, even if `current ===
+   * previous` — an explicit re-request (e.g. new `--gateway-agents`
+   * while staying in gateway mode) still writes; only a fully omitted
+   * flag skips the writer call (design.md D1). */
+  write?: McpMode;
+}
+
+function resolveMcpModeChange(mode: McpMode | undefined, currentValue: McpModeValue): McpModeResolution {
+  if (!mode) return { current: currentValue, previous: currentValue, changed: false };
+  return { current: mode.kind, previous: currentValue, changed: mode.kind !== currentValue, write: mode };
+}
+
+type MemoryToggleResolution = { current: "on" | "off"; previous: "on" | "off"; changed: boolean } | { refusal: string };
+
+/**
+ * `value === "on"` against an already-host-injected `"memory"` refuses
+ * outright rather than writing a definition `mcp sync` would refuse to
+ * propagate to any agent a moment later (design.md D10) — the same fact
+ * `schema/servers.example.yaml`'s own comment already explains to a
+ * human reading it by hand.
+ */
+function resolveMemoryToggle(value: "on" | "off" | undefined, configuredBefore: boolean, knownHostInjected: readonly string[]): MemoryToggleResolution {
+  const previous: "on" | "off" = configuredBefore ? "on" : "off";
+  if (value === undefined) return { current: previous, previous, changed: false };
+  if (value === "on") {
+    if (configuredBefore) return { current: "on", previous, changed: false };
+    if (knownHostInjected.includes(MEMORY_SERVER_NAME)) {
+      return {
+        refusal: `refusing to enable the memory server: "${MEMORY_SERVER_NAME}" is already listed in known_host_injected — a host on this machine is presumed to already inject its own memory connector under that name, so a static definition here would only collide the next time \`mcp sync\` runs`,
+      };
+    }
+    return { current: "on", previous, changed: true };
+  }
+  // value === "off"
+  if (!configuredBefore) return { current: "off", previous, changed: false };
+  return { current: "off", previous, changed: true };
+}
+
+function mcpModeStatusLine(mode: McpModeResolution): string {
+  if (!mode.changed) return `mcp mode: ${mode.current} (unchanged) — pass --mcp-mode direct|hub|gateway to change`;
+  return `mcp mode: ${mode.current} (changed from ${mode.previous})`;
+}
+
+function memoryStatusLine(memory: { current: "on" | "off"; previous: "on" | "off"; changed: boolean }): string {
+  if (!memory.changed) return `memory: ${memory.current} (unchanged) — pass --memory ${memory.current === "on" ? "off" : "on"} to change`;
+  return `memory: ${memory.current} (changed from ${memory.previous})`;
+}
+
 async function resolveManagedAgents(
   opts: RunOnboardOptions,
   summary: OnboardAgentSummary[],
@@ -414,6 +561,21 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
 
   if (present.length === 0) {
     return { summary, installHints: { ...INSTALL_HINTS }, verdict: [] };
+  }
+
+  // Validated up front, before any of this run's own writes (managed.yaml
+  // included) — a bad `--mcp-mode`/`--hub-url`/`--gateway-agents`/
+  // `--memory` combination refuses the whole run cleanly rather than
+  // being discovered partway through (design.md D4). The parsed results
+  // are reused later, once managed-set resolution has run (design.md
+  // D5/D11).
+  const mcpModeValidation = validateMcpModeOption(opts);
+  if ("error" in mcpModeValidation) {
+    return { summary, refusal: mcpModeValidation.error, verdict: [] };
+  }
+  const memoryValidation = validateMemoryOption(opts.memory);
+  if ("error" in memoryValidation) {
+    return { summary, refusal: memoryValidation.error, verdict: [] };
   }
 
   const sourceCandidates = present.filter(hasContent);
@@ -495,6 +657,35 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   const managedAgents = [...new Set([...alreadyManaged, ...resolvedNew])];
   if (!opts.dryRun) {
     writeManagedYaml(homeDir, managedAgents);
+  }
+
+  // MCP mode + memory-server resolution (design.md D5/D11) — grouped
+  // with managed-set above as "how is this machine configured"
+  // decisions resolved once per run, ahead of migrate/sync/mcp-sync/
+  // memory-sync below, which act on the result. Both flags were already
+  // validated before managed-set was even touched; omitting either
+  // resolves to "no change requested" here too (design.md D1/D12) — no
+  // writer call at all, on either a first run or a later one.
+  const canonicalForModeAndMemory = loadCanonicalSource(homeDir);
+  const mcpModeResolution = resolveMcpModeChange(mcpModeValidation.mode, mcpModeValueOf(canonicalForModeAndMemory.mcp));
+  const mcpMode = { current: mcpModeResolution.current, previous: mcpModeResolution.previous, changed: mcpModeResolution.changed };
+  const serversYamlPath = join(homeDir, ".trellis", "mcp", "servers.yaml");
+  if (mcpModeResolution.write && !opts.dryRun) {
+    writeMcpModeYaml(serversYamlPath, mcpModeResolution.write);
+  }
+
+  const memoryConfiguredBefore = canonicalForModeAndMemory.mcp.servers[MEMORY_SERVER_NAME] !== undefined;
+  const memoryResolution = resolveMemoryToggle(memoryValidation.value, memoryConfiguredBefore, canonicalForModeAndMemory.mcp.knownHostInjected);
+  if ("refusal" in memoryResolution) {
+    return { summary, source, sourceReason, managedAgents, mcpMode, refusal: memoryResolution.refusal, verdict: [] };
+  }
+  const memory = { current: memoryResolution.current, previous: memoryResolution.previous, changed: memoryResolution.changed };
+  if (memory.changed && !opts.dryRun) {
+    if (memory.current === "on") {
+      upsertServerYaml(serversYamlPath, MEMORY_SERVER_NAME, DEFAULT_MEMORY_SERVER_DEF);
+    } else {
+      removeServerYaml(serversYamlPath, MEMORY_SERVER_NAME);
+    }
   }
 
   let migratePlan: MigratePlan | undefined;
@@ -588,6 +779,8 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     memorySyncResult,
     secretsAuditReport,
     doctorReport,
+    mcpMode,
+    memory,
     verdict,
   };
 }
@@ -614,7 +807,7 @@ export async function runOnboard(opts: RunOnboardOptions = {}): Promise<{ exitCo
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    printResult(result, opts.dryRun ?? false);
+    printResult(result, opts.dryRun ?? false, shouldShowProgress(opts));
     // Always last — including on a fully clean run and on a refusal —
     // so the terminal state of the run is never a green line from
     // whichever stage happened to print last (spec: "Every run
@@ -646,7 +839,7 @@ export async function runOnboard(opts: RunOnboardOptions = {}): Promise<{ exitCo
   return { exitCode: hasBlocked ? 1 : 0 };
 }
 
-function printResult(result: OnboardResult, dryRun: boolean): void {
+function printResult(result: OnboardResult, dryRun: boolean, showStatusLine: boolean): void {
   if (dryRun) console.log("[dry run]");
 
   const present = result.summary.filter((s) => s.present);
@@ -683,6 +876,18 @@ function printResult(result: OnboardResult, dryRun: boolean): void {
     );
   }
   console.log(`Managed agents: ${result.managedAgents && result.managedAgents.length > 0 ? result.managedAgents.join(", ") : "(none)"}`);
+
+  // Informational only, never a prompt (design.md D6/D12,
+  // trellis-onboard-mcp-mode) — this is what keeps `--mcp-mode`/
+  // `--memory` discoverable without costing every run a keystroke.
+  // Suppressed under `--json` and non-TTY, same gate stage progress
+  // already uses.
+  if (showStatusLine && result.mcpMode) {
+    console.log(mcpModeStatusLine(result.mcpMode));
+  }
+  if (showStatusLine && result.memory) {
+    console.log(memoryStatusLine(result.memory));
+  }
 
   // Reuse `migrate`/`sync`'s own printing verbatim (including the
   // "nothing to migrate" / "already in sync" cases) rather than a second,

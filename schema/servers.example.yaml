@@ -35,8 +35,12 @@
 servers:
   # Default shared-memory backend (docs/research.md "Shared memory") —
   # @modelcontextprotocol/server-memory: zero-dependency, local JSON
-  # knowledge graph, MIT-licensed. Left commented out here because this
-  # exact example ALSO lists "memory" under known_host_injected below —
+  # knowledge graph, MIT-licensed. `trellis onboard --memory on` writes
+  # exactly this shape for you (src/commands/memory.ts's
+  # DEFAULT_MEMORY_SERVER_DEF) — uncommenting it by hand below is only
+  # for understanding what that flag does, not required to use it.
+  # Left commented out here because this exact example ALSO lists
+  # "memory" under known_host_injected below —
   # uncommenting both would self-collide (Trellis's own collision guard
   # would correctly refuse to write it). Which situation you're actually
   # in depends on your host:
@@ -44,8 +48,9 @@ servers:
   #     under this name — check with `trellis doctor` — leave this
   #     commented out and keep "memory" in known_host_injected below;
   #     you already have it, just not from a static definition.
-  #   - If your host injects nothing under this name, uncomment this
-  #     entry AND remove "memory" from known_host_injected below (it's
+  #   - If your host injects nothing under this name, run `trellis
+  #     onboard --memory on` (or uncomment this entry by hand) AND
+  #     remove "memory" from known_host_injected below (it's
   #     only there as inherited example content, not a fact about your
   #     environment) — that's what actually wires the default.
   # mem0/OpenMemory or a totalrecallai-class semantic-search server are

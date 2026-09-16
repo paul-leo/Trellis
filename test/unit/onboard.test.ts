@@ -1065,3 +1065,281 @@ test("json: every field that existed before this change is still present and unc
     assert.ok(field in parsed, `expected new field "${field}"`);
   }
 });
+
+// MCP mode selection (trellis-onboard-mcp-mode): one command handles both
+// a first run (nothing configured) and a later one (something already
+// is) — omitting the flag always preserves current state, never prompts.
+
+function readServersYaml(home: string): string {
+  return readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+}
+
+test("mcp mode: omitting --mcp-mode on a fresh machine resolves to direct, unchanged, no write attempted", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.deepEqual(result.mcpMode, { current: "direct", previous: "direct", changed: false });
+  assert.doesNotMatch(readServersYaml(home), /gateway:|hub:/);
+});
+
+test("mcp mode: omitting --mcp-mode on a later run preserves what's already configured", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "gateway" });
+
+  const before = readServersYaml(home);
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.deepEqual(result.mcpMode, { current: "gateway", previous: "gateway", changed: false });
+  assert.equal(readServersYaml(home), before, "a second run with no --mcp-mode must not touch servers.yaml at all");
+});
+
+test("mcp mode: --mcp-mode gateway enables gateway for every managed agent by default", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "gateway" });
+  assert.deepEqual(result.mcpMode, { current: "gateway", previous: "direct", changed: true });
+  assert.match(readServersYaml(home), /gateway:\s*\n\s*enabled: true/);
+  assert.doesNotMatch(readServersYaml(home), /agents:/);
+});
+
+test("mcp mode: --mcp-mode gateway --gateway-agents narrows to exactly those agents", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "gateway", gatewayAgents: "codex,pi" });
+  assert.match(readServersYaml(home), /agents:\s*\n\s*- codex\s*\n\s*- pi/);
+});
+
+test("mcp mode: --mcp-mode hub without --hub-url refuses cleanly, writes nothing", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const before = readServersYaml(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "hub" });
+  assert.match(result.refusal ?? "", /--hub-url/);
+  assert.equal(readServersYaml(home), before);
+});
+
+test("mcp mode: --mcp-mode hub --hub-url writes the hub entry and clears an existing gateway", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "gateway" });
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "hub", hubUrl: "https://hub.example.com" });
+  assert.deepEqual(result.mcpMode, { current: "hub", previous: "gateway", changed: true });
+  assert.match(readServersYaml(home), /hub:\s*\n\s*url: https:\/\/hub\.example\.com/);
+  assert.doesNotMatch(readServersYaml(home), /gateway:/);
+});
+
+test("mcp mode: --mcp-mode direct clears both hub and gateway", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "hub", hubUrl: "https://hub.example.com" });
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "direct" });
+  assert.deepEqual(result.mcpMode, { current: "direct", previous: "hub", changed: true });
+  assert.doesNotMatch(readServersYaml(home), /gateway:|hub:/);
+});
+
+test("mcp mode: --hub-url without --mcp-mode hub refuses rather than being silently ignored", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", hubUrl: "https://hub.example.com" });
+  assert.match(result.refusal ?? "", /--hub-url/);
+});
+
+test("mcp mode: --gateway-agents without --mcp-mode gateway refuses", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", gatewayAgents: "codex" });
+  assert.match(result.refusal ?? "", /--gateway-agents/);
+});
+
+test("mcp mode: an invalid --mcp-mode value refuses with the valid options listed", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "bogus" });
+  assert.match(result.refusal ?? "", /direct, hub, gateway/);
+});
+
+test("mcp mode: an invalid --gateway-agents token refuses cleanly", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "gateway", gatewayAgents: "not-a-real-agent" });
+  assert.match(result.refusal ?? "", /not-a-real-agent/);
+});
+
+test("mcp mode: --dry-run reports the change but writes nothing", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const before = readServersYaml(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "gateway", dryRun: true });
+  assert.deepEqual(result.mcpMode, { current: "gateway", previous: "direct", changed: true });
+  assert.equal(readServersYaml(home), before);
+});
+
+test("mcp mode: status line appears on a TTY run and states how to change it when unchanged", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const { stdout } = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: false, isTTY: true }).then(() => {}));
+  assert.ok(stdout.some((line) => /^mcp mode: direct \(unchanged\)/.test(line)), `expected an unchanged mode status line, got: ${JSON.stringify(stdout)}`);
+});
+
+test("mcp mode: status line states the before/after when changed", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const { stdout } = await captureStdoutAndStderr(() =>
+    runOnboard({ homeDir: home, manage: "none", mcpMode: "gateway", json: false, isTTY: true }).then(() => {}),
+  );
+  assert.ok(stdout.some((line) => /^mcp mode: gateway \(changed from direct\)/.test(line)), `got: ${JSON.stringify(stdout)}`);
+});
+
+test("mcp mode: no status line on --json or a non-TTY run", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const jsonRun = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: true, isTTY: true }).then(() => {}));
+  assert.ok(jsonRun.stdout.every((line) => !line.includes("mcp mode:")));
+
+  const nonTtyRun = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: false, isTTY: false }).then(() => {}));
+  assert.ok(nonTtyRun.stdout.every((line) => !line.includes("mcp mode:")));
+});
+
+// Memory server toggle (trellis-onboard-mcp-mode): same idempotent shape
+// as mode above, reusing the existing per-server writers.
+
+test("memory toggle: omitting --memory on a fresh machine resolves to off, no write attempted", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.deepEqual(result.memory, { current: "off", previous: "off", changed: false });
+  assert.doesNotMatch(readServersYaml(home), /memory:/);
+});
+
+test("memory toggle: omitting --memory on a later run preserves an already-enabled server", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on" });
+
+  const before = readServersYaml(home);
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.deepEqual(result.memory, { current: "on", previous: "on", changed: false });
+  assert.equal(readServersYaml(home), before);
+});
+
+test("memory toggle: --memory on writes the default server definition", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on" });
+  assert.deepEqual(result.memory, { current: "on", previous: "off", changed: true });
+  assert.match(readServersYaml(home), /memory:\s*\n\s*transport: stdio/);
+  assert.match(readServersYaml(home), /MEMORY_FILE_PATH/);
+});
+
+test("memory toggle: --memory on reaches every managed agent in the same run (mcp sync)", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "claude-code", memory: "on" });
+  const claudeReport = result.mcpSyncReport?.reports.find((r) => r.agent === "claude-code");
+  assert.ok(
+    claudeReport?.items.some((i) => i.mcpWrite?.name === "memory" && i.action === "create"),
+    `expected mcp sync to pick up the new memory entry, got: ${JSON.stringify(claudeReport)}`,
+  );
+});
+
+test("memory toggle: --memory on populates the graph from canonical memories in the same run", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  mkdirSync(join(home, ".trellis", "memories"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "memories", "note.md"), "a real canonical memory\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on" });
+  assert.equal(result.memorySyncResult?.configured, true);
+  assert.ok(
+    result.memorySyncResult && "plan" in result.memorySyncResult && result.memorySyncResult.plan.items.some((i) => i.name === "note" && i.action === "create"),
+    `expected memory sync to have something to do in the same run, got: ${JSON.stringify(result.memorySyncResult)}`,
+  );
+});
+
+test("memory toggle: --memory on refuses when a host already injects a memory connector", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "servers: {}\nknown_host_injected: [memory]\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on" });
+  assert.match(result.refusal ?? "", /known_host_injected/);
+  assert.doesNotMatch(readServersYaml(home), /^memory:/m);
+});
+
+test("memory toggle: --memory off removes an existing entry", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on" });
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "off" });
+  assert.deepEqual(result.memory, { current: "off", previous: "on", changed: true });
+  assert.doesNotMatch(readServersYaml(home), /memory:/);
+});
+
+test("memory toggle: --memory off on an already-absent entry is a no-op, not an error", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "off" });
+  assert.deepEqual(result.memory, { current: "off", previous: "off", changed: false });
+  assert.equal(result.refusal, undefined);
+});
+
+test("memory toggle: an invalid --memory value refuses", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "maybe" });
+  assert.match(result.refusal ?? "", /"on" or "off"/);
+});
+
+test("memory toggle: --dry-run reports the change but writes nothing", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const before = readServersYaml(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on", dryRun: true });
+  assert.deepEqual(result.memory, { current: "on", previous: "off", changed: true });
+  assert.equal(readServersYaml(home), before);
+});
+
+test("memory toggle: status line appears on a TTY run", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const { stdout } = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: false, isTTY: true }).then(() => {}));
+  assert.ok(stdout.some((line) => /^memory: off \(unchanged\)/.test(line)), `got: ${JSON.stringify(stdout)}`);
+});
+
+test("memory toggle: no status line on --json or a non-TTY run", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const jsonRun = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: true, isTTY: true }).then(() => {}));
+  assert.ok(jsonRun.stdout.every((line) => !line.includes("memory:")));
+
+  const nonTtyRun = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: false, isTTY: false }).then(() => {}));
+  assert.ok(nonTtyRun.stdout.every((line) => !line.includes("memory:")));
+});

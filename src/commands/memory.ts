@@ -17,9 +17,29 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadCanonicalSource } from "../core/canonical.js";
+import type { McpServerDef } from "../core/types.js";
 import { parseMemoryGraph, planMemoryExtraction, planMemorySync, renderMemoryGraph, type MemoryExtractionPlan, type MemorySyncPlan } from "../lib/memoryGraph.js";
 
-const MEMORY_SERVER_NAME = "memory";
+/** Exported so `onboard` (`trellis onboard --memory on|off`,
+ * trellis-onboard-mcp-mode) can look up and write this same entry
+ * without hardcoding the name a second time. */
+export const MEMORY_SERVER_NAME = "memory";
+
+/**
+ * The literal definition `trellis onboard --memory on` writes — the
+ * same shape `schema/servers.example.yaml`'s commented-out `memory:`
+ * block documents, now a real, code-owned constant instead of the only
+ * place this shape existed being prose a user hand-transcribes
+ * (trellis-onboard-mcp-mode design.md D9). `MEMORY_FILE_PATH` must be
+ * set explicitly — see `resolveMemoryServerGraphPath`'s own comment for
+ * why an unset one isn't safe to leave to the server's own default.
+ */
+export const DEFAULT_MEMORY_SERVER_DEF: McpServerDef = {
+  transport: "stdio",
+  command: "npx",
+  args: ["-y", "@modelcontextprotocol/server-memory"],
+  staticEnv: { MEMORY_FILE_PATH: "~/.trellis/memories/graph.jsonl" },
+};
 
 export interface RunMemorySyncOptions {
   homeDir?: string;

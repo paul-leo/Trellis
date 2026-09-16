@@ -41,6 +41,16 @@ Commands:
                                     means "add nothing new this run"
                                     (required with no terminal to prompt
                                     in, e.g. --json)
+              --mcp-mode <direct|hub|gateway>
+                                    change the MCP mode; omit to leave
+                                    whatever's already configured
+                                    untouched (never prompted)
+              --hub-url <url>       required with --mcp-mode hub
+              --gateway-agents <ids>
+                                    optional with --mcp-mode gateway;
+                                    omit for every managed agent
+              --memory <on|off>     enable/disable the shared memory MCP
+                                    server; omit to leave it untouched
               --dry-run             preview the whole flow, write nothing
               --json                machine-readable output, no report text
   init      Create ~/.trellis/ with a minimal valid skeleton if missing
@@ -162,7 +172,24 @@ async function main(argv: string[]): Promise<void> {
     const agent = agentIndex >= 0 ? rest[agentIndex + 1] : undefined;
     const manageIndex = rest.indexOf("--manage");
     const manage = manageIndex >= 0 ? rest[manageIndex + 1] : undefined;
-    const { exitCode } = await runOnboard({ agent, manage, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
+    const mcpModeIndex = rest.indexOf("--mcp-mode");
+    const mcpMode = mcpModeIndex >= 0 ? rest[mcpModeIndex + 1] : undefined;
+    const hubUrlIndex = rest.indexOf("--hub-url");
+    const hubUrl = hubUrlIndex >= 0 ? rest[hubUrlIndex + 1] : undefined;
+    const gatewayAgentsIndex = rest.indexOf("--gateway-agents");
+    const gatewayAgents = gatewayAgentsIndex >= 0 ? rest[gatewayAgentsIndex + 1] : undefined;
+    const memoryIndex = rest.indexOf("--memory");
+    const memory = memoryIndex >= 0 ? rest[memoryIndex + 1] : undefined;
+    const { exitCode } = await runOnboard({
+      agent,
+      manage,
+      mcpMode,
+      hubUrl,
+      gatewayAgents,
+      memory,
+      dryRun: rest.includes("--dry-run"),
+      json: rest.includes("--json"),
+    });
     process.exitCode = exitCode;
     return;
   }

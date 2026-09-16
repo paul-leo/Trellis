@@ -176,9 +176,13 @@ regardless of hub mode.
 ## MCP hub mode
 
 Every agent's MCP surface can be either N direct server definitions
-(default) or one static entry pointing at a single HTTP endpoint — set
-`mcp.hub.url` in `mcp/servers.yaml` to switch (see
-`schema/servers.example.yaml`). Nothing about *what* runs behind that URL
+(default) or one static entry pointing at a single HTTP endpoint — `mcp.hub.url`
+in `mcp/servers.yaml` is the field, but the supported way to set it is
+`trellis onboard --mcp-mode hub --hub-url <url>` (trellis-onboard-mcp-mode),
+not hand-editing the file: onboard's own writer clears any conflicting
+`gateway` block for you and is the same command that later turns hub mode
+back off again (`--mcp-mode direct`). `schema/servers.example.yaml` still
+documents the raw field shape for reference. Nothing about *what* runs behind that URL
 is part of Trellis's design: a self-hosted
 [mcp-hub](https://github.com/ravitemer/mcp-hub) instance, a hosted
 mcp-router account, anything else speaking MCP over HTTP all look
@@ -275,11 +279,19 @@ native OAuth flow, exactly as before.
 
 Gateway mode collapses an agent's MCP config to one entry, like hub mode
 — but what sits behind it is a local subprocess Trellis owns
-(`trellis mcp-gateway --agent <id>`), not a URL someone operates. Set
-`mcp.gateway.enabled` in `mcp/servers.yaml`; add `mcp.gateway.agents` to
-narrow it to specific agents, or omit it to cover every managed agent.
-`gateway` and `hub` are independent fields and may both be set — gateway
-wins for any agent it covers.
+(`trellis mcp-gateway --agent <id>`), not a URL someone operates. Turn it
+on with `trellis onboard --mcp-mode gateway` (optionally
+`--gateway-agents <ids>` to narrow it to specific agents instead of every
+managed agent); `trellis onboard --mcp-mode direct` turns it back off.
+The underlying fields (`mcp.gateway.enabled`/`.agents` in
+`mcp/servers.yaml`) are what onboard's writer sets — hand-editing them is
+unsupported now that a real command exists for it
+(trellis-onboard-mcp-mode). Selecting `hub` instead always clears
+`gateway`, and vice versa (a mode selector, not two independently
+toggleable fields) — see "MCP hub mode" above for why onboard treats them
+as one mutually-exclusive choice rather than exposing the field-level
+"both set, gateway wins" flexibility `resolveMcpPlan` itself still
+tolerates for anyone who reaches this state some other way.
 
 **Lifecycle: there isn't one.** The agent spawns it like any other stdio
 MCP server and it exits when the session ends. No daemon, no
@@ -326,9 +338,11 @@ re-sync and nothing the user notices.
   subprocess with no lifecycle; hub mode points at something you operate.
   Neither is a service Trellis starts, supervises, or keeps running.
 - A memory backend (defaults to `@modelcontextprotocol/server-memory`,
-  documented in `schema/servers.example.yaml`; mem0/OpenMemory and
-  totalrecallai-class semantic-search servers documented as opt-in
-  upgrades — see docs/research.md "Shared memory")
+  turned on with `trellis onboard --memory on` (trellis-onboard-mcp-mode)
+  rather than hand-editing `servers.yaml`, documented in
+  `schema/servers.example.yaml`; mem0/OpenMemory and totalrecallai-class
+  semantic-search servers documented as opt-in upgrades — see
+  docs/research.md "Shared memory")
 - A secret vault (reads `${VAR}` from whatever the environment already
   provides — `~/.config/agent-env/secrets.env`, 1Password's `op run`,
   anything that populates `process.env` before an adapter's generated

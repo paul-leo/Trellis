@@ -202,6 +202,59 @@ export function removeServerYaml(path: string, name: string): ServersYamlWriteRe
   return { ok: true };
 }
 
+/**
+ * `trellis onboard --mcp-mode <value>` (trellis-onboard-mcp-mode) —
+ * everything needed to select or clear the top-level `hub`/`gateway`
+ * mode fields, mutually exclusive by construction (design.md D3): a
+ * `"direct"` mode carries nothing to set, only two keys to clear.
+ */
+export type McpMode = { kind: "direct" } | { kind: "hub"; url: string } | { kind: "gateway"; agents?: AgentId[] };
+
+/**
+ * Sets or clears `servers.yaml`'s top-level `hub`/`gateway` keys — the
+ * write path `upsertServerYaml`/`removeServerYaml` don't cover, since
+ * both are scoped to one `servers` entry (design.md D2). Same
+ * `Document`-based mechanism, same refusal posture on a missing or
+ * unparseable file, same `forceBlockStyle` correction for a key set for
+ * the first time into a still-flow-style document (`trellis init`'s
+ * starter file). Selecting one mode always clears the other two
+ * (design.md D3) — never left for the caller to remember.
+ */
+export function writeMcpModeYaml(path: string, mode: McpMode): ServersYamlWriteResult {
+  if (!existsSync(path)) {
+    return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
+  }
+  let doc;
+  try {
+    doc = parseDocument(readFileSync(path, "utf-8"));
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  switch (mode.kind) {
+    case "direct":
+      doc.delete("hub");
+      doc.delete("gateway");
+      break;
+    case "hub":
+      doc.setIn(["hub", "url"], mode.url);
+      doc.delete("gateway");
+      forceBlockStyle(doc.get("hub", true));
+      break;
+    case "gateway":
+      doc.setIn(["gateway", "enabled"], true);
+      if (mode.agents !== undefined) {
+        doc.setIn(["gateway", "agents"], mode.agents);
+      } else {
+        doc.deleteIn(["gateway", "agents"]);
+      }
+      doc.delete("hub");
+      forceBlockStyle(doc.get("gateway", true));
+      break;
+  }
+  writeFileSync(path, doc.toString());
+  return { ok: true };
+}
+
 function loadSecretsPolicyYaml(path: string, homeDir: string): SecretsPolicy {
   if (!existsSync(path)) {
     return { allowedVars: [], rejectPatterns: [] };

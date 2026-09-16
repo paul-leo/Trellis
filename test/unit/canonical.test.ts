@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadCanonicalSource, upsertServerYaml } from "../../src/core/canonical.js";
+import { loadCanonicalSource, upsertServerYaml, writeMcpModeYaml } from "../../src/core/canonical.js";
 
 function tmpHome(): string {
   return mkdtempSync(join(tmpdir(), "trellis-canonical-"));
@@ -174,4 +174,87 @@ test("loadCanonicalSource: an already-absolute env_file path is left untouched",
 
   const source = loadCanonicalSource(home);
   assert.equal(source.secretsPolicy.envFile, "/opt/secrets/trellis.env");
+});
+
+test("writeMcpModeYaml: refuses when servers.yaml does not exist", () => {
+  const home = tmpHome();
+  const path = join(home, ".trellis", "mcp", "servers.yaml");
+  const result = writeMcpModeYaml(path, { kind: "direct" });
+  assert.equal(result.ok, false);
+});
+
+test("writeMcpModeYaml: hub writes hub.url and clears any existing gateway", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "servers: {}\ngateway:\n  enabled: true\n  agents: [codex]\n");
+
+  const result = writeMcpModeYaml(path, { kind: "hub", url: "https://hub.example.com" });
+  assert.equal(result.ok, true);
+
+  const source = loadCanonicalSource(home);
+  assert.equal(source.mcp.hub?.url, "https://hub.example.com");
+  assert.equal(source.mcp.gateway, undefined);
+});
+
+test("writeMcpModeYaml: gateway writes gateway.enabled and clears any existing hub", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, 'servers: {}\nhub:\n  url: "http://127.0.0.1:37373/mcp"\n');
+
+  const result = writeMcpModeYaml(path, { kind: "gateway" });
+  assert.equal(result.ok, true);
+
+  const source = loadCanonicalSource(home);
+  assert.equal(source.mcp.gateway?.enabled, true);
+  assert.equal(source.mcp.gateway?.agents, undefined);
+  assert.equal(source.mcp.hub, undefined);
+});
+
+test("writeMcpModeYaml: gateway with explicit agents narrows gateway.agents", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "servers: {}\n");
+
+  const result = writeMcpModeYaml(path, { kind: "gateway", agents: ["codex", "pi"] });
+  assert.equal(result.ok, true);
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp.gateway?.agents, ["codex", "pi"]);
+});
+
+test("writeMcpModeYaml: direct clears both hub and gateway", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, 'servers: {}\nhub:\n  url: "http://127.0.0.1:37373/mcp"\ngateway:\n  enabled: true\n');
+
+  const result = writeMcpModeYaml(path, { kind: "direct" });
+  assert.equal(result.ok, true);
+
+  const source = loadCanonicalSource(home);
+  assert.equal(source.mcp.hub, undefined);
+  assert.equal(source.mcp.gateway, undefined);
+});
+
+test("writeMcpModeYaml: preserves an unrelated hand-authored comment and the servers entry", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "# hand-authored note\nservers:\n  tanka:\n    transport: stdio\n    command: tanka-mcp\n");
+
+  const result = writeMcpModeYaml(path, { kind: "gateway" });
+  assert.equal(result.ok, true);
+
+  const written = readFileSync(path, "utf-8");
+  assert.match(written, /# hand-authored note/);
+  const source = loadCanonicalSource(home);
+  assert.equal(source.mcp.servers.tanka.command, "tanka-mcp");
 });
