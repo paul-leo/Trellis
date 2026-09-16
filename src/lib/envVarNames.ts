@@ -38,12 +38,29 @@ interface McpServersJson {
   mcpServers?: Record<string, { env?: Record<string, string>; headers?: Record<string, string> }>;
 }
 
-/** Claude Code / Kiro's config is real JSON — parse it and walk each
- * server's `env` object keys plus names embedded in `headers` object
- * *values* (unlike `env`, a header's key is an arbitrary header name,
- * not a variable name — the variable name lives inside the `${...}`
- * value). Returns `[]` (not a throw) on invalid JSON; that's a
- * diagnostic for a different command, not this extractor's job. */
+/**
+ * Claude Code / Kiro's config is real JSON — parse it and walk each
+ * server's `env` object *values*, plus names embedded in `headers`
+ * object values. Both read the same way: the variable name lives inside
+ * a `${...}` reference in the value, never the key alone.
+ *
+ * This matters because `env`/`staticEnv` share one JSON object with no
+ * structural tag distinguishing them (`renderJsonServerEntry`'s own doc
+ * comment) — `env`/`envAliases` render as a `${NAME}` reference,
+ * `staticEnv` renders as its literal value verbatim, same map. Reading
+ * every KEY unconditionally (as this function did before) swept
+ * `staticEnv`'s literal, never-a-secret keys into the same
+ * `allowed_vars` check `env` names need, and got `envAliases` wrong in
+ * the opposite direction — its value's `${sourceName}` differs from its
+ * own key, so a key-based read checked the wrong name against
+ * `allowed_vars` entirely. Extracting from the value fixes both at once:
+ * a literal `staticEnv` value has no `${...}` to match, so it
+ * contributes nothing; an `envAliases` entry correctly contributes its
+ * referenced source name, not its target key.
+ *
+ * Returns `[]` (not a throw) on invalid JSON; that's a diagnostic for a
+ * different command, not this extractor's job.
+ */
 export function extractJsonEnvVarNames(content: string): string[] {
   let parsed: McpServersJson;
   try {
@@ -53,7 +70,9 @@ export function extractJsonEnvVarNames(content: string): string[] {
   }
   const names: string[] = [];
   for (const server of Object.values(parsed.mcpServers ?? {})) {
-    names.push(...Object.keys(server.env ?? {}));
+    for (const value of Object.values(server.env ?? {})) {
+      names.push(...extractTemplateVarNames(value));
+    }
     for (const value of Object.values(server.headers ?? {})) {
       names.push(...extractTemplateVarNames(value));
     }

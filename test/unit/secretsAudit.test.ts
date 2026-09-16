@@ -56,6 +56,20 @@ test("secrets audit: an env var name outside allowed_vars is caught even though 
   assert.ok(report.findings[0].detail.includes("GITLAB_TOKEN"));
 });
 
+test("secrets audit: a staticEnv literal value never needs to be in allowed_vars (regression — trellis-onboard-mcp-mode's real --memory on run falsely flagged MEMORY_FILE_PATH)", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeFileSync(
+    join(home, ".claude.json"),
+    JSON.stringify({
+      mcpServers: { memory: { type: "stdio", command: "npx", env: { MEMORY_FILE_PATH: "~/.trellis/memories/graph.jsonl" } } },
+    }),
+  );
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  assert.deepEqual(report.findings, []);
+});
+
 test("secrets audit: a literal credential value embedded directly in a generated config is caught (regression — the real literal-value incident)", async () => {
   const home = scratchHome();
   initCanonical(home, CLEAN_POLICY);

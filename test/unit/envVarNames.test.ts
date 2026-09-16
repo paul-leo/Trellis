@@ -26,6 +26,27 @@ test("extractJsonEnvVarNames: invalid JSON yields empty, not a throw", () => {
   assert.deepEqual(extractJsonEnvVarNames("{ not json"), []);
 });
 
+test("extractJsonEnvVarNames: a staticEnv literal value contributes nothing — it's not a ${VAR} reference (regression — trellis-onboard-mcp-mode's --memory on falsely flagged as unexpected-var-name)", () => {
+  const content = JSON.stringify({
+    mcpServers: { memory: { type: "stdio", command: "npx", env: { MEMORY_FILE_PATH: "~/.trellis/memories/graph.jsonl" } } },
+  });
+  assert.deepEqual(extractJsonEnvVarNames(content), []);
+});
+
+test("extractJsonEnvVarNames: env and staticEnv in the same server's env object are told apart by value shape, not by key", () => {
+  const content = JSON.stringify({
+    mcpServers: { a: { type: "stdio", command: "npx", env: { REAL_SECRET: "${REAL_SECRET}", LITERAL_TAG: "not-a-reference" } } },
+  });
+  assert.deepEqual(extractJsonEnvVarNames(content), ["REAL_SECRET"]);
+});
+
+test("extractJsonEnvVarNames: an envAliases entry contributes its referenced source name, not its target key (regression — a key-based read checked the wrong name entirely)", () => {
+  const content = JSON.stringify({
+    mcpServers: { notion: { type: "stdio", command: "npx", env: { OPENAPI_MCP_HEADERS: "${NOTION_OPENAPI_MCP_HEADERS}" } } },
+  });
+  assert.deepEqual(extractJsonEnvVarNames(content), ["NOTION_OPENAPI_MCP_HEADERS"]);
+});
+
 test("extractTomlEnvVarNames: collects env_vars entries across multiple sections", () => {
   const content = [
     "[mcp_servers.a]",
