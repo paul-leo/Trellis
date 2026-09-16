@@ -16,6 +16,7 @@ import { AGENTS_MD_TEMPLATE } from "./init.js";
 import { decideDirImport } from "../lib/dirEquals.js";
 import { deepEqual } from "../lib/deepEqual.js";
 import { readClaudeCodeMcpDefs, readCodexMcpDefs, readKiroMcpDefs, resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
+import { findLiteralSecret } from "../adapters/mcpPlan.js";
 import { loadCanonicalSource, upsertServerYaml } from "../core/canonical.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpServerDef } from "../core/types.js";
@@ -147,6 +148,23 @@ export function isSafeReclassification(existing: McpServerDef, def: McpServerDef
 }
 
 function planMcpServer(name: string, def: McpServerDef, existing: McpServerDef | undefined): MigratePlanItem {
+  // Checked first, before any comparison against `existing`: a source
+  // agent's real config holding a literal credential must never reach
+  // canonical at all, regardless of whether canonical already has
+  // something for this name. `resolveMcpPlan`'s own guard only protects
+  // the sync-OUT boundary (canonical -> agent) — this is the matching
+  // guard for the migrate-IN boundary (agent -> canonical), the gap a
+  // real `mcp-router` token in a real `kiro` config exposed.
+  const secretLabel = findLiteralSecret(def);
+  if (secretLabel) {
+    return {
+      kind: "mcp",
+      name,
+      action: "conflict",
+      detail: `refusing to import MCP server "${name}": a value matches a known-dangerous literal pattern (${secretLabel}) — canonical must hold variable NAMES only, never real values (docs/research.md "Secrets")`,
+      remediation: `move the real value in the source agent's own config to an environment variable (or your secrets manager), leaving only a name behind, then re-run migrate — canonical never accepts a literal credential, even briefly`,
+    };
+  }
   if (existing === undefined) {
     return { kind: "mcp", name, action: "create", detail: "will add to servers.yaml", mcpDef: def };
   }

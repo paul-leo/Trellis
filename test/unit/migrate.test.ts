@@ -293,6 +293,61 @@ test("mcp: re-running migrate after a successful import is a no-op", async () =>
   assert.equal(second.items[0].action, "already-migrated");
 });
 
+// Found via real-machine dogfooding: a real `mcp-router` server in a
+// real Kiro config, with its token written as a literal (not a `${VAR}`
+// reference) — `resolveMcpPlan`'s own guard only ever protected the
+// sync-OUT boundary; canonical itself had no guard on the way IN.
+
+test("mcp: a literal credential in the source agent's config is refused, never written to canonical", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  // The exact real shape: a literal (not `${VAR}`) value under `env` —
+  // the migrate reader reclassifies this into `staticEnv` on the way in
+  // (src/lib/mcpMigrateRead.ts's splitJsonEnvMap), which is where
+  // findLiteralSecret's own field scan looks.
+  writeClaudeMcpServer(home, "mcp-router", {
+    type: "stdio",
+    command: "npx",
+    args: ["-y", "@mcp_router/cli@latest", "connect"],
+    env: { MCPR_TOKEN: "mcpr_iFNlmM3ee22GSUCREMbfmo49fAy3zQ5J" },
+  });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].action, "conflict");
+  assert.match(plan.items[0].detail, /literal pattern/);
+  assert.match(plan.items[0].remediation ?? "", /environment variable/);
+
+  applyMigratePlan(plan, home);
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.ok(!written.includes("mcpr_iFNlmM3ee22GSUCREMbfmo49fAy3zQ5J"), "the real token must never reach canonical, even transiently");
+  assert.ok(!written.includes("mcp-router"), "a refused server is not written at all, not written-then-flagged");
+});
+
+test("mcp: a literal credential is refused ahead of every other server in the same migrate run", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  writeFileSync(
+    join(home, ".claude.json"),
+    JSON.stringify({
+      mcpServers: {
+        "mcp-router": { type: "stdio", command: "npx", env: { MCPR_TOKEN: "mcpr_iFNlmM3ee22GSUCREMbfmo49fAy3zQ5J" } },
+        gitlab: { type: "stdio", command: "npx", args: ["-y", "@zereight/mcp-gitlab"] },
+      },
+    }),
+  );
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  const byName = Object.fromEntries(plan.items.map((item) => [item.name, item.action]));
+  assert.equal(byName["mcp-router"], "conflict");
+  assert.equal(byName["gitlab"], "create", "one refused server must not block another, unrelated one");
+
+  applyMigratePlan(plan, home);
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /gitlab:/);
+  assert.ok(!written.includes("mcp-router"));
+});
+
 test("mcp: a canonical server with a different definition is a conflict, not overwritten", async () => {
   const home = scratchHome();
   await collectInitReport(home);

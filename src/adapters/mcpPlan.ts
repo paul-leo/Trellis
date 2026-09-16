@@ -84,7 +84,22 @@ const DANGEROUS_LITERAL_PATTERNS: { label: string; pattern: RegExp }[] = [
   { label: "mcp-router token (mcpr_)", pattern: /mcpr_/ },
 ];
 
-function findLiteralSecret(def: McpServerDef): string | undefined {
+/**
+ * Exported so `migrate`'s own read path (`src/commands/migrate.ts`) can
+ * apply the identical check on the way *into* canonical, not just on the
+ * way out to an agent's native config. Found via real-machine dogfooding:
+ * `migrate --from kiro --only mcp` happily copied a real, live
+ * `MCPR_TOKEN` literal into `~/.trellis/mcp/servers.yaml` because this
+ * check previously existed only here, in `resolveMcpPlan` — canonical
+ * itself was never guarded, only the sync-out boundary was. A canonical
+ * file that briefly held a real secret before a later `mcp sync` refused
+ * to propagate it further already violates "never write a literal
+ * secret, ever" — the write already happened, in a file meant to be
+ * read, diffed, and committed as plain text. One shared implementation,
+ * not two that can drift, for the same reason `mcpConnect.ts`/
+ * `mcpToolRegistry.ts` are shared between pi-bridge and the gateway.
+ */
+export function findLiteralSecret(def: McpServerDef): string | undefined {
   const candidates = [def.command, def.url, ...(def.args ?? []), ...Object.values(def.headers ?? {}), ...Object.values(def.staticEnv ?? {})].filter(
     (v): v is string => typeof v === "string",
   );
