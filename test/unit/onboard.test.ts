@@ -14,6 +14,44 @@ import { test } from "node:test";
 import { collectInitReport } from "../../src/commands/init.js";
 import { collectOnboardPlan, runOnboard } from "../../src/commands/onboard.js";
 
+/** Captures every `console.log` line for the duration of `fn`, restoring
+ * the real one afterward even if `fn` throws. */
+async function captureStdout(fn: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+  return lines;
+}
+
+/** Same as `captureStdout`, for `console.error` — stage progress
+ * (design.md D8) is asserted to land here, never on stdout. */
+async function captureStdoutAndStderr(fn: () => Promise<void>): Promise<{ stdout: string[]; stderr: string[] }> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => {
+    stdout.push(args.map(String).join(" "));
+  };
+  console.error = (...args: unknown[]) => {
+    stderr.push(args.map(String).join(" "));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  return { stdout, stderr };
+}
+
 function scratchHome(): string {
   return mkdtempSync(join(tmpdir(), "trellis-onboard-"));
 }
@@ -566,4 +604,440 @@ test("memory sync: a real conflict (colliding non-trellis entity) makes onboard 
   const { exitCode } = await runOnboard({ homeDir: home, manage: "none", json: true });
   assert.equal(exitCode, 1);
   assert.ok(readFileSync(graphPath, "utf-8").includes("not ours"), "the pre-existing entity must survive untouched");
+});
+
+// trellis-onboard-closed-loop: the normalized verdict is the single
+// source the exit code and (later) the verdict block both read — these
+// prove real conflicts actually reach `result.verdict`, not just that
+// the exit code happens to still come out right.
+
+test("verdict: a real sync conflict on a managed agent reaches result.verdict as blocked", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  // Seed canonical directly (no migrate involved) — isolates this test
+  // to sync's own conflict, rather than also exercising migrate.
+  mkdirSync(join(home, ".trellis", "skills", "shared-skill"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "skills", "shared-skill", "SKILL.md"), "---\nname: shared-skill\ndescription: fixture\n---\n");
+  // claude-code present but with none of its own content, so it is never
+  // a migrate-source candidate (hasContent stays false) — migrate is
+  // skipped entirely for this test.
+  markClaudeCodePresent(home);
+  markCodexPresent(home);
+  // A real, non-symlink directory occupying the name sync will try to
+  // place the canonical skill at — the same conflict shape
+  // sync.test.ts's own "real, non-symlink directory" fixture uses. Codex's
+  // own skill root is `~/.agents/skills`, never `~/.codex/skills`
+  // (docs/research.md).
+  const codexSkillsDir = join(home, ".agents", "skills");
+  mkdirSync(join(codexSkillsDir, "shared-skill"), { recursive: true });
+  writeFileSync(join(codexSkillsDir, "shared-skill", "user-file.txt"), "mine, not Trellis's");
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "claude-code,codex" });
+
+  assert.equal(result.migratePlan, undefined, "precondition: migrate must not have run for this test to isolate sync");
+  const syncConflicts = result.verdict.filter((item) => item.stage === "sync" && item.severity === "blocked");
+  assert.equal(syncConflicts.length, 1);
+  assert.equal(syncConflicts[0].agent, "codex");
+  assert.ok(existsSync(join(codexSkillsDir, "shared-skill", "user-file.txt")), "the real user file must survive untouched");
+});
+
+test("verdict: no memory server configured is a warning in result.verdict, and does not fail the run", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+
+  const memoryWarnings = result.verdict.filter((item) => item.stage === "memory sync");
+  assert.equal(memoryWarnings.length, 1);
+  assert.equal(memoryWarnings[0].severity, "warning");
+  assert.ok(!result.verdict.some((item) => item.severity === "blocked"));
+
+  const { exitCode } = await runOnboard({ homeDir: home, manage: "none", json: true });
+  assert.equal(exitCode, 0, "a warning-only verdict must not fail the run");
+});
+
+test("verdict: exit code and result.verdict never disagree — a clean run has neither", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const graphPath = join(home, "graph.jsonl");
+  writeMemoryServer(home, graphPath);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  const { exitCode } = await runOnboard({ homeDir: home, manage: "none", json: true });
+
+  assert.equal(result.verdict.some((item) => item.severity === "blocked"), false);
+  assert.equal(exitCode, 0);
+});
+
+test("verdict block: a real early-stage conflict ends the run on the verdict, not a later stage's success line", async () => {
+  // Reproduces the exact scenario this whole change exists to fix: a
+  // pre-existing, non-symlink instructions file makes sync conflict,
+  // while every later stage (mcp sync, memory sync, secrets audit) is
+  // clean and would otherwise print a trailing green/neutral line.
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeInstructions(home, "# my own real instructions, not Trellis's\n");
+  await collectInitReport(home);
+  writeFileSync(join(home, ".trellis", "agents.md"), "# canonical instructions, different content\n");
+
+  const lines = await captureStdout(() => runOnboard({ homeDir: home, agent: "claude-code", manage: "claude-code", json: false }).then(() => {}));
+
+  const nonEmpty = lines.filter((line) => line.trim() !== "");
+  const lastLine = nonEmpty[nonEmpty.length - 1];
+  assert.match(lastLine, /^exit code: 1/, `expected the verdict's exit-code line last, got: ${JSON.stringify(lastLine)}`);
+
+  const verdictHeaderIndex = lines.indexOf("verdict");
+  assert.ok(verdictHeaderIndex >= 0, "verdict block must be present");
+  assert.ok(lines.slice(verdictHeaderIndex).some((line) => /blocking issue/.test(line)));
+});
+
+test("verdict block: paths are abbreviated to ~/… under the run's own homeDir", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeInstructions(home, "# mine\n");
+  await collectInitReport(home);
+  writeFileSync(join(home, ".trellis", "agents.md"), "# canonical, different\n");
+
+  const lines = await captureStdout(() => runOnboard({ homeDir: home, agent: "claude-code", manage: "claude-code", json: false }).then(() => {}));
+
+  const verdictLines = lines.slice(lines.indexOf("verdict"));
+  assert.ok(verdictLines.some((line) => line.includes("~/.claude/CLAUDE.md")), "expected an abbreviated ~/ path in the verdict");
+  assert.ok(
+    verdictLines.every((line) => !line.includes(home)),
+    "the scratch home's absolute prefix must never appear in the verdict block",
+  );
+});
+
+test("verdict block: a fully clean run states so explicitly", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const graphPath = join(home, "graph.jsonl");
+  writeMemoryServer(home, graphPath);
+
+  const lines = await captureStdout(() => runOnboard({ homeDir: home, manage: "none", json: false }).then(() => {}));
+
+  const verdictLines = lines.slice(lines.indexOf("verdict"));
+  assert.ok(verdictLines.some((line) => /nothing needs attention/.test(line)));
+  assert.ok(verdictLines.some((line) => /^exit code: 0/.test(line)));
+});
+
+test("remediation: the sync symlink conflict carries a concrete next action, in result.verdict and in the printed block", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeInstructions(home, "# my own real instructions, not Trellis's\n");
+  await collectInitReport(home);
+  writeFileSync(join(home, ".trellis", "agents.md"), "# canonical, different content\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "claude-code" });
+  const syncConflict = result.verdict.find((item) => item.stage === "sync" && item.severity === "blocked");
+  assert.ok(syncConflict?.remediation, "expected a remediation, not just a restatement of the conflict");
+  assert.match(syncConflict.remediation, /back up|remove/);
+
+  const lines = await captureStdout(() => runOnboard({ homeDir: home, agent: "claude-code", manage: "claude-code", json: false }).then(() => {}));
+  const verdictLines = lines.slice(lines.indexOf("verdict"));
+  assert.ok(verdictLines.some((line) => line.includes("→")), "expected the remediation arrow line in the printed verdict");
+});
+
+test("remediation: a conflict with none set still renders cleanly, with no remediation line for it", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const graphPath = join(home, "graph.jsonl");
+  writeFileSync(graphPath, `${JSON.stringify({ type: "entity", name: "notes", entityType: "person", observations: ["not ours"] })}\n`);
+  writeMemoryServer(home, graphPath);
+  writeFileSync(join(home, ".trellis", "memories", "notes.md"), "canonical content\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  const memoryConflict = result.verdict.find((item) => item.stage === "memory sync" && item.severity === "blocked");
+  assert.ok(memoryConflict);
+  assert.equal(memoryConflict.remediation, undefined, "precondition: memory sync conflicts carry no remediation yet");
+
+  // Must not throw, and must not print a dangling/empty remediation line.
+  const lines = await captureStdout(() => runOnboard({ homeDir: home, manage: "none", json: false }).then(() => {}));
+  const verdictLines = lines.slice(lines.indexOf("verdict"));
+  assert.ok(verdictLines.some((line) => line.includes("memory sync")));
+  assert.ok(!verdictLines.some((line) => line.trim() === "→"));
+});
+
+// Self-verification (design.md D2b): the mechanism that actually closes
+// the loop. `normalizeSelfVerificationVerdict`'s own unit tests
+// (test/unit/onboardVerdict.test.ts) already prove a remaining
+// create/conflict item is caught and always blocked, given a fabricated
+// report — there is no real seam to force a genuine "apply reported
+// success but the write silently didn't hold" through the public API
+// (a real filesystem failure during apply throws rather than being
+// swallowed). What these prove instead is the wiring itself: the re-plan
+// actually runs, against real state, and only when something was
+// actually written.
+
+test("self-verification: a normal real run's re-plan is present and empty — the write held", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  // Seed canonical directly (no migrate involved), same isolation used
+  // by the earlier "real sync conflict" test — claude-code has none of
+  // its own pre-existing content, so it never self-conflicts with what
+  // sync is about to symlink in.
+  mkdirSync(join(home, ".trellis", "skills", "demo"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: d\n---\n");
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "claude-code" });
+
+  assert.ok(result.syncVerification, "a real (non-dry-run) apply must be followed by a re-plan");
+  assert.ok(result.mcpSyncVerification);
+  for (const report of result.syncVerification.reports) {
+    assert.deepEqual(
+      report.items.filter((i) => i.action === "create" || i.action === "conflict"),
+      [],
+      `${report.agent}'s re-plan must find nothing outstanding after a successful real apply`,
+    );
+  }
+  assert.ok(!result.verdict.some((item) => item.stage.includes("(verify)")), "a clean re-plan must contribute nothing to the verdict");
+});
+
+test("self-verification: --dry-run never runs the re-plan at all — nothing was written to verify", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  mkdirSync(join(home, ".trellis", "skills", "demo"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: d\n---\n");
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "claude-code", dryRun: true });
+
+  assert.equal(result.syncVerification, undefined);
+  assert.equal(result.mcpSyncVerification, undefined);
+});
+
+// Doctor as onboard's final, secondary health scan (design.md D2/D3/D4)
+// — complementary to self-verification above, never a substitute for it.
+
+test("doctor stage: a clean run reports a passing health scan", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "claude-code" });
+
+  assert.ok(result.doctorReport);
+  assert.deepEqual(result.doctorReport.findings, []);
+  assert.ok(!result.verdict.some((item) => item.stage === "doctor"));
+});
+
+test("doctor stage: real cross-agent drift surfaces in onboard's own verdict, without a separate `trellis doctor` run", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  // Two managed agents, same skill name, genuinely different real
+  // content — the exact drift shape doctor.test.ts's own
+  // detectCrossAgentDrift tests use, reached here through a real onboard
+  // run instead of a synthetic AgentSnapshot.
+  writeClaudeSkill(home, "shared-skill", "---\nname: shared-skill\ndescription: claude version\n---\n");
+  markClaudeCodePresent(home);
+  markCodexPresent(home);
+  mkdirSync(join(home, ".agents", "skills", "shared-skill"), { recursive: true });
+  writeFileSync(join(home, ".agents", "skills", "shared-skill", "SKILL.md"), "---\nname: shared-skill\ndescription: codex version, different content\n---\n");
+
+  // Explicit source: both agents now have their own skill content, which
+  // would otherwise make the source ambiguous and refuse (unrelated to
+  // what this test is about).
+  const result = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "claude-code,codex" });
+
+  assert.ok(
+    result.doctorReport?.findings.some((f) => f.kind === "drift"),
+    `expected a drift finding; findings were: ${JSON.stringify(result.doctorReport?.findings)}`,
+  );
+  const driftVerdict = result.verdict.find((item) => item.stage === "doctor");
+  assert.ok(driftVerdict, "the real drift must reach onboard's own verdict, not require a separate `trellis doctor` run");
+});
+
+test("doctor stage: never performs an MCP handshake — the probeMcp flag never reaches the probes", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeMcpServer(home, "some-server");
+  await collectInitReport(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "claude-code" });
+
+  const claudeSnapshot = result.doctorReport?.snapshots.find((s) => s.agent === "claude-code");
+  assert.ok(claudeSnapshot?.mcpServers.some((s) => s.name === "some-server"));
+  // `probe` is only ever set when a handshake was actually attempted
+  // (probeMcp: true) — its absence here is the proof no server was
+  // spawned by this stage, matching doctor's own opt-in default.
+  assert.ok(
+    claudeSnapshot?.mcpServers.every((s) => s.probe === undefined),
+    "onboard's doctor stage must never pass probeMcp — spawning every configured server is not something a first-run command should do by default",
+  );
+});
+
+// Stage progress (design.md D8): transient status, never part of the
+// report a user might redirect to a file.
+
+test("progress: on a TTY, stage markers land on stderr, and never leak into stdout", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const graphPath = join(home, "graph.jsonl");
+  writeMemoryServer(home, graphPath);
+
+  const { stdout, stderr } = await captureStdoutAndStderr(() =>
+    runOnboard({ homeDir: home, manage: "none", json: false, isTTY: true }).then(() => {}),
+  );
+
+  assert.ok(stderr.some((line) => /^\[\d+\/6\] sync/.test(line)), `expected a sync progress line, got: ${JSON.stringify(stderr)}`);
+  assert.ok(stderr.some((line) => /^\[\d+\/6\] doctor/.test(line)));
+  assert.ok(
+    stdout.every((line) => !/^\[\d+\/6\]/.test(line)),
+    "a progress line must never appear on stdout — that stream is the report",
+  );
+});
+
+test("progress: --json emits no progress at all", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+
+  const { stderr } = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: true, isTTY: true }).then(() => {}));
+
+  assert.deepEqual(stderr, []);
+});
+
+test("progress: a non-interactive run emits no progress at all", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+
+  const { stderr } = await captureStdoutAndStderr(() => runOnboard({ homeDir: home, manage: "none", json: false, isTTY: false }).then(() => {}));
+
+  assert.deepEqual(stderr, []);
+});
+
+// `--dry-run` offers to apply (design.md D9). `canUseInteractivePicker()`
+// is never true in this test environment (no real raw-mode terminal), so
+// every test here injects `promptToApply` to exercise both answers —
+// which also proves the gate itself: without injecting it, the offer is
+// silently declined by the same "no real terminal" fallback every other
+// onboard prompt already uses.
+
+test("dry-run offer: declining writes nothing and preserves the dry run's own exit code", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeInstructions(home, "# mine\n");
+  await collectInitReport(home);
+  writeFileSync(join(home, ".trellis", "agents.md"), "# canonical, different\n");
+
+  let called = false;
+  const { exitCode } = await runOnboard({
+    homeDir: home,
+    agent: "claude-code",
+    manage: "claude-code",
+    dryRun: true,
+    json: false,
+    promptToApply: async () => {
+      called = true;
+      return false;
+    },
+  });
+
+  assert.equal(called, true, "the offer must actually be made on a dry run");
+  assert.equal(exitCode, 1, "the dry run's own conflict still determines the exit code when declined");
+  // Nothing real was written — canonical's placeholder-replacement never
+  // happened for real.
+  assert.equal(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), "# canonical, different\n");
+});
+
+test("dry-run offer: accepting performs a real run, re-planned against current state", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  mkdirSync(join(home, ".trellis", "skills", "demo"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: d\n---\n");
+  markClaudeCodePresent(home);
+
+  const { exitCode } = await runOnboard({
+    homeDir: home,
+    manage: "claude-code",
+    dryRun: true,
+    json: false,
+    promptToApply: async () => true,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.ok(existsSync(join(home, ".claude", "skills", "demo")), "accepting must actually write, not just report");
+});
+
+test("dry-run offer: never offered on --json, even with promptToApply injected", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+
+  let called = false;
+  await runOnboard({
+    homeDir: home,
+    manage: "none",
+    dryRun: true,
+    json: true,
+    promptToApply: async () => {
+      called = true;
+      return true;
+    },
+  });
+
+  assert.equal(called, false, "--json must never trigger an interactive offer, regardless of what's injected");
+});
+
+test("dry-run offer: not offered on a real (non-dry-run) run", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+
+  let called = false;
+  await runOnboard({
+    homeDir: home,
+    manage: "none",
+    dryRun: false,
+    json: false,
+    promptToApply: async () => {
+      called = true;
+      return true;
+    },
+  });
+
+  assert.equal(called, false, "there is nothing to offer to apply when the run already applied for real");
+});
+
+// `--json` verdict array: additive only (spec: "no existing field changes
+// meaning or disappears").
+
+test("json: conflicts from more than one stage all appear in the one verdict array, each labelled with its own stage", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeInstructions(home, "# my own real instructions\n");
+  await collectInitReport(home);
+  writeFileSync(join(home, ".trellis", "agents.md"), "# canonical, different content\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "claude-code" });
+  const parsed = JSON.parse(JSON.stringify(result)) as typeof result;
+
+  const stages = new Set(parsed.verdict.map((item) => item.stage));
+  assert.ok(stages.has("sync"), `expected a "sync" entry, got stages: ${[...stages].join(", ")}`);
+  assert.ok(stages.has("memory sync"), `expected a "memory sync" entry, got stages: ${[...stages].join(", ")}`);
+});
+
+test("json: every field that existed before this change is still present and unchanged", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeInstructions(home, "# real content, so source/sourceReason actually resolve\n");
+  await collectInitReport(home);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "claude-code" });
+  const parsed = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+
+  for (const field of ["summary", "source", "sourceReason", "managedAgents", "syncReport", "mcpSyncReport", "memorySyncResult", "secretsAuditReport"]) {
+    assert.ok(field in parsed, `expected pre-existing field "${field}" to still be present`);
+  }
+  // New, additive fields exist alongside them, not instead of them.
+  for (const field of ["verdict", "doctorReport"]) {
+    assert.ok(field in parsed, `expected new field "${field}"`);
+  }
 });

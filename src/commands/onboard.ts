@@ -36,9 +36,22 @@ import { collectSecretsAuditReport, printReport as printSecretsAuditReport } fro
 import type { SecretsAuditReport } from "./secretsAudit.js";
 import { applyMemorySync, collectMemorySyncResult, printMemorySyncResult } from "./memory.js";
 import type { MemorySyncResult } from "./memory.js";
+import { collectDoctorReport, printReport as printDoctorReport, resolveKnownHostInjected } from "./doctor.js";
+import type { DoctorReport } from "./doctor.js";
 import { openBackupSession } from "../lib/backup.js";
 import { confirmAndInstall } from "../lib/installAgent.js";
 import type { ConfirmAndInstallOptions } from "../lib/installAgent.js";
+import {
+  normalizeDoctorVerdict,
+  normalizeMcpSyncVerdict,
+  normalizeMemorySyncVerdict,
+  normalizeMigrateVerdict,
+  normalizeSecretsAuditVerdict,
+  normalizeSelfVerificationVerdict,
+  normalizeSyncVerdict,
+  printVerdict,
+} from "./onboardVerdict.js";
+import type { VerdictItem } from "./onboardVerdict.js";
 
 const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
   "claude-code": (homeDir) => claudeCodeProbe.probe(homeDir),
@@ -111,6 +124,10 @@ export interface RunOnboardOptions {
    * answer — "skip migrate for this run" (design.md D6) — distinct from
    * `source` being unresolved at all. */
   promptForMigrateCategories?: (source: OnboardAgentSummary) => Promise<MigrateKind[]>;
+  /** Test-only: replaces the real end-of-`--dry-run` "apply now?" picker
+   * (design.md D9). `true` means "apply for real", matching what
+   * accepting the real picker's "Yes, apply now" option means. */
+  promptToApply?: () => Promise<boolean>;
   /** Test-only: injected into every `confirmAndInstall` call for a
    * selected, not-yet-present agent. Never a real terminal prompt or a
    * real `npm install` in a unit test. */
@@ -139,13 +156,58 @@ export interface OnboardResult {
   migrateSkipped?: string;
   syncReport?: SyncReport;
   mcpSyncReport?: McpSyncReport;
+  /**
+   * The self-verification re-plan (design.md D2b): a dry-run re-plan of
+   * `sync`/`mcp sync`, run immediately after their real apply, against
+   * the state that apply just wrote. Absent on `--dry-run` (nothing was
+   * written, so nothing to verify) and on every early-refusal path.
+   * Present, and empty, on a real run whose write actually held.
+   */
+  syncVerification?: SyncReport;
+  mcpSyncVerification?: McpSyncReport;
   memorySyncResult?: MemorySyncResult;
   secretsAuditReport?: SecretsAuditReport;
+  /**
+   * A broader, whole-machine health scan — the same detectors
+   * `trellis doctor` itself runs, against every agent (not scoped to
+   * `managedAgents`, design.md D3), never with MCP handshake probing
+   * (design.md D4). Complementary to, and distinct from, the
+   * write-verification above: this cannot itself prove a write took
+   * effect (it never reads canonical), only that something looks
+   * inconsistent across agents independent of this run.
+   */
+  doctorReport?: DoctorReport;
   refusal?: string;
   /** Only set when no agent is present — the same values `--json` and
    * text output both surface, so a machine caller doesn't have to
    * hardcode them a second time. */
   installHints?: Record<AgentId, string>;
+  /**
+   * Every stage's conflicts and findings, normalized to one shape
+   * (trellis-onboard-closed-loop design.md D5) — the single source
+   * `runOnboard`'s exit code and the terminal verdict block both derive
+   * from, so the two can never disagree. Always present, empty on a
+   * fully clean run (including refusal paths, where it reflects
+   * whatever partial data was collected before the refusal).
+   */
+  verdict: VerdictItem[];
+}
+
+const PROGRESS_STAGES = ["migrate", "sync", "mcp sync", "memory sync", "secrets audit", "doctor"] as const;
+
+/** Transient status, not part of the report — printed to stderr so
+ * `trellis onboard > report.txt` still captures exactly the report and
+ * verdict, nothing else (design.md D8). Silent for `--json` and for any
+ * non-interactive stdout, where nobody's watching a terminal march
+ * through stages in real time. */
+function shouldShowProgress(opts: RunOnboardOptions): boolean {
+  return !opts.json && (opts.isTTY ?? process.stdout.isTTY === true);
+}
+
+function logProgress(opts: RunOnboardOptions, stage: (typeof PROGRESS_STAGES)[number]): void {
+  if (!shouldShowProgress(opts)) return;
+  const index = PROGRESS_STAGES.indexOf(stage) + 1;
+  console.error(`[${index}/${PROGRESS_STAGES.length}] ${stage}`);
 }
 
 function agentSummaryLabel(s: OnboardAgentSummary): string {
@@ -351,7 +413,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   const present = summary.filter((s) => s.present);
 
   if (present.length === 0) {
-    return { summary, installHints: { ...INSTALL_HINTS } };
+    return { summary, installHints: { ...INSTALL_HINTS }, verdict: [] };
   }
 
   const sourceCandidates = present.filter(hasContent);
@@ -364,6 +426,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
       return {
         summary,
         refusal: `"${opts.agent}" is not one of the present agents (${present.map((s) => s.agent).join(", ")})`,
+        verdict: [],
       };
     }
     source = match.agent;
@@ -377,13 +440,14 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
       return {
         summary,
         refusal: `multiple agents detected (${sourceCandidates.map((s) => s.agent).join(", ")}) and no terminal to prompt in — pass --agent <id>`,
+        verdict: [],
       };
     }
     const prompt = opts.promptForAgent ?? promptForAgentReal;
     try {
       source = (await prompt(sourceCandidates)) as AgentId;
     } catch (err) {
-      return { summary, refusal: err instanceof Error ? err.message : String(err) };
+      return { summary, refusal: err instanceof Error ? err.message : String(err), verdict: [] };
     }
     sourceReason = "prompt";
   }
@@ -393,7 +457,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   const alreadyManaged = readManagedYaml(homeDir);
   const managedResult = await resolveManagedAgents(opts, summary, alreadyManaged);
   if ("refusal" in managedResult) {
-    return { summary, source, sourceReason, refusal: managedResult.refusal };
+    return { summary, source, sourceReason, refusal: managedResult.refusal, verdict: [] };
   }
 
   const installResults: OnboardInstallResult[] = [];
@@ -416,6 +480,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
         source,
         sourceReason,
         refusal: `"${agent}" is not installed — installing it requires a confirmation, which --json never prompts for. Inject a confirm handler or install ${agent} first.`,
+        verdict: [],
       };
     }
     const result = await confirmAndInstall(agent, opts.install);
@@ -434,6 +499,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
 
   let migratePlan: MigratePlan | undefined;
   let migrateSkipped: string | undefined;
+  logProgress(opts, "migrate");
   if (source) {
     const sourceSummary = summary.find((s) => s.agent === source)!;
     const categories = await resolveMigrateCategories(sourceSummary, opts);
@@ -452,8 +518,19 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // Neither collectSyncReport nor collectMcpSyncReport finalizes a
   // session they were handed; only this caller does, once, after both.
   const backupSession = opts.dryRun ? undefined : openBackupSession(homeDir, "onboard");
+  logProgress(opts, "sync");
   const syncReport = await collectSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession });
+  // The self-verification re-plan (design.md D2b): immediately after a
+  // real apply, re-run the exact same plan computation, dry-run, against
+  // what was just written. A remaining "create"/"conflict" item means
+  // the write did not hold — the mechanism that actually closes the
+  // loop, since doctor (below) never reads canonical and cannot catch
+  // this even in principle. Skipped entirely on --dry-run: nothing was
+  // written, so there is nothing to verify.
+  const syncVerification = opts.dryRun ? undefined : await collectSyncReport({ homeDir, dryRun: true, managedAgents });
+  logProgress(opts, "mcp sync");
   const mcpSyncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession });
+  const mcpSyncVerification = opts.dryRun ? undefined : await collectMcpSyncReport({ homeDir, dryRun: true, managedAgents });
   backupSession?.finalize();
 
   // Independent of `managedAgents` — the shared memory server is not
@@ -461,6 +538,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // sync/mcp-sync above. Runs unconditionally once reached; an
   // unconfigured `memory` server is a legitimate "nothing to do yet"
   // state (design.md D5), not gated on any prior step here.
+  logProgress(opts, "memory sync");
   const memorySyncResult = collectMemorySyncResult(homeDir);
   if (!opts.dryRun) {
     applyMemorySync(memorySyncResult);
@@ -469,7 +547,31 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // Read-only, no dryRun concept — same report either way, run last since
   // it audits the config mcp sync just wrote (or, on --dry-run, whatever
   // was already there before this run).
+  logProgress(opts, "secrets audit");
   const secretsAuditReport = await collectSecretsAuditReport({ homeDir, managedAgents });
+
+  // The broader health scan (design.md D2/D3/D4) — last, since it's the
+  // only stage whose job is to observe the result of every other one.
+  // Never --probe-mcp: the worst possible moment to start spawning every
+  // configured MCP server is a user's first-ever run of this command.
+  // Scoped to every agent, not just managedAgents — filtering here would
+  // hide exactly the finding onboarding is most likely to create (a
+  // newly-relevant agent drifting, or colliding with an unmanaged one);
+  // normalizeDoctorVerdict is what turns "unmanaged" into a warning
+  // rather than hiding it outright.
+  logProgress(opts, "doctor");
+  const doctorReport = await collectDoctorReport(homeDir, resolveKnownHostInjected({ homeDir }));
+
+  const verdict: VerdictItem[] = [
+    ...normalizeMigrateVerdict(migratePlan),
+    ...normalizeSyncVerdict(syncReport),
+    ...normalizeSelfVerificationVerdict("sync", syncVerification?.reports),
+    ...normalizeMcpSyncVerdict(mcpSyncReport),
+    ...normalizeSelfVerificationVerdict("mcp sync", mcpSyncVerification?.reports),
+    ...normalizeMemorySyncVerdict(memorySyncResult),
+    ...normalizeSecretsAuditVerdict(secretsAuditReport),
+    ...normalizeDoctorVerdict(doctorReport, managedAgents),
+  ];
 
   return {
     summary,
@@ -481,29 +583,60 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     migrateSkipped,
     syncReport,
     mcpSyncReport,
+    syncVerification,
+    mcpSyncVerification,
     memorySyncResult,
     secretsAuditReport,
+    doctorReport,
+    verdict,
   };
 }
 
+/**
+ * Declining is the default (design.md D9): "No" is the first, highlighted
+ * option, so Enter — the reflex keystroke — declines. Only ever offered
+ * on a real, raw-mode-capable terminal (`canUseInteractivePicker`, the
+ * same gate every other onboard prompt already uses); `--json` and
+ * non-interactive runs never reach this at all.
+ */
+async function offerToApply(opts: RunOnboardOptions): Promise<boolean> {
+  if (opts.promptToApply) return opts.promptToApply();
+  if (!canUseInteractivePicker()) return false;
+  console.log("");
+  const choice = await runSingleSelectPicker(["No, don't apply", "Yes, apply now"]);
+  return choice === 1;
+}
+
 export async function runOnboard(opts: RunOnboardOptions = {}): Promise<{ exitCode: number }> {
+  const homeDir = opts.homeDir ?? homedir();
   const result = await collectOnboardPlan(opts);
 
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     printResult(result, opts.dryRun ?? false);
+    // Always last — including on a fully clean run and on a refusal —
+    // so the terminal state of the run is never a green line from
+    // whichever stage happened to print last (spec: "Every run
+    // terminates in a verdict that matches its exit code").
+    printVerdict(result.verdict, homeDir);
   }
 
   if (result.refusal) return { exitCode: 1 };
-  const memorySyncConflict = result.memorySyncResult?.configured === true && result.memorySyncResult.plan.items.some((i) => i.action === "conflict");
-  const hasConflict =
-    (result.migratePlan?.items.some((i) => i.action === "conflict") ?? false) ||
-    (result.syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false) ||
-    (result.mcpSyncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false) ||
-    memorySyncConflict ||
-    (result.secretsAuditReport?.findings.length ?? 0) > 0;
-  return { exitCode: hasConflict ? 1 : 0 };
+
+  if (opts.dryRun && !opts.json) {
+    const accepted = await offerToApply(opts);
+    if (accepted) {
+      // Re-plan and apply for real rather than replaying this exact
+      // plan — the user may have changed state while reading the
+      // preview, and re-planning against current state is cheap next to
+      // applying a plan that's gone stale (design.md D9).
+      return runOnboard({ ...opts, dryRun: false });
+    }
+  }
+
+  const hasBlocked = result.verdict.some((item) => item.severity === "blocked");
+  return { exitCode: hasBlocked ? 1 : 0 };
 }
 
 function printResult(result: OnboardResult, dryRun: boolean): void {
@@ -574,5 +707,13 @@ function printResult(result: OnboardResult, dryRun: boolean): void {
   if (result.secretsAuditReport) {
     console.log("\nsecrets audit");
     printSecretsAuditReport(result.secretsAuditReport);
+  }
+
+  if (result.doctorReport) {
+    // Distinct from the self-verification re-plan above: this is a
+    // broader health scan across every agent, not proof that this run's
+    // own writes took effect (design.md D2b).
+    console.log("\nhealth scan (trellis doctor)");
+    printDoctorReport(result.doctorReport);
   }
 }

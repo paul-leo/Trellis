@@ -53,6 +53,13 @@ export interface AdapterPlanItem {
   /** Human-readable description of one change this adapter would make
    * ("create" / "remove") or why it refused to ("conflict"). */
   description: string;
+  /** Only set (and only meaningful) when `action === "conflict"`: the
+   * concrete next action a user can take, distinct from restating why
+   * it conflicted (`description` already does that) — surfaced in
+   * `trellis onboard`'s verdict block (trellis-onboard-closed-loop
+   * design.md D7). Optional so existing conflict sites keep compiling
+   * and rendering cleanly before each is given one. */
+  remediation?: string;
   /** What's being touched, for the collision/audit checks to reason
    * about. For `kind: "mcp"`, the config file being modified (e.g.
    * `~/.codex/config.toml`), not a per-server path — there isn't one. */

@@ -5,6 +5,7 @@
  * throughout docs/research.md's investigation, now formalized.
  */
 
+import { homedir } from "node:os";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
@@ -100,29 +101,36 @@ export function resolveKnownHostInjected(opts: RunDoctorOptions): readonly strin
 }
 
 export async function runDoctor(opts: RunDoctorOptions = {}): Promise<{ exitCode: number }> {
-  const report = await collectDoctorReport(resolveKnownHostInjected(opts), opts.probeMcp);
+  const report = await collectDoctorReport(opts.homeDir, resolveKnownHostInjected(opts), opts.probeMcp);
   const exitCode = report.findings.some((f) => EXIT_NONZERO_KINDS.has(f.kind)) ? 1 : 0;
 
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    printTable(report);
+    printReport(report);
   }
 
   return { exitCode };
 }
 
-/** Exported separately from `runDoctor` so tests can assert on findings
- * without capturing stdout. */
+/**
+ * Exported separately from `runDoctor` so tests can assert on findings
+ * without capturing stdout — and, since trellis-onboard-closed-loop,
+ * so `trellis onboard` can call this against the scratch home its own
+ * tests use. `homeDir` defaults to the real `~` so `runDoctor`'s
+ * existing call site (which now passes `opts.homeDir`, itself normally
+ * `undefined`) is unaffected.
+ */
 export async function collectDoctorReport(
+  homeDir: string = homedir(),
   knownHostInjected: readonly string[] = DEFAULT_KNOWN_HOST_INJECTED,
   probeMcp = false,
 ): Promise<DoctorReport> {
   const probeList: { agent: AgentId; run: () => Promise<AgentSnapshot> }[] = [
-    { agent: "claude-code", run: () => claudeCodeProbe.probe(undefined, { probeMcp }) },
-    { agent: "codex", run: () => codexProbe.probe(undefined, { probeMcp }) },
-    { agent: "kiro", run: () => kiroProbe.probe(undefined, { probeMcp }) },
-    { agent: "pi", run: piProbe.probe },
+    { agent: "claude-code", run: () => claudeCodeProbe.probe(homeDir, { probeMcp }) },
+    { agent: "codex", run: () => codexProbe.probe(homeDir, { probeMcp }) },
+    { agent: "kiro", run: () => kiroProbe.probe(homeDir, { probeMcp }) },
+    { agent: "pi", run: () => piProbe.probe(homeDir) },
   ];
 
   // One agent erroring must not blank the other three's results.
@@ -298,7 +306,10 @@ export function detectMcpUnreachable(snapshots: AgentSnapshot[]): Finding[] {
   return findings;
 }
 
-function printTable(report: DoctorReport): void {
+/** Exported so `trellis onboard` can reuse it verbatim for its own final
+ * stage (trellis-onboard-closed-loop) rather than a second copy of this
+ * formatting. */
+export function printReport(report: DoctorReport): void {
   const byAgent = new Map<AgentId, Finding[]>();
   const crossAgent: Finding[] = [];
   for (const finding of report.findings) {

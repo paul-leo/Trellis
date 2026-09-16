@@ -51,6 +51,9 @@ export interface DesiredMcpEntry {
 export interface McpConflict {
   name: string;
   message: string;
+  /** The concrete next action, distinct from `message`'s restatement of
+   * why (trellis-onboard-closed-loop design.md D7). */
+  remediation?: string;
 }
 
 export interface McpPlanResult {
@@ -63,6 +66,10 @@ const CODEX_STDIO_URL_CRASH_NOTE =
 
 function collisionMessage(name: string, agentId: AgentId): string {
   return `refusing to write MCP server "${name}": also appears in known_host_injected.${agentId === "codex" ? CODEX_STDIO_URL_CRASH_NOTE : ""}`;
+}
+
+function collisionRemediation(name: string): string {
+  return `rename this server in servers.yaml, or remove "${name}" from known_host_injected if it's no longer actually host-injected on this machine`;
 }
 
 /**
@@ -121,7 +128,10 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
   // same canonical source.
   if (isGatewayAgent(agentId, mcp, managedAgents)) {
     if (mcp.knownHostInjected.includes(GATEWAY_ENTRY_NAME)) {
-      return { desired: [], conflicts: [{ name: GATEWAY_ENTRY_NAME, message: collisionMessage(GATEWAY_ENTRY_NAME, agentId) }] };
+      return {
+        desired: [],
+        conflicts: [{ name: GATEWAY_ENTRY_NAME, message: collisionMessage(GATEWAY_ENTRY_NAME, agentId), remediation: collisionRemediation(GATEWAY_ENTRY_NAME) }],
+      };
     }
     // Every per-server check (enabled, scope, literal secrets, unresolved
     // env names, Codex's header shape) still runs — but at gateway
@@ -135,7 +145,10 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
 
   if (mcp.hub) {
     if (mcp.knownHostInjected.includes(HUB_ENTRY_NAME)) {
-      return { desired: [], conflicts: [{ name: HUB_ENTRY_NAME, message: collisionMessage(HUB_ENTRY_NAME, agentId) }] };
+      return {
+        desired: [],
+        conflicts: [{ name: HUB_ENTRY_NAME, message: collisionMessage(HUB_ENTRY_NAME, agentId), remediation: collisionRemediation(HUB_ENTRY_NAME) }],
+      };
     }
     return { desired: [{ name: HUB_ENTRY_NAME, def: { transport: "http", url: mcp.hub.url } }], conflicts: [] };
   }
@@ -153,7 +166,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
     }
 
     if (mcp.knownHostInjected.includes(name)) {
-      conflicts.push({ name, message: collisionMessage(name, agentId) });
+      conflicts.push({ name, message: collisionMessage(name, agentId), remediation: collisionRemediation(name) });
       continue;
     }
 
@@ -162,6 +175,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
       conflicts.push({
         name,
         message: `refusing to write MCP server "${name}": a value matches a known-dangerous literal pattern (${secretLabel}) — configs must hold variable NAMES only, never real values (docs/research.md "Secrets")`,
+        remediation: `replace the literal value in servers.yaml with a \`\${VAR_NAME}\` reference and put the real value wherever secrets.policy.yaml resolves it from`,
       });
       continue;
     }
@@ -175,6 +189,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
       conflicts.push({
         name,
         message: `refusing to write MCP server "${name}" for codex: its "headers" field isn't the single { Authorization: "Bearer \${VAR}" } shape Codex's own config format can express — Codex has no generic headers concept, only \`bearer_token_env_var\`. Still written normally for every other in-scope agent.`,
+        remediation: `reduce this server's headers to a single Authorization bearer token for Codex, enable gateway mode for Codex (which resolves headers itself and never hits this check), or accept that this server stays unreachable from Codex`,
       });
       continue;
     }
@@ -185,6 +200,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
       conflicts.push({
         name,
         message: `refusing to write MCP server "${name}": its declared env var "${unresolvedName}" has no resolvable value in ${source} — writing it now would silently break this server's connection once the agent starts it (trellis-mcp-static-env-and-disabled-servers)`,
+        remediation: `set "${unresolvedName}" in ${source}, or fix the name in servers.yaml if it was a typo, then re-run mcp sync`,
       });
       continue;
     }

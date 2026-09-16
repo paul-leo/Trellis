@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   DEFAULT_KNOWN_HOST_INJECTED,
+  collectDoctorReport,
   detectCaseMismatches,
   detectCollisions,
   detectCrossAgentDrift,
@@ -18,6 +19,10 @@ import {
   resolveKnownHostInjected,
 } from "../../src/commands/doctor.js";
 import type { AgentSnapshot, AgentSnapshotSkillEntry } from "../../src/core/types.js";
+
+function scratchHome(): string {
+  return mkdtempSync(join(tmpdir(), "trellis-doctor-report-"));
+}
 
 function skill(overrides: Partial<AgentSnapshotSkillEntry> & { name: string; realDir: string }): AgentSnapshotSkillEntry {
   return { dir: overrides.realDir, isSymlink: false, caseCorrect: true, ...overrides };
@@ -113,4 +118,38 @@ test("resolveKnownHostInjected: no canonical source falls back to the hardcoded 
   const home = mkdtempSync(join(tmpdir(), "trellis-doctor-no-canonical-"));
   const result = resolveKnownHostInjected({ homeDir: home });
   assert.deepEqual(result, DEFAULT_KNOWN_HOST_INJECTED);
+});
+
+// trellis-onboard-closed-loop D1: collectDoctorReport gained a homeDir
+// parameter specifically so onboard's own tests — and onboard itself,
+// run against an explicit home — never probe the real ~.
+
+test("collectDoctorReport: a scratch home with a distinctively-named agent reports it, scoped to that home", async () => {
+  const home = scratchHome();
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { "trellis-doctor-report-marker": { command: "true" } } }));
+
+  const report = await collectDoctorReport(home);
+  const claudeCode = report.snapshots.find((s) => s.agent === "claude-code");
+
+  assert.equal(claudeCode?.present, true);
+  assert.ok(claudeCode?.mcpServers.some((s) => s.name === "trellis-doctor-report-marker"));
+});
+
+test("collectDoctorReport: an empty scratch home reports every agent absent, never falling through to the real ~", async () => {
+  const home = scratchHome();
+
+  const report = await collectDoctorReport(home);
+
+  assert.equal(report.snapshots.length, 4);
+  for (const snapshot of report.snapshots) {
+    assert.equal(snapshot.present, false, `${snapshot.agent} must not be present — an empty scratch home has none of its config files`);
+  }
+});
+
+test("collectDoctorReport: homeDir defaults to the real ~ — the same seam every other probe uses", async () => {
+  // Not a claim about what the real machine has installed (that varies);
+  // only that omitting homeDir doesn't throw and resolves against a real
+  // path, matching every probe's own `homeDir: string = homedir()` default.
+  const report = await collectDoctorReport();
+  assert.equal(report.snapshots.length, 4);
 });

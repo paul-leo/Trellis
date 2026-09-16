@@ -74,6 +74,9 @@ export function planSymlinks(opts: {
           description: isForeign
             ? `${path} exists as a symlink to ${readlinkSync(path)}, not owned by Trellis — left untouched`
             : `${path} exists and is not a Trellis-managed symlink — left untouched`,
+          remediation: isForeign
+            ? `remove the existing symlink at ${path} if you want Trellis to manage it, then re-run sync — otherwise leave it, Trellis will not touch it`
+            : `back up ${path}'s real content if you need it, remove the file, then re-run sync — Trellis will not overwrite or merge into an existing real file`,
         });
         continue;
       }

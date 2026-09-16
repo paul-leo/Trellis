@@ -50,6 +50,10 @@ export interface MigratePlanItem {
   name: string;
   action: MigrateAction;
   detail: string;
+  /** Only set (and only meaningful) when `action === "conflict"`: the
+   * concrete next action, distinct from `detail`'s restatement of why
+   * (trellis-onboard-closed-loop design.md D7). */
+  remediation?: string;
   /** Only set when action === "create"; consumed by applyMigratePlan. */
   sourceDir?: string;
   sourceContent?: string;
@@ -76,7 +80,13 @@ function planSkill(name: string, sourceDir: string, isSymlink: boolean, caseCorr
     case "already-present":
       return { kind: "skill", name, action: "already-migrated", detail: "canonical content is byte-identical" };
     case "conflict":
-      return { kind: "skill", name, action: "conflict", detail: `canonical skills/${name}/ already exists with different content — resolve by hand` };
+      return {
+        kind: "skill",
+        name,
+        action: "conflict",
+        detail: `canonical skills/${name}/ already exists with different content — resolve by hand`,
+        remediation: `compare \`~/.trellis/skills/${name}/\` against the source agent's copy and either update canonical by hand or delete the source's copy if canonical's is the one to keep`,
+      };
   }
 }
 
@@ -89,7 +99,13 @@ function planInstructions(snapshot: AgentSnapshot, canonicalAgentsMd: string): M
   try {
     sourceContent = readFileSync(snapshot.instructionsFile.path, "utf-8");
   } catch (err) {
-    return { kind: "instructions", name: "agents.md", action: "conflict", detail: `could not read source instructions: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      kind: "instructions",
+      name: "agents.md",
+      action: "conflict",
+      detail: `could not read source instructions: ${err instanceof Error ? err.message : String(err)}`,
+      remediation: `check that ${snapshot.instructionsFile.path} exists and is readable, then re-run migrate`,
+    };
   }
 
   if (!existsSync(canonicalAgentsMd)) {
@@ -102,7 +118,13 @@ function planInstructions(snapshot: AgentSnapshot, canonicalAgentsMd: string): M
   if (current === sourceContent) {
     return { kind: "instructions", name: "agents.md", action: "already-migrated", detail: "canonical content is byte-identical" };
   }
-  return { kind: "instructions", name: "agents.md", action: "conflict", detail: "canonical agents.md already has different real content — resolve by hand" };
+  return {
+    kind: "instructions",
+    name: "agents.md",
+    action: "conflict",
+    detail: "canonical agents.md already has different real content — resolve by hand",
+    remediation: `compare \`~/.trellis/agents.md\` against ${snapshot.instructionsFile.path} and either merge by hand or delete whichever copy you don't want to keep`,
+  };
 }
 
 /**
@@ -134,7 +156,13 @@ function planMcpServer(name: string, def: McpServerDef, existing: McpServerDef |
   if (isSafeReclassification(existing, def)) {
     return { kind: "mcp", name, action: "reclassify", detail: "same value, only its internal classification changed — safe to update", mcpDef: def };
   }
-  return { kind: "mcp", name, action: "conflict", detail: `canonical mcp/servers.yaml already has a different definition for "${name}" — resolve by hand` };
+  return {
+    kind: "mcp",
+    name,
+    action: "conflict",
+    detail: `canonical mcp/servers.yaml already has a different definition for "${name}" — resolve by hand`,
+    remediation: `compare the source agent's own definition for "${name}" against \`~/.trellis/mcp/servers.yaml\` and update canonical by hand if the source's is the one to keep`,
+  };
 }
 
 /**

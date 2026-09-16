@@ -17,8 +17,9 @@ $ trellis onboard
 
 Runs `init`, detects which of Claude Code/Codex/Kiro/pi are on this machine,
 then resolves two independent choices before running `migrate`, `sync`,
-`mcp sync`, `memory sync`, and `secrets audit` — the whole onboarding path,
-no follow-up commands to type by hand:
+`mcp sync`, `memory sync`, `secrets audit`, and a final health scan — the
+whole onboarding path, no follow-up commands to type by hand, and no need
+to run `trellis doctor` separately to know whether it actually worked.
 
 1. **Migration source** — read from, at most one, never written back to.
    "Real content" means skills, custom instructions, *or* real MCP servers
@@ -65,16 +66,72 @@ memory sync
 
 secrets audit
   ✅ no findings — every present agent's real config and every declared env var passed all checks
+
+health scan (trellis doctor)
+  ✅ no findings
+
+verdict
+✅ nothing needs attention — every stage completed cleanly and verified
+exit code: 0 — nothing blocked this run
 ```
 
 No agent named `claude-code` appears in the `sync`/`mcp sync` output above —
 it's present and was the migration source, but it isn't managed, so it's
 never even probed as a sync target, not just left with zero items.
 
+**The `verdict` block is always the last thing printed**, including on a
+run that had nothing wrong — the exit code and the last line on screen
+always agree, so a conflict earlier in the run can never be hidden behind
+a later stage's own unrelated success line. Every conflict from every
+stage is collected there, each with a concrete next action, not just a
+restatement of what went wrong:
+
+```
+verdict
+❌ 1 blocking issue(s):
+   - [sync/claude-code] ~/.claude/CLAUDE.md exists and is not a Trellis-managed symlink — left untouched
+     → back up ~/.claude/CLAUDE.md's real content if you need it, remove the file, then re-run sync
+exit code: 1 — at least one blocking issue above
+```
+
+**A real (non-`--dry-run`) run verifies its own writes**, immediately
+after making them — a dry-run re-plan of `sync`/`mcp sync` against exactly
+what was just written, checked for anything still outstanding. This is
+what actually answers "did this take effect," distinct from the health
+scan below it: `trellis doctor`'s own checks compare agents against each
+other and never read canonical, so they cannot prove a write held — only
+a re-plan against canonical can. If a write somehow didn't hold (a
+filesystem permission problem, a race), it surfaces in the verdict as its
+own `blocked` item, separate from whatever the write's own stage reported.
+
+**The health scan is `trellis doctor` itself**, run at the end against
+every agent (not just the ones this run manages) — so a genuinely new
+problem this run happened to create or reveal shows up without a separate
+`trellis doctor` invocation. It never spawns a configured MCP server to
+check it (`--probe-mcp` is never passed): the worst possible moment to
+start reaching real external services with real credentials is a user's
+first-ever run of this command. A finding about an agent this run doesn't
+manage is shown, labelled as such, and doesn't fail the run — onboard
+didn't touch that agent, so its drift isn't this run's problem to fix.
+
+On a real terminal, each stage prints a `[n/6] <stage>` progress line to
+stderr as it starts — `sync`/`mcp sync` spawn real processes and can take
+a few seconds, and this keeps the screen from going silent while that
+happens. It never appears on stdout, so `trellis onboard > report.txt`
+still captures exactly the report and verdict, nothing else; it's silent
+entirely under `--json` or when stdout isn't a real terminal.
+
 Add `--dry-run` to preview the entire chain — init/migrate/sync/mcp
 sync/memory sync, including what would be written to
-`~/.trellis/managed.yaml` — with zero writes anywhere (secrets audit is
-always read-only, with or without the flag).
+`~/.trellis/managed.yaml` — with zero writes anywhere (secrets audit and
+the health scan are always read-only, with or without the flag; the
+write-verification step above has nothing to check on a dry run and is
+skipped entirely). On a real terminal, a `--dry-run` ends by offering to
+apply the plan you just read — "No" is the highlighted default, so Enter
+declines; accepting re-plans against current state and applies for real,
+rather than replaying the exact preview you saw (state may have changed
+while you were reading it). `--json` and non-interactive runs are never
+offered anything.
 
 **A managed agent's own real content still isn't overwritten.** If you
 explicitly include the source in `--manage`, sync still never overwrites

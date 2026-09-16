@@ -68,7 +68,9 @@ export function planJsonMcp(opts: {
     });
   }
   for (const conflict of conflicts) {
-    items.push({ action: "conflict", kind: "mcp", target: configPath, description: conflict.message });
+    const item: AdapterPlanItem = { action: "conflict", kind: "mcp", target: configPath, description: conflict.message };
+    if (conflict.remediation) item.remediation = conflict.remediation;
+    items.push(item);
   }
 
   const desiredNames = new Set(desired.map((d) => d.name));

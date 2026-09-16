@@ -111,7 +111,15 @@ export class KiroAdapter implements TrellisAdapter {
       try {
         parsed = JSON.parse(readFileSync(settingsPath, "utf-8"));
       } catch {
-        return [{ action: "conflict", kind: "kiro-approved-env-vars", target: settingsPath, description: `${settingsPath} is not valid JSON — refusing to touch it` }];
+        return [
+          {
+            action: "conflict",
+            kind: "kiro-approved-env-vars",
+            target: settingsPath,
+            description: `${settingsPath} is not valid JSON — refusing to touch it`,
+            remediation: `fix or restore valid JSON at ${settingsPath} (a backup under ~/.trellis/backups/ may have the last version Trellis wrote), then re-run sync`,
+          },
+        ];
       }
       const current = (parsed as Record<string, unknown>)[APPROVED_ENV_VARS_KEY];
       if (Array.isArray(current)) {
