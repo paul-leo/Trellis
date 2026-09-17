@@ -332,12 +332,53 @@ substitution at one construction site: the entry written into each
 agent's config is identical either way, so converging later requires no
 re-sync and nothing the user notices.
 
+## MCP Runtime direction
+
+Gateway mode is the first consumer of a broader runtime shape. The runtime
+edge is available as `trellis mcp-runtime --agent <id>`. Existing
+`trellis mcp-gateway --agent <id>` entries are a compatibility alias and now
+use the same provider registry. Both edges can expose Trellis-owned
+capabilities and selected upstream MCP capabilities:
+
+```text
+Agent
+  │ one MCP connection
+  ▼
+Trellis MCP Runtime
+  ├─ BuiltinRegistry
+  │   ├─ SkillProvider   (read/search canonical skills)
+  │   ├─ RuntimeMemoryProvider
+  │   │   └─ CanonicalMemoryProvider (read-only canonical Markdown)
+  │   └─ StatusProvider  (future read-only diagnostics)
+  └─ UpstreamProvider
+      └─ existing GatewayBackend / future RemoteBackend
+```
+
+The runtime is a protocol edge; providers are the capability boundary. A
+provider may expose tools, resources, prompts, or a combination. The current
+`GatewayBackend` remains the upstream tool aggregation implementation and is
+mounted as an `UpstreamProvider`, so connection, OAuth, timeout, namespace,
+and cleanup logic stay in one place.
+
+Native skills remain the default delivery. Runtime MCP delivery is configured
+per agent under `mcp.runtime.delivery` and supports `native`, `mcp`, or
+`both`. The built-in providers are intentionally read-only and scope-filtered:
+SkillProvider reads canonical skills, while RuntimeMemoryProvider adapts a
+CanonicalMemoryProvider that reads canonical Markdown memories through
+`trellis.memory.search`, `trellis.memory.read`, and
+`trellis://memories/<name>.md`. Neither executes scripts or mutates canonical
+state. A future local-graph/OpenViking source can implement the same
+MemoryProvider contract. Memory writes and configuration mutation require
+separate provider designs and explicit user-control rules.
+
 ## What Trellis explicitly does not build
 
 - A resident MCP gateway daemon. Gateway mode above is a per-session
   subprocess with no lifecycle; hub mode points at something you operate.
   Neither is a service Trellis starts, supervises, or keeps running.
-- A memory backend (defaults to `@modelcontextprotocol/server-memory`,
+- A semantic/external memory backend (the built-in provider only exposes
+  read-only canonical Markdown; the default graph backend remains
+  `@modelcontextprotocol/server-memory`,
   turned on with `trellis onboard --memory on` (trellis-onboard-mcp-mode)
   rather than hand-editing `servers.yaml`, documented in
   `schema/servers.example.yaml`; mem0/OpenMemory and totalrecallai-class
@@ -419,6 +460,53 @@ once; it is never where you repeatedly verify against it.
 ```
 scripts/sandbox.sh                    # interactive shell in the sandbox
 scripts/sandbox.sh npm run dev doctor  # run a command in the sandbox
+scripts/sandbox.sh --runtime           # divergent multi-agent Runtime lab
+scripts/sandbox.sh --migration         # Kiro -> Codex post-migration lab
+scripts/sandbox.sh --management        # steady-state unified management lab
+scripts/sandbox.sh --failure           # hanging-upstream isolation lab
+scripts/sandbox-matrix.sh              # run the full scenario matrix
+scripts/agent-sandbox.sh               # real Codex/Claude/Kiro/pi CLI config smoke
+```
+
+`agent-sandbox.sh` 默认使用一次性 HOME。需要进行授权时，显式使用专用
+Docker volume（默认名为 `trellis-agent-auth-home`）：
+
+如果宿主机已经登录 Codex 或 pi，可以显式复用单个认证文件：
+
+```
+scripts/agent-sandbox.sh --host-auth codex
+scripts/agent-sandbox.sh --host-auth pi
+```
+
+这两个命令只读取宿主机对应的 `auth.json`，不读取整个 agent 配置目录。
+
+```
+scripts/agent-sandbox.sh --login codex
+scripts/agent-sandbox.sh --login claude
+scripts/agent-sandbox.sh --login kiro
+scripts/agent-sandbox.sh --status codex
+scripts/agent-sandbox.sh --status claude
+scripts/agent-sandbox.sh --status kiro
+scripts/agent-sandbox.sh --auth codex exec --help
+scripts/agent-sandbox.sh --auth claude -p --help
+scripts/agent-sandbox.sh --prepare
+scripts/agent-sandbox.sh --host-auth codex
+scripts/agent-sandbox.sh --host-auth pi
+```
+
+授权只写入这个 Docker volume，不会复制宿主机的登录态，也不会进入
+Git、镜像或 fixture。`--login` 会分别执行真实 agent 的登录命令：
+Codex 使用 device auth，Claude Code 使用 Claude subscription 登录，
+Kiro CLI 使用 free license 的 device flow。Kiro 在未登录时会明确拒绝
+`mcp list`，这是预期的授权前置条件。需要清空授权 volume 时，应由用户
+显式执行 `docker volume rm <volume-name>`；Trellis 不会自动删除它。
+
+授权后若要在同一登录态中运行真实 agent，使用 `--auth` 前缀，例如：
+
+```
+scripts/agent-sandbox.sh --prepare
+scripts/agent-sandbox.sh --auth codex exec ...
+scripts/agent-sandbox.sh --auth claude -p ...
 ```
 
 Backed by OrbStack (this machine's Docker context — a Mac-native,
@@ -449,5 +537,20 @@ known findings, not just to look plausible:
   exercise the case-sensitivity check.
 - `test/fixtures/sample-mcp-server.js` — a minimal real MCP server (reads
   `initialize` over stdio, replies with fixed `serverInfo`) so
-  `probeMcpServer` has something deterministic to handshake against inside
-  the container without depending on a real npm package or network access.
+ `probeMcpServer` has something deterministic to handshake against inside
+ the container without depending on a real npm package or network access.
+
+For the MCP Runtime phase, the sandbox has a separate intentionally
+divergent fixture rather than expanding the baseline one:
+
+```
+scripts/sandbox.sh --runtime
+```
+
+This scenario gives Claude Code, Codex, Kiro, and pi different native
+skills, instructions, and MCP entries; adds canonical scope, per-agent
+direct/gateway routes, `native`/`mcp`/`both` delivery, a deliberate
+host-injected collision, and canonical memory content. The lab then runs
+native sync, MCP sync, memory sync, secrets audit, and real MCP client
+handshakes against Claude/Codex/pi runtime views. All writes stay inside
+the container-local HOME.

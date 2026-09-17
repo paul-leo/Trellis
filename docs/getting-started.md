@@ -16,7 +16,7 @@ $ trellis onboard
 ```
 
 Runs `init`, detects which of Claude Code/Codex/Kiro/pi are on this machine,
-then resolves two interactive choices and two flag-only ones before running
+then resolves two styled interactive choices and two flag-only ones before running
 `migrate`, `sync`, `mcp sync`, `memory sync`, `secrets audit`, and a final
 health scan — the whole onboarding path, no follow-up commands to type by
 hand, and no need to run `trellis doctor` separately to know whether it
@@ -39,11 +39,13 @@ that.
      prompt entirely. Which *categories* to bring in from that source
      (skills, instructions, mcp) is its own checkbox, shown only when the
      source has real content in two or more of them — with just one, that
-     one is migrated unprompted.
+     one is migrated unprompted. On a real terminal this uses a colored
+     selector; it shows aggregate counts, not every skill name.
 2. **Managed set** — zero or more agents to actually write to. Always an
    explicit choice: pass `--manage <ids>` (comma-separated, e.g. `--manage
    pi,codex`) or `--manage none`, or answer the interactive checkbox prompt
-   (Space to toggle, Enter to confirm — same numbered fallback as above).
+   (arrow keys to move, Space to toggle, Enter to confirm — same numbered
+   fallback as above when a raw TTY is unavailable).
    **The source is not included by default** — migrating from Claude Code
    doesn't mean Trellis starts managing Claude Code too, unless you say so.
    Selecting an agent that isn't installed yet is itself the authorization to
@@ -150,6 +152,23 @@ a few seconds, and this keeps the screen from going silent while that
 happens. It never appears on stdout, so `trellis onboard > report.txt`
 still captures exactly the report and verdict, nothing else; it's silent
 entirely under `--json` or when stdout isn't a real terminal.
+
+Interactive choices use a compact colored prompt UI with clear success,
+warning, and blocking states. The prompt UI is written to stderr, while the
+report and JSON output stay on stdout.
+
+For repeatable item-level selection, pass a YAML/JSON file:
+
+```
+$ trellis onboard --agent kiro --manage codex \
+    --selection ./schema/capability-selection.example.yaml
+```
+
+The file can select individual `skills`, `mcp_servers`, and `memories`, plus
+per-agent `mcp_routes` with `direct`, `gateway`, or `hub` mode. It can also
+set `runtime_delivery` per agent to `native`, `mcp`, or `both`; omitted agents
+remain native. Existing
+`--mcp-mode` and category flags remain valid shortcuts.
 
 Add `--dry-run` to preview the entire chain — init/migrate/sync/mcp
 sync/memory sync, including what would be written to
@@ -287,6 +306,81 @@ Two known fidelity limits, named rather than silently worked around:
   itself writes (`schema/servers.example.yaml`'s `figma` example) — if a
   server was hand-authored with some other shape, it migrates whatever
   is actually there, same as any other field.
+
+**A real credential value found in a source agent's config is extracted,
+not just refused.** If a source agent stores a real credential as a
+literal (not a `${VAR}` reference) under a server's `staticEnv`-shaped
+field — the exact real case this project hit: kiro's own `mcp-router`
+entry had its token hardcoded — `migrate` moves the real value to
+`~/.trellis/mcp/servers.local.env` (a sibling of `servers.yaml`,
+automatically `.gitignore`d — never something you need to protect by
+hand), references it from canonical as `${THE_NAME}` instead of the
+literal, and adds the name to `secrets.policy.yaml`'s `allowed_vars`. If
+`secrets.policy.yaml` already has its own `env_file` configured, the
+value goes there instead, respecting your existing setup rather than
+creating a second file.
+
+```
+$ trellis migrate --from kiro --only mcp
+migrate --from kiro
+  [extract-secret] mcp server "mcp-router" — will extract "MCPR_TOKEN" to
+  ~/.trellis/mcp/servers.local.env as "TRELLIS_MCP_ROUTER_MCPR_TOKEN",
+  referencing it from servers.yaml instead of holding the literal value
+```
+
+The name it's extracted under is `TRELLIS_<SERVER>_<KEY>`, never the
+bare source key alone — a project-wide prefix rules out colliding with
+anything already in your own environment, and the server-name segment
+rules out two Trellis-managed servers colliding with each other over
+the same key. A server extracted before this naming scheme existed
+keeps working under its original name — recognized by the value it
+resolves to, not by re-deriving today's name and expecting an exact
+match, so it's never silently re-extracted under a second name.
+
+**The source agent's own file is never touched** — kiro's real
+`~/.kiro/settings/mcp.json` keeps its literal value exactly as it was,
+forever; `trellis secrets audit` will keep flagging that file on every
+future run, which is correct and expected — cleaning it up by hand is
+your call, not something this command does for you.
+
+**A credential found anywhere *other* than `staticEnv`** (a server's
+`command`, `url`, `args`, or `headers`) **is accepted as ordinary
+literal config, not refused and not extracted.** Neither a natural
+variable name (staticEnv's own dict key provides one; these fields
+don't) nor a proven `${VAR}` resolution mechanism exists for these
+fields across every consumer (pi-bridge, claude-code, codex, kiro) —
+faking a reference would produce a config that looks safe but silently
+fails to connect for at least some of them, worse than the literal it
+replaced. `trellis secrets audit` also scans canonical's own
+`mcp/servers.yaml` for this case (`agent: "canonical"` in its findings),
+so accepting the literal is never silent either.
+
+**The `${VAR}` reference `mcp sync` writes into an agent's native config
+only works once that name is actually in the environment that agent's
+own process reads from** — extraction alone doesn't get you there, it
+just gets the real value out of canonical. So `migrate` also ensures
+your shell rc (`~/.zshrc`/`~/.bash_profile`/`~/.profile`, picked from
+`$SHELL`) sources `servers.local.env`, appending one generic,
+idempotent block — never a literal secret line:
+
+```
+# >>> trellis mcp secrets >>>
+if [ -f "~/.trellis/mcp/servers.local.env" ]; then
+  set -a
+  source "~/.trellis/mcp/servers.local.env"
+  set +a
+fi
+# <<< trellis mcp secrets <<<
+```
+
+Adding another secret later only ever means editing
+`servers.local.env` — the rc file never needs a second edit. This runs
+on every real `migrate` invocation whenever `secrets.policy.yaml` has an
+`env_file`, not just the run that performed the extraction, so a machine
+that already extracted a secret before this existed gets wired the next
+time `migrate` runs at all. A new shell (or restarting the agent
+process) is what actually picks up the newly-exported variable — this
+only ensures the rc file is ready to hand it over.
 
 ## Starting from nothing
 
@@ -515,6 +609,17 @@ their credentials from `env`/`env_aliases` as described above; running
 
 ## `trellis memory sync`
 
+Canonical memories can also be consumed directly through the Trellis MCP
+Runtime when an agent's runtime delivery is `mcp` or `both`. Runtime exposes
+read-only `trellis.memory.search` and `trellis.memory.read` tools plus
+`trellis://memories/<name>.md` resources. Results are filtered through the
+memory's `scope.yaml` entry and the managed-agent boundary on every request.
+
+This Runtime path reads `~/.trellis/memories/*.md` directly. It does not need
+the separate `memory` MCP server below, and it does not expose write/delete
+tools. `memory sync` remains the bridge from canonical Markdown into the
+mutable shared graph used by `@modelcontextprotocol/server-memory`.
+
 Ingests `~/.trellis/memories/*.md` into the actual on-disk file
 `@modelcontextprotocol/server-memory` reads at its own startup — closing
 the gap between "memory entries exist in canonical" and "the running
@@ -615,6 +720,42 @@ Safe to run any time; nothing here writes anything.
 `--probe-mcp` is opt-in because it spawns a real process per configured
 stdio MCP server (some reaching real external services) — not something a
 "just check my config" command should do by default.
+
+## 在 Linux sandbox 中验证真实 agent
+
+Trellis 提供一个独立的 agent image，用于安装真实的 Codex、Claude Code、
+Kiro CLI 和 pi，而不是只使用 fake CLI。它使用 `runtime-home` 作为只读
+fixture，并把内容复制到容器内的隔离 `$HOME`；不会挂载宿主机的 agent
+目录或登录态：
+
+```
+scripts/agent-sandbox.sh
+```
+
+未登录时，Codex 和 Claude Code 可以验证自己是否识别 Trellis 写入的
+`trellis-runtime` MCP entry；Kiro CLI 会在 `mcp list` 前要求登录，这
+是 Kiro 的真实授权边界。
+
+如需实际授权，使用单独的 Docker volume 保存 sandbox 登录态：
+
+```
+scripts/agent-sandbox.sh --login codex
+scripts/agent-sandbox.sh --login claude
+scripts/agent-sandbox.sh --login kiro
+```
+
+登录过程在终端中显示设备授权或浏览器流程。登录完成后，可以检查：
+
+```
+scripts/agent-sandbox.sh --status codex
+scripts/agent-sandbox.sh --status claude
+scripts/agent-sandbox.sh --status kiro
+```
+
+默认 volume 名称为 `trellis-agent-auth-home`，可通过
+`TRELLIS_AGENT_AUTH_VOLUME` 覆盖。它只保存在 OrbStack/Docker 中，不进
+Git，也不会自动读取或删除宿主机凭据。清理时请明确执行
+`docker volume rm <volume-name>`。
 
 ## `trellis rollback` — undoing a `sync`/`mcp sync`/`onboard` run
 

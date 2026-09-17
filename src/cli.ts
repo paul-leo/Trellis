@@ -11,7 +11,7 @@ import { runMigrate } from "./commands/migrate.js";
 import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, parseMcpAddArgs } from "./commands/mcp.js";
-import { parseMcpGatewayArgs, runMcpGateway } from "./commands/mcpGateway.js";
+import { parseMcpGatewayArgs, runMcpGateway, runMcpRuntime } from "./commands/mcpGateway.js";
 import { runMcpAuth } from "./commands/mcpAuth.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
@@ -19,7 +19,7 @@ import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
 import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "skill", "memory", "secrets", "rollback"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "memory", "secrets", "rollback"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -51,6 +51,8 @@ Commands:
                                     omit for every managed agent
               --memory <on|off>     enable/disable the shared memory MCP
                                     server; omit to leave it untouched
+              --selection <file>   item-level YAML/JSON selection for skills,
+                                    MCP servers, memories, and per-agent routes
               --dry-run             preview the whole flow, write nothing
               --json                machine-readable output, no report text
   init      Create ~/.trellis/ with a minimal valid skeleton if missing
@@ -100,6 +102,10 @@ Commands:
               refreshes silently on its own and never prompts.
               --force   re-authorize even if the stored token is valid
               --json    machine-readable output, no report text
+  mcp-runtime --agent <agent>
+            Internal MCP edge exposing Trellis providers and selected
+            upstream capabilities; existing mcp-gateway configs remain valid
+            as a compatibility alias
   mcp remove <name>
             Remove a canonical MCP server (canonical-side only — does
               not touch any agent's already-synced native config)
@@ -167,6 +173,16 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  // `--help`/`-h` anywhere in a subcommand's own args short-circuits before
+  // any parsing or real action — a typo'd or exploratory flag (e.g. `mcp
+  // sync --help`) must never fall through to actually running the command
+  // it was asking about (real incident: `--help` isn't a flag any branch
+  // recognizes, so it silently ran a real, non-dry-run `mcp sync`).
+  if (rest.includes("--help") || rest.includes("-h")) {
+    printUsage();
+    return;
+  }
+
   if (command === "onboard") {
     const agentIndex = rest.indexOf("--agent");
     const agent = agentIndex >= 0 ? rest[agentIndex + 1] : undefined;
@@ -180,6 +196,8 @@ async function main(argv: string[]): Promise<void> {
     const gatewayAgents = gatewayAgentsIndex >= 0 ? rest[gatewayAgentsIndex + 1] : undefined;
     const memoryIndex = rest.indexOf("--memory");
     const memory = memoryIndex >= 0 ? rest[memoryIndex + 1] : undefined;
+    const selectionIndex = rest.indexOf("--selection");
+    const selectionFile = selectionIndex >= 0 ? rest[selectionIndex + 1] : undefined;
     const { exitCode } = await runOnboard({
       agent,
       manage,
@@ -187,6 +205,7 @@ async function main(argv: string[]): Promise<void> {
       hubUrl,
       gatewayAgents,
       memory,
+      selectionFile,
       dryRun: rest.includes("--dry-run"),
       json: rest.includes("--json"),
     });
@@ -219,14 +238,16 @@ async function main(argv: string[]): Promise<void> {
   // Spawned by an agent, never typed by a person: stdout is the MCP
   // protocol stream for the rest of this process's life, so nothing here
   // may print to it (trellis-mcp-gateway-hosting design.md D2).
-  if (command === "mcp-gateway") {
+  if (command === "mcp-gateway" || command === "mcp-runtime") {
     const parsed = parseMcpGatewayArgs(rest);
     if ("error" in parsed) {
       console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
-    const { exitCode } = await runMcpGateway({ agentId: parsed.agentId });
+    const { exitCode } = command === "mcp-runtime"
+      ? await runMcpRuntime({ agentId: parsed.agentId })
+      : await runMcpGateway({ agentId: parsed.agentId });
     process.exitCode = exitCode;
     return;
   }

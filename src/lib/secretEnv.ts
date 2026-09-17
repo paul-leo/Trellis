@@ -9,7 +9,8 @@
  * this narrow need requires (design.md D4).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { SecretsPolicy } from "../core/types.js";
 
 const LINE_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
@@ -44,4 +45,32 @@ export function resolveSecretEnv(names: string[], policy: SecretsPolicy): Record
     for (const name of names) result[name] = process.env[name];
   }
   return result;
+}
+
+export type WriteLocalSecretOutcome = "created" | "already-present" | "conflict";
+
+/**
+ * `trellis migrate`'s static-env secret extraction
+ * (trellis-migrate-extract-static-env-secrets design.md D4) — appends
+ * one `NAME=value` line to a dotenv-format file in exactly the shape
+ * `parseDotenv` above already reads, creating the file (and its parent
+ * directory) if neither exists yet. Idempotent, the same three-way
+ * split every other Trellis writer uses: the name is absent (create),
+ * already present with the identical value (no-op — re-running migrate
+ * must not duplicate the line), or already present with a *different*
+ * value (conflict, left untouched — the file may hold a value the user
+ * already rotated by hand since the last run; silently overwriting it
+ * would be exactly the kind of value-clobbering this whole feature
+ * exists to prevent, just relocated to a new file).
+ */
+export function writeLocalSecretValue(path: string, name: string, value: string): WriteLocalSecretOutcome {
+  const existingContent = existsSync(path) ? readFileSync(path, "utf-8") : "";
+  const existing = parseDotenv(existingContent);
+  if (Object.hasOwn(existing, name)) {
+    return existing[name] === value ? "already-present" : "conflict";
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const separator = existingContent.length > 0 && !existingContent.endsWith("\n") ? "\n" : "";
+  appendFileSync(path, `${separator}${name}=${value}\n`);
+  return "created";
 }

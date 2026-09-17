@@ -45,6 +45,7 @@ export interface RunMemorySyncOptions {
   homeDir?: string;
   json?: boolean;
   dryRun?: boolean;
+  selectedMemoryNames?: readonly string[];
 }
 
 export type MemorySyncResult = { configured: true; graphPath: string; plan: MemorySyncPlan } | { configured: false; reason: string };
@@ -78,13 +79,13 @@ function resolveMemoryServerGraphPath(homeDir: string): MemoryServerLookup {
   return { configured: true, graphPath: rawPath.replace(/^~(?=$|\/)/, homeDir) };
 }
 
-export function collectMemorySyncResult(homeDir: string = homedir()): MemorySyncResult {
+export function collectMemorySyncResult(homeDir: string = homedir(), selectedMemoryNames?: readonly string[]): MemorySyncResult {
   const lookup = resolveMemoryServerGraphPath(homeDir);
   if (!lookup.configured) return lookup;
 
   const canonical = loadCanonicalSource(homeDir);
   const currentContent = existsSync(lookup.graphPath) ? readFileSync(lookup.graphPath, "utf-8") : undefined;
-  const plan = planMemorySync(canonical, currentContent);
+  const plan = planMemorySync(canonical, currentContent, selectedMemoryNames);
   return { configured: true, graphPath: lookup.graphPath, plan };
 }
 
@@ -119,7 +120,7 @@ export function runMemorySync(opts: RunMemorySyncOptions = {}): { exitCode: numb
   const homeDir = opts.homeDir ?? homedir();
   let result: MemorySyncResult;
   try {
-    result = collectMemorySyncResult(homeDir);
+    result = collectMemorySyncResult(homeDir, opts.selectedMemoryNames);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return { exitCode: 1 };

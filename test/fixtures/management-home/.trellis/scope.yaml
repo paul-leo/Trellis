@@ -1,0 +1,4 @@
+skills:
+  claude-skill: [claude-code]
+  codex-skill: [codex]
+  kiro-skill: [kiro]

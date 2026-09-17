@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadCanonicalSource } from "../../src/core/canonical.js";
 import { GATEWAY_ENTRY_NAME } from "../../src/adapters/mcpPlan.js";
-import { parseMcpGatewayArgs, resolveGatewayUpstreams, runMcpGateway } from "../../src/commands/mcpGateway.js";
+import { parseMcpGatewayArgs, resolveGatewayUpstreams, runMcpGateway, runMcpRuntime } from "../../src/commands/mcpGateway.js";
 import type { GatewayBackend } from "../../src/lib/gatewayBackend.js";
 
 /** `managed.yaml` defaults to all four agents: absent, nothing is managed
@@ -121,6 +121,28 @@ test("gateway upstreams: managed-agent scoping still applies — gateway mode is
   assert.deepEqual(resolveGatewayUpstreams("codex", canonical).upstreams.map((u) => u.name).sort(), ["codex-only", "shared"]);
 });
 
+test("gateway upstreams: an explicit route limits the upstream set for that agent", () => {
+  const canonical = loadCanonicalSource(scratchHome(`
+servers:
+  shared:
+    transport: stdio
+    command: node
+  codex-only:
+    transport: stdio
+    command: node
+    agents: [codex]
+  not-selected:
+    transport: stdio
+    command: node
+routes:
+  codex:
+    mode: gateway
+    servers: [codex-only]
+`));
+
+  assert.deepEqual(resolveGatewayUpstreams("codex", canonical).upstreams.map((u) => u.name), ["codex-only"]);
+});
+
 test("runMcpGateway: a canonical source that cannot be loaded exits non-zero without touching stdout", async () => {
   const empty = mkdtempSync(join(tmpdir(), "trellis-gateway-empty-"));
   let backendBuilt = false;
@@ -136,4 +158,16 @@ test("runMcpGateway: a canonical source that cannot be loaded exits non-zero wit
 
   assert.equal(exitCode, 1);
   assert.equal(backendBuilt, false, "no backend is constructed when canonical never loaded");
+});
+
+test("runMcpRuntime: the first-class runtime entrypoint shares the gateway lifecycle and load guard", async () => {
+  const empty = mkdtempSync(join(tmpdir(), "trellis-runtime-empty-"));
+  const { exitCode } = await runMcpRuntime({
+    agentId: "codex",
+    homeDir: empty,
+    backendFactory: async () => {
+      throw new Error("must not construct a backend without canonical");
+    },
+  });
+  assert.equal(exitCode, 1);
 });

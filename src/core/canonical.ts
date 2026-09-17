@@ -5,11 +5,11 @@
  * canonical-source-loading/spec.md for the exact contract this implements.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
-import { isMap, parse as parseYaml, parseDocument } from "yaml";
-import type { AgentId, AgentProfile, CanonicalSource, GatewayConfig, McpConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
+import { basename, dirname, join } from "node:path";
+import { isMap, isSeq, parse as parseYaml, parseDocument } from "yaml";
+import type { AgentId, AgentProfile, CapabilityDelivery, CanonicalSource, GatewayConfig, McpConfig, McpRoute, McpRouteMode, McpRuntimeConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
 import { ALL_AGENTS } from "./types.js";
 
 interface ScopeYaml {
@@ -33,6 +33,8 @@ interface ServersYaml {
   known_host_injected?: string[];
   hub?: { url: string };
   gateway?: { enabled?: boolean; agents?: AgentId[] };
+  routes?: Partial<Record<string, { mode?: McpRouteMode; servers?: string[] }>>;
+  runtime?: { delivery?: Partial<Record<string, CapabilityDelivery>> };
 }
 
 function fromServerDefYaml(def: McpServerDefYaml): McpServerDef {
@@ -123,7 +125,34 @@ function loadServersYaml(path: string): McpConfig {
     knownHostInjected: parsed.known_host_injected ?? [],
     hub: parsed.hub,
     gateway: fromGatewayYaml(parsed.gateway),
+    routes: fromRoutesYaml(parsed.routes),
+    runtime: fromRuntimeYaml(parsed.runtime),
   };
+}
+
+function fromRuntimeYaml(runtime: ServersYaml["runtime"]): McpRuntimeConfig | undefined {
+  if (!runtime?.delivery) return undefined;
+  const delivery: Partial<Record<AgentId, CapabilityDelivery>> = {};
+  for (const [rawAgent, rawDelivery] of Object.entries(runtime.delivery)) {
+    if (!(ALL_AGENTS as readonly string[]).includes(rawAgent)) continue;
+    if (rawDelivery !== "native" && rawDelivery !== "mcp" && rawDelivery !== "both") continue;
+    delivery[rawAgent as AgentId] = rawDelivery;
+  }
+  return Object.keys(delivery).length > 0 ? { delivery } : undefined;
+}
+
+function fromRoutesYaml(routes: ServersYaml["routes"]): Partial<Record<AgentId, McpRoute>> | undefined {
+  if (!routes) return undefined;
+  const out: Partial<Record<AgentId, McpRoute>> = {};
+  for (const [rawAgent, rawRoute] of Object.entries(routes)) {
+    if (!(ALL_AGENTS as readonly string[]).includes(rawAgent)) continue;
+    if (!rawRoute?.mode || !["direct", "gateway", "hub"].includes(rawRoute.mode)) continue;
+    out[rawAgent as AgentId] = {
+      mode: rawRoute.mode,
+      ...(rawRoute.servers ? { servers: rawRoute.servers } : {}),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -162,8 +191,14 @@ export type ServersYamlWriteResult = { ok: true } | { ok: false; error: string }
  * one-line, local fix — it never touches any sibling entry's own style,
  * so a file someone deliberately kept flow-style elsewhere is untouched.
  */
+/** Handles both a map (`servers: {}`) and a sequence (`allowed_vars: []`)
+ * — `trellis init`'s starter files use flow style for both kinds of
+ * still-empty collection, and inserting into either one via `Document`
+ * methods keeps rendering it as flow otherwise (same real bug this
+ * function was first written to fix, just a second collection type
+ * hitting it — trellis-migrate-extract-static-env-secrets). */
 function forceBlockStyle(node: unknown): void {
-  if (isMap(node)) {
+  if (isMap(node) || isSeq(node)) {
     node.flow = false;
   }
 }
@@ -255,6 +290,59 @@ export function writeMcpModeYaml(path: string, mode: McpMode): ServersYamlWriteR
   return { ok: true };
 }
 
+export type McpRoutesWriteResult = ServersYamlWriteResult;
+
+/** Writes explicit per-agent routes while preserving legacy hub/gateway
+ * shorthand. An empty route map removes the optional key. */
+export function writeMcpRoutesYaml(path: string, routes: Partial<Record<AgentId, McpRoute>>): McpRoutesWriteResult {
+  if (!existsSync(path)) {
+    return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
+  }
+  let doc;
+  try {
+    doc = parseDocument(readFileSync(path, "utf-8"));
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const serialized = Object.fromEntries(
+    Object.entries(routes).map(([agent, route]) => [agent, { mode: route.mode, ...(route.servers ? { servers: route.servers } : {}) }]),
+  );
+  if (Object.keys(serialized).length === 0) {
+    doc.delete("routes");
+  } else {
+    doc.set("routes", serialized);
+    forceBlockStyle(doc.get("routes", true));
+  }
+  writeFileSync(path, doc.toString());
+  return { ok: true };
+}
+
+/** Writes per-agent capability delivery preferences into servers.yaml.
+ * Omitted entries continue to use the native default. */
+export function writeMcpRuntimeDeliveryYaml(path: string, delivery: Partial<Record<AgentId, CapabilityDelivery>>): ServersYamlWriteResult {
+  if (!existsSync(path)) {
+    return { ok: false, error: path + " does not exist — run trellis init first" };
+  }
+  let doc;
+  try {
+    doc = parseDocument(readFileSync(path, "utf-8"));
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const serialized = Object.fromEntries(
+    Object.entries(delivery).map(([agent, mode]) => [agent, mode]),
+  );
+  if (Object.keys(serialized).length === 0) {
+    doc.delete("runtime");
+  } else {
+    doc.setIn(["runtime", "delivery"], serialized);
+    forceBlockStyle(doc.get("runtime", true));
+    forceBlockStyle(doc.getIn(["runtime", "delivery"], true));
+  }
+  writeFileSync(path, doc.toString());
+  return { ok: true };
+}
+
 function loadSecretsPolicyYaml(path: string, homeDir: string): SecretsPolicy {
   if (!existsSync(path)) {
     return { allowedVars: [], rejectPatterns: [] };
@@ -265,6 +353,87 @@ function loadSecretsPolicyYaml(path: string, homeDir: string): SecretsPolicy {
     rejectPatterns: (parsed.reject_patterns ?? []).map((pattern) => new RegExp(pattern)),
     envFile: parsed.env_file ? parsed.env_file.replace(/^~(?=$|\/)/, homeDir) : undefined,
   };
+}
+
+export type SecretsPolicyWriteResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * `trellis migrate`'s static-env secret extraction
+ * (trellis-migrate-extract-static-env-secrets design.md D6) — the
+ * missing writer for `secrets.policy.yaml`, mirroring `writeMcpModeYaml`'s
+ * `Document`-based, comment-preserving mechanism. Sets `env_file` only
+ * when it is not already set — an already-configured value is a
+ * deliberate prior choice (design.md D3) and `resolveSecretEnv` treats
+ * `env_file` as the sole source once set, so silently repointing it
+ * would orphan every name already resolving from the old file. Appends
+ * `varName` to `allowed_vars` only if not already present (dedup, same
+ * "already there is a no-op" rule every other Trellis writer follows).
+ */
+export function writeSecretsPolicyExtraction(path: string, extraction: { varName: string; envFilePath: string }): SecretsPolicyWriteResult {
+  if (!existsSync(path)) {
+    return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
+  }
+  let doc;
+  try {
+    doc = parseDocument(readFileSync(path, "utf-8"));
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (doc.get("env_file") === undefined) {
+    doc.set("env_file", extraction.envFilePath);
+  }
+  // `.get()` returns the raw Seq node for a collection, not a plain
+  // array — `.toJS()` on the whole document is the reliable way to read
+  // a fully-unwrapped value back out before deciding whether to append.
+  const currentAllowedVars = ((doc.toJS() as { allowed_vars?: string[] }).allowed_vars ?? []) as string[];
+  if (!currentAllowedVars.includes(extraction.varName)) {
+    doc.set("allowed_vars", [...currentAllowedVars, extraction.varName]);
+    forceBlockStyle(doc.get("allowed_vars", true));
+  }
+  writeFileSync(path, doc.toString());
+  return { ok: true };
+}
+
+/**
+ * Ensures one exact line is present in a `.gitignore` file, creating the
+ * file if it doesn't exist yet — idempotent (a no-op if the line is
+ * already there), never disturbing any other line
+ * (trellis-migrate-extract-static-env-secrets design.md D5). Called
+ * lazily, immediately before the first real write to the local secrets
+ * file migrate's static-env extraction produces — never from `trellis
+ * init`'s own bootstrap, so a machine that never extracts a secret never
+ * gains this file at all.
+ */
+export function ensureGitignoreEntry(gitignorePath: string, line: string): void {
+  const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
+  const lines = existing.split("\n").map((l) => l.trim());
+  if (lines.includes(line)) return;
+  const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+  writeFileSync(gitignorePath, `${existing}${separator}${line}\n`);
+}
+
+const SHELL_ENV_SOURCE_MARKER = "# >>> trellis mcp secrets >>>";
+const SHELL_ENV_SOURCE_END_MARKER = "# <<< trellis mcp secrets <<<";
+
+/**
+ * Ensures a shell rc file sources the local secrets env file on every new
+ * shell — one generic pointer block, appended once, idempotent (detected
+ * by its own marker comment, never duplicated). Deliberately never writes
+ * a literal secret value into the rc file: the block only names the path
+ * to the real `NAME=value` file migrate's extraction already writes and
+ * protects — adding a new variable later means editing that one file, the
+ * rc file never needs a second edit (trellis-migrate-extract-static-env-secrets
+ * design.md D10). `set -a`/`set +a` auto-exports the plain dotenv-format
+ * lines `parseDotenv` already expects, so that format never needs an
+ * `export` prefix of its own.
+ */
+export function ensureShellEnvSource(rcPath: string, envFilePath: string): void {
+  const existing = existsSync(rcPath) ? readFileSync(rcPath, "utf-8") : "";
+  if (existing.includes(SHELL_ENV_SOURCE_MARKER)) return;
+  const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+  const block = `${SHELL_ENV_SOURCE_MARKER}\nif [ -f "${envFilePath}" ]; then\n  set -a\n  source "${envFilePath}"\n  set +a\nfi\n${SHELL_ENV_SOURCE_END_MARKER}\n`;
+  mkdirSync(dirname(rcPath), { recursive: true });
+  writeFileSync(rcPath, `${existing}${separator}${block}`);
 }
 
 /** `undefined` if the name has no entry in scope.yaml's map — "shared with

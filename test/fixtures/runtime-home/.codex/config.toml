@@ -1,0 +1,10 @@
+model = "gpt-5.6-sol"
+instructions = "/root-scratch/.codex/instructions.md"
+
+[mcp_servers.codex-local]
+command = "node"
+args = ["/fixtures/sample-mcp-server.js"]
+
+[mcp_servers.user-owned]
+command = "node"
+args = ["/fixtures/sample-mcp-server.js"]

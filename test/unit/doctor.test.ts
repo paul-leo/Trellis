@@ -16,6 +16,7 @@ import {
   detectCollisions,
   detectCrossAgentDrift,
   detectDuplication,
+  detectRuntimeDrift,
   resolveKnownHostInjected,
 } from "../../src/commands/doctor.js";
 import type { AgentSnapshot, AgentSnapshotSkillEntry } from "../../src/core/types.js";
@@ -82,6 +83,20 @@ test("collision: static server name also in known_host_injected is flagged, Code
 test("collision: no overlap — clean", () => {
   const snap = snapshot("claude-code", { mcpServers: [{ name: "tanka", transport: "stdio" }] });
   assert.deepEqual(detectCollisions([snap], ["atlassian", "sentry", "memory", "mirasim"]), []);
+});
+
+test("runtime drift: missing canonical runtime entry is reported, present entry is clean", () => {
+  const canonical = {
+    managedAgents: ["codex"] as const,
+    mcp: { servers: {}, knownHostInjected: [], runtime: { delivery: { codex: "mcp" as const } } },
+    secretsPolicy: { allowedVars: [], rejectPatterns: [] },
+  };
+  const missing = detectRuntimeDrift([snapshot("codex")], canonical);
+  assert.equal(missing.length, 1);
+  assert.match(missing[0].message, /trellis-runtime/);
+
+  const present = detectRuntimeDrift([snapshot("codex", { mcpServers: [{ name: "trellis-runtime", transport: "stdio" }] })], canonical);
+  assert.deepEqual(present, []);
 });
 
 test("case mismatch: wrong-case entry file is flagged, distinguishable from absent", () => {

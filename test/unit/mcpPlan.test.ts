@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GATEWAY_COMMAND, GATEWAY_ENTRY_NAME, HUB_ENTRY_NAME, resolveMcpPlan } from "../../src/adapters/mcpPlan.js";
+import { GATEWAY_COMMAND, GATEWAY_ENTRY_NAME, HUB_ENTRY_NAME, RUNTIME_ENTRY_NAME, findLiteralSecret, resolveMcpPlan } from "../../src/adapters/mcpPlan.js";
 import { ALL_AGENTS } from "../../src/core/types.js";
 import type { McpConfig, SecretsPolicy } from "../../src/core/types.js";
 
@@ -20,6 +20,25 @@ test("resolveMcpPlan: an unscoped server is desired for every agent", () => {
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, "tanka");
   assert.deepEqual(result.conflicts, []);
+});
+
+test("resolveMcpPlan: runtime delivery collapses direct upstreams into one runtime entry", () => {
+  const config = mcp({
+    servers: { tanka: { transport: "stdio", command: "tanka-mcp" } },
+    runtime: { delivery: { codex: "mcp" } },
+  });
+  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.conflicts, []);
+  assert.deepEqual(result.desired.map((entry) => entry.name), [RUNTIME_ENTRY_NAME]);
+  assert.deepEqual(result.desired[0].def.args, ["mcp-runtime", "--agent", "codex"]);
+});
+
+test("resolveMcpPlan: both delivery still uses one runtime MCP entry while native skills remain adapter-owned", () => {
+  const config = mcp({
+    servers: { tanka: { transport: "stdio", command: "tanka-mcp" } },
+    runtime: { delivery: { codex: "both" } },
+  });
+  assert.deepEqual(resolveMcpPlan("codex", config, ALL_AGENTS, POLICY).desired.map((entry) => entry.name), [RUNTIME_ENTRY_NAME]);
 });
 
 test("resolveMcpPlan: a server scoped to one agent is excluded elsewhere", () => {
@@ -51,10 +70,21 @@ test("resolveMcpPlan: the same collision on a non-Codex agent has no Codex-speci
   assert.ok(!result.conflicts[0].message.includes("url is not supported for stdio"));
 });
 
-test("resolveMcpPlan: a literal secret in args is refused, not desired", () => {
+test("resolveMcpPlan: a literal secret in args is written as ordinary config, not refused — no proven ${VAR} resolution exists for args", () => {
   const config = mcp({
     servers: {
       leaky: { transport: "stdio", command: "node", args: ["--token", "glpat-abc123def456"] },
+    },
+  });
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  assert.equal(result.desired.length, 1);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test("resolveMcpPlan: a literal secret in staticEnv is still refused — the one shape meant to leave via env/env_vars", () => {
+  const config = mcp({
+    servers: {
+      leaky: { transport: "stdio", command: "node", staticEnv: { TOKEN: "glpat-abc123def456" } },
     },
   });
   const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
@@ -111,16 +141,15 @@ test("resolveMcpPlan: a non-bearer-token headers shape is a Codex-only conflict"
   assert.deepEqual(claudeResult.conflicts, []);
 });
 
-test("resolveMcpPlan: a literal secret in a headers value is refused, not desired", () => {
+test("resolveMcpPlan: a literal secret in a headers value is written as ordinary config, not refused — headers' ${VAR} resolution is not proven for every consumer", () => {
   const config = mcp({
     servers: {
       leaky: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "glpat-abc123def456" } },
     },
   });
   const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
-  assert.deepEqual(result.desired, []);
-  assert.equal(result.conflicts.length, 1);
-  assert.match(result.conflicts[0].message, /GitLab personal access token/);
+  assert.equal(result.desired.length, 1);
+  assert.deepEqual(result.conflicts, []);
 });
 
 test("resolveMcpPlan: hub mode collapses every server to one trellis-hub entry", () => {
@@ -349,4 +378,79 @@ test("resolveMcpPlan: in gateway mode Codex's headers-shape limitation no longer
   assert.deepEqual(gateway.conflicts, []);
   assert.equal(gateway.desired.length, 1);
   assert.equal(gateway.desired[0].name, GATEWAY_ENTRY_NAME);
+});
+
+test("resolveMcpPlan: an explicit route filters direct servers per agent", () => {
+  const config = mcp({
+    servers: THREE_SERVERS,
+    routes: { "claude-code": { mode: "direct", servers: ["b"] } },
+  });
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired.map((entry) => entry.name), ["b"]);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test("resolveMcpPlan: an explicit gateway route carries only the selected agent view", () => {
+  const config = mcp({
+    servers: THREE_SERVERS,
+    routes: { codex: { mode: "gateway", servers: ["a", "c"] } },
+  });
+  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired.map((entry) => entry.name), [GATEWAY_ENTRY_NAME]);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test("resolveMcpPlan: an explicit direct route overrides legacy gateway shorthand", () => {
+  const config = mcp({
+    servers: THREE_SERVERS,
+    gateway: { enabled: true },
+    routes: { codex: { mode: "direct", servers: ["a"] } },
+  });
+  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired.map((entry) => entry.name), ["a"]);
+});
+
+test("resolveMcpPlan: an explicit hub route with a server subset is a clear conflict", () => {
+  const config = mcp({
+    servers: THREE_SERVERS,
+    hub: { url: "http://127.0.0.1:37373/mcp" },
+    routes: { codex: { mode: "hub", servers: ["a"] } },
+  });
+  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired, []);
+  assert.equal(result.conflicts.length, 1);
+  assert.match(result.conflicts[0].message, /external hub/);
+});
+
+// findLiteralSecret's field-reporting (trellis-migrate-extract-static-env-secrets
+// design.md D1) — migrate's extraction path needs to know which field a
+// match came from, since only staticEnv has a natural variable name.
+
+test("findLiteralSecret: a staticEnv match reports field \"staticEnv\" and its dict key", () => {
+  const match = findLiteralSecret({ transport: "stdio", command: "npx", staticEnv: { MCPR_TOKEN: ["mcpr", "test_fixture_only_12345678901234567890"].join("_") } });
+  assert.deepEqual(match, { label: "mcp-router token (mcpr_)", field: "staticEnv", key: "MCPR_TOKEN" });
+});
+
+test("findLiteralSecret: a command match reports field \"command\"", () => {
+  const match = findLiteralSecret({ transport: "stdio", command: "glpat-abcdefghijklmnopqrst" });
+  assert.equal(match?.field, "command");
+});
+
+test("findLiteralSecret: a url match reports field \"url\"", () => {
+  const match = findLiteralSecret({ transport: "http", url: `https://example.test?token=${["sk", "testfixtureonly12345678901234567890"].join("-")}` });
+  assert.equal(match?.field, "url");
+});
+
+test("findLiteralSecret: an args match reports field \"args\"", () => {
+  const match = findLiteralSecret({ transport: "stdio", command: "node", args: ["--token", ["ghp", "testfixtureonly12345678901234567890"].join("_")] });
+  assert.equal(match?.field, "args");
+});
+
+test("findLiteralSecret: a headers match reports field \"headers\"", () => {
+  const match = findLiteralSecret({ transport: "http", url: "https://example.test", headers: { Authorization: "Bearer glpat-abcdefghijklmnopqrst" } });
+  assert.equal(match?.field, "headers");
+});
+
+test("findLiteralSecret: no match returns undefined, unchanged", () => {
+  assert.equal(findLiteralSecret({ transport: "stdio", command: "node", staticEnv: { EMAIL: "you@example.com" } }), undefined);
 });

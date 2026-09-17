@@ -162,3 +162,14 @@ hub:
 # gateway:
 #   enabled: true
 #   agents: [claude-code, codex]
+#
+# Trellis capability delivery is optional and defaults to native. `mcp`
+# removes the native skill projection for that agent and writes one owned
+# `trellis-runtime` MCP entry. `both` keeps the native projection and also
+# writes the runtime entry. The runtime resolves the same scoped upstream
+# route, so direct/gateway upstreams are not duplicated.
+#
+# runtime:
+#   delivery:
+#     codex: mcp
+#     claude-code: both

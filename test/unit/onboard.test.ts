@@ -145,6 +145,25 @@ test("exactly one present agent with content: auto-selected as source, but NOT a
   assert.equal(result.syncReport?.reports.length, 0);
 });
 
+test("selection file: imports only the named skill and preserves explicit MCP routes and runtime delivery", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  writeClaudeSkill(home, "keep-skill", "keep\n");
+  writeClaudeSkill(home, "skip-skill", "skip\n");
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "servers:\n  tanka:\n    transport: stdio\n    command: tanka-mcp\n");
+  const selectionFile = join(home, "selection.yaml");
+  writeFileSync(selectionFile, `skills: [keep-skill]\nmcp_servers: none\nmemories: none\nmcp_routes:\n  claude-code:\n    mode: direct\n    servers: [tanka]\nruntime_delivery:\n  claude-code: mcp\n`);
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", selectionFile });
+  assert.equal(result.migratePlan?.items.some((item) => item.name === "keep-skill"), true);
+  assert.equal(result.migratePlan?.items.some((item) => item.name === "skip-skill"), false);
+ assert.match(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /routes:/);
+ assert.match(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /mode: direct/);
+  assert.match(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /runtime:/);
+  assert.match(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /claude-code: mcp/);
+});
+
 test("selecting the source into --manage explicitly does manage it", async () => {
   const home = scratchHome();
   markClaudeCodePresent(home);
@@ -663,6 +682,27 @@ test("verdict: a real sync conflict on a managed agent reaches result.verdict as
   assert.equal(syncConflicts.length, 1);
   assert.equal(syncConflicts[0].agent, "codex");
   assert.ok(existsSync(join(codexSkillsDir, "shared-skill", "user-file.txt")), "the real user file must survive untouched");
+});
+
+test("verdict: a staticEnv literal-secret extraction during migrate is a warning, not blocked, and the real value never appears in --json (trellis-migrate-extract-static-env-secrets)", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const realToken = ["mcpr", "test_fixture_only_12345678901234567890"].join("_");
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { "mcp-router": { type: "stdio", command: "npx", env: { MCPR_TOKEN: realToken } } } }));
+
+  const result = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "none" });
+
+  const migrateWarnings = result.verdict.filter((item) => item.stage === "migrate");
+  assert.equal(migrateWarnings.length, 1);
+  assert.equal(migrateWarnings[0].severity, "warning");
+  assert.ok(!result.verdict.some((item) => item.severity === "blocked"));
+
+  const { exitCode } = await runOnboard({ homeDir: home, agent: "claude-code", manage: "none", json: true });
+  assert.equal(exitCode, 0);
+
+  const jsonResult = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "none" });
+  assert.ok(!JSON.stringify(jsonResult).includes(realToken), "the real token must never appear anywhere in --json output");
 });
 
 test("verdict: no memory server configured is a warning in result.verdict, and does not fail the run", async () => {

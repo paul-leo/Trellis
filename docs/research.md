@@ -66,6 +66,31 @@ becomes a second place "what servers exist" is defined, outside `.trellis/`
 entirely, and this project hit real drift from exactly that shape of setup
 before hub mode existed as a documented option.
 
+### MCP Runtime / built-in capability direction — confirmed architecture
+
+The next abstraction is broader than a skill-only MCP server. MCP defines
+tools, resources, and prompts with different control models, so a Trellis
+runtime should host a registry of providers rather than make every new
+capability its own stdio process:
+
+```text
+TrellisMcpRuntime
+  ├─ BuiltinRegistry: skills, memory, status, future capabilities
+  └─ UpstreamProvider: existing GatewayBackend / RemoteBackend
+```
+
+The first provider candidate is a read-only canonical skill provider. A future
+memory provider can expose local graph or OpenViking-backed memory through the
+same runtime edge. The existing gateway's connection/OAuth/timeout code stays
+behind the upstream provider seam. This preserves one agent-facing MCP entry
+while allowing more Trellis-native capabilities without duplicating transport,
+scope, or lifecycle logic.
+
+The security boundary is explicit: every provider receives the requesting
+agent identity and re-checks scope; skill providers read bounded content only;
+model-visible tools never mutate canonical configuration or execute skill
+scripts by default.
+
 ## Shared memory (reuse)
 
 Checked directly against this real machine before writing this section,

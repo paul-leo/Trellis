@@ -49,6 +49,8 @@ function killMatching(marker: string): void {
 function gatewayHome(upstreamMarker: string): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-gw-e2e-"));
   mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  mkdirSync(join(home, ".trellis", "skills", "demo"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: demo workflow\n---\n\n# Demo\n");
   writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
   writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
   writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [claude-code]\n");
@@ -68,10 +70,10 @@ gateway:
 
 /** Drives the gateway the way an agent does: spawn the CLI as a stdio MCP
  * server and speak the real protocol to it. */
-async function connectToGateway(home: string): Promise<{ client: Client; transport: StdioClientTransport }> {
+async function connectToGateway(home: string, command = "mcp-gateway"): Promise<{ client: Client; transport: StdioClientTransport }> {
   const transport = new StdioClientTransport({
     command: tsxBin,
-    args: [cliEntry, "mcp-gateway", "--agent", "claude-code"],
+    args: [cliEntry, command, "--agent", "claude-code"],
     env: { ...process.env, HOME: home } as Record<string, string>,
     stderr: "ignore",
   });
@@ -80,22 +82,39 @@ async function connectToGateway(home: string): Promise<{ client: Client; transpo
   return { client, transport };
 }
 
+test("runtime edge: the first-class mcp-runtime entry exposes the same providers", async () => {
+  const upstreamMarker = mkdtempSync(join(tmpdir(), "trellis-runtime-upstream-"));
+  try {
+    const { client, transport } = await connectToGateway(gatewayHome(upstreamMarker), "mcp-runtime");
+    const { tools } = await client.listTools();
+    assert.ok(tools.some((tool) => tool.name === "trellis.skills.search"));
+    assert.ok(tools.some((tool) => tool.name === "fixture__echo"));
+    await client.close();
+    await transport.close();
+  } finally {
+    killMatching(upstreamMarker);
+  }
+});
+
 test("gateway end to end: an agent spawning it gets every in-scope server's tools, prefixed", async () => {
   const upstreamMarker = mkdtempSync(join(tmpdir(), "trellis-gw-upstream-"));
   try {
     const { client, transport } = await connectToGateway(gatewayHome(upstreamMarker));
 
     const { tools } = await client.listTools();
-    assert.deepEqual(
-      tools.map((tool) => tool.name).sort(),
-      ["fixture__echo", "fixture__env"],
-      "the gateway aggregated the real upstream behind one stdio entry",
-    );
+    const toolNames = tools.map((tool) => tool.name).sort();
+    assert.deepEqual(toolNames.filter((name) => name.startsWith("fixture__")), ["fixture__echo", "fixture__env"]);
+    assert.ok(toolNames.includes("trellis.skills.search"), "the runtime exposes the built-in skill provider");
 
     const result = (await client.callTool({ name: "fixture__echo", arguments: { message: "through the gateway" } })) as {
       content: Array<{ type: string; text: string }>;
     };
     assert.equal(result.content[0].text, "echo: through the gateway", "a call routed through the gateway to the real upstream and back");
+
+    const resources = await client.listResources();
+    assert.ok(resources.resources.some((resource) => resource.uri === "trellis://skills/demo/SKILL.md"));
+    const resource = await client.readResource({ uri: "trellis://skills/demo/SKILL.md" });
+    assert.match(String(resource.contents[0].text), /# Demo/);
 
     await client.close();
     await transport.close();
@@ -131,7 +150,9 @@ test("gateway end to end: closing the agent's pipe leaves neither the gateway no
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
     const listed = (await replies.next()).value as unknown as { result: { tools: Array<{ name: string }> } };
-    assert.deepEqual(listed.result.tools.map((tool) => tool.name).sort(), ["fixture__echo", "fixture__env"]);
+    const toolNames = listed.result.tools.map((tool) => tool.name).sort();
+    assert.deepEqual(toolNames.filter((name) => name.startsWith("fixture__")), ["fixture__echo", "fixture__env"]);
+    assert.ok(toolNames.includes("trellis.skills.search"));
     assert.notEqual(processesMatching(upstreamMarker), "", "precondition: the upstream is actually running");
 
     const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));

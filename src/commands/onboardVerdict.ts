@@ -62,10 +62,23 @@ export function normalizeMigrateVerdict(plan: MigratePlan | undefined): VerdictI
   if (!plan) return [];
   const items: VerdictItem[] = [];
   for (const item of plan.items) {
-    if (item.action !== "conflict") continue;
-    const verdict: VerdictItem = { stage: "migrate", severity: "blocked", message: item.detail };
-    if (item.remediation) verdict.remediation = item.remediation;
-    items.push(verdict);
+    if (item.action === "conflict") {
+      const verdict: VerdictItem = { stage: "migrate", severity: "blocked", message: item.detail };
+      if (item.remediation) verdict.remediation = item.remediation;
+      items.push(verdict);
+    } else if (item.action === "extract-secret") {
+      // The run succeeded — never `blocked` — but stands as a standing
+      // reminder, not a silent success: migrate never writes to the
+      // source agent's own file (design.md D2), so it still holds the
+      // real value in plaintext forever, independent of this extraction
+      // (trellis-migrate-extract-static-env-secrets design.md D8).
+      items.push({
+        stage: "migrate",
+        severity: "warning",
+        message: item.detail,
+        remediation: `the source agent's own configuration for "${item.name}" was not modified and may still hold "${item.extractVarName}"'s real value in plaintext — clean it up by hand if you want it gone from there too`,
+      });
+    }
   }
   return items;
 }
@@ -124,7 +137,7 @@ export function normalizeSecretsAuditVerdict(report: SecretsAuditReport | undefi
   if (!report) return [];
   return report.findings.map((finding) => {
     const item: VerdictItem = { stage: "secrets audit", severity: "blocked", message: `${finding.file}: ${finding.detail}` };
-    if (finding.agent !== "environment") item.agent = finding.agent;
+    if (finding.agent !== "environment" && finding.agent !== "canonical") item.agent = finding.agent;
     return item;
   });
 }

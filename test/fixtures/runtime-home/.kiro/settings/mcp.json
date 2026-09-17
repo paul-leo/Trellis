@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kiro-local": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/fixtures/sample-mcp-server.js"]
+    }
+  }
+}

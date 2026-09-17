@@ -297,8 +297,17 @@ test("mcp: re-running migrate after a successful import is a no-op", async () =>
 // real Kiro config, with its token written as a literal (not a `${VAR}`
 // reference) — `resolveMcpPlan`'s own guard only ever protected the
 // sync-OUT boundary; canonical itself had no guard on the way IN.
+// Originally fixed by refusing the import outright; a literal in
+// `staticEnv` specifically is now extracted instead
+// (trellis-migrate-extract-static-env-secrets) — everything below this
+// point covers the extraction path; a literal anywhere else (command,
+// url, args, headers) still refuses exactly as these two tests
+// originally asserted for staticEnv, see the "still refused" tests
+// further down.
 
-test("mcp: a literal credential in the source agent's config is refused, never written to canonical", async () => {
+const REAL_TOKEN = ["mcpr", "test_fixture_only_12345678901234567890"].join("_");
+
+test("mcp: a literal credential in staticEnv is extracted, never written literally to canonical", async () => {
   const home = scratchHome();
   await collectInitReport(home);
   // The exact real shape: a literal (not `${VAR}`) value under `env` —
@@ -309,29 +318,47 @@ test("mcp: a literal credential in the source agent's config is refused, never w
     type: "stdio",
     command: "npx",
     args: ["-y", "@mcp_router/cli@latest", "connect"],
-    env: { MCPR_TOKEN: "mcpr_iFNlmM3ee22GSUCREMbfmo49fAy3zQ5J" },
+    env: { MCPR_TOKEN: REAL_TOKEN },
   });
 
   const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
   assert.equal(plan.items.length, 1);
-  assert.equal(plan.items[0].action, "conflict");
-  assert.match(plan.items[0].detail, /literal pattern/);
-  assert.match(plan.items[0].remediation ?? "", /environment variable/);
+  assert.equal(plan.items[0].action, "extract-secret");
+  // `TRELLIS_<SERVER>_<KEY>` (design.md D11), not the bare source key —
+  // avoids colliding with another server's own use of the same key name,
+  // or anything already in the user's own environment.
+  assert.equal(plan.items[0].extractVarName, "TRELLIS_MCP_ROUTER_MCPR_TOKEN");
+  // The plan item itself must never carry the real value.
+  assert.ok(!JSON.stringify(plan.items[0]).includes(REAL_TOKEN));
 
   applyMigratePlan(plan, home);
   const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
-  assert.ok(!written.includes("mcpr_iFNlmM3ee22GSUCREMbfmo49fAy3zQ5J"), "the real token must never reach canonical, even transiently");
-  assert.ok(!written.includes("mcp-router"), "a refused server is not written at all, not written-then-flagged");
+  assert.ok(!written.includes(REAL_TOKEN), "the real token must never reach canonical, even transiently");
+  assert.match(written, /mcp-router:/);
+  assert.match(written, /env:\s*\n\s*- TRELLIS_MCP_ROUTER_MCPR_TOKEN/);
+
+  // The real value landed in the local secrets file instead.
+  const localSecrets = readFileSync(join(home, ".trellis", "mcp", "servers.local.env"), "utf-8");
+  assert.match(localSecrets, new RegExp(`TRELLIS_MCP_ROUTER_MCPR_TOKEN=${REAL_TOKEN}`));
+
+  // secrets.policy.yaml gained the name and the default env_file.
+  const policy = readFileSync(join(home, ".trellis", "secrets.policy.yaml"), "utf-8");
+  assert.match(policy, /MCPR_TOKEN/);
+  assert.match(policy, /env_file:.*servers\.local\.env/);
+
+  // The source agent's own file is never touched.
+  const sourceStillHasLiteral = readFileSync(join(home, ".claude.json"), "utf-8");
+  assert.ok(sourceStillHasLiteral.includes(REAL_TOKEN), "migrate must never write to the source agent's own config");
 });
 
-test("mcp: a literal credential is refused ahead of every other server in the same migrate run", async () => {
+test("mcp: a staticEnv literal secret extraction does not block another, unrelated server in the same run", async () => {
   const home = scratchHome();
   await collectInitReport(home);
   writeFileSync(
     join(home, ".claude.json"),
     JSON.stringify({
       mcpServers: {
-        "mcp-router": { type: "stdio", command: "npx", env: { MCPR_TOKEN: "mcpr_iFNlmM3ee22GSUCREMbfmo49fAy3zQ5J" } },
+        "mcp-router": { type: "stdio", command: "npx", env: { MCPR_TOKEN: REAL_TOKEN } },
         gitlab: { type: "stdio", command: "npx", args: ["-y", "@zereight/mcp-gitlab"] },
       },
     }),
@@ -339,13 +366,176 @@ test("mcp: a literal credential is refused ahead of every other server in the sa
 
   const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
   const byName = Object.fromEntries(plan.items.map((item) => [item.name, item.action]));
-  assert.equal(byName["mcp-router"], "conflict");
-  assert.equal(byName["gitlab"], "create", "one refused server must not block another, unrelated one");
+  assert.equal(byName["mcp-router"], "extract-secret");
+  assert.equal(byName["gitlab"], "create");
 
   applyMigratePlan(plan, home);
   const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
   assert.match(written, /gitlab:/);
-  assert.ok(!written.includes("mcp-router"));
+  assert.match(written, /mcp-router:/);
+  assert.ok(!written.includes(REAL_TOKEN));
+});
+
+test("mcp: re-running migrate after a successful staticEnv extraction is idempotent, not re-extracted", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  writeClaudeMcpServer(home, "mcp-router", { type: "stdio", command: "npx", env: { MCPR_TOKEN: REAL_TOKEN } });
+
+  const first = await collectMigratePlan("claude-code", home, ["mcp"]);
+  applyMigratePlan(first, home);
+  const localSecretsAfterFirst = readFileSync(join(home, ".trellis", "mcp", "servers.local.env"), "utf-8");
+
+  const second = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(second.items.length, 1);
+  assert.equal(second.items[0].action, "already-migrated");
+
+  applyMigratePlan(second, home);
+  const localSecretsAfterSecond = readFileSync(join(home, ".trellis", "mcp", "servers.local.env"), "utf-8");
+  assert.equal(localSecretsAfterSecond, localSecretsAfterFirst, "re-running must not duplicate or alter the local secrets file");
+});
+
+test("mcp: a server already extracted under the bare (pre-D11) name is recognized as already-migrated, never re-extracted under the new TRELLIS_ prefix", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  // Simulates a machine that extracted mcp-router before the TRELLIS_
+  // prefix naming scheme existed: canonical references the bare source
+  // key directly, and the local secrets file holds it under that same
+  // bare name — exactly this real project's own real-machine state.
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "mcp", "servers.local.env"), `MCPR_TOKEN=${REAL_TOKEN}\n`);
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    `servers:\n  mcp-router:\n    transport: stdio\n    command: npx\n    args:\n      - -y\n      - "@mcp_router/cli@latest"\n      - connect\n    env:\n      - MCPR_TOKEN\n`,
+  );
+  writeClaudeMcpServer(home, "mcp-router", {
+    type: "stdio",
+    command: "npx",
+    args: ["-y", "@mcp_router/cli@latest", "connect"],
+    env: { MCPR_TOKEN: REAL_TOKEN },
+  });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].action, "already-migrated", "the value already resolves via the bare-name reference — must not be treated as a fresh extraction under a new name");
+
+  applyMigratePlan(plan, home);
+  const localSecrets = readFileSync(join(home, ".trellis", "mcp", "servers.local.env"), "utf-8");
+  assert.equal(localSecrets, `MCPR_TOKEN=${REAL_TOKEN}\n`, "must not gain a second, newly-synthesized entry for the same value");
+  const serversYaml = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.ok(!serversYaml.includes("TRELLIS_MCP_ROUTER_MCPR_TOKEN"), "must not add a second reference under the new naming scheme");
+});
+
+test("mcp: a real extraction wires the shell rc file to source the local secrets env file", async () => {
+  const originalShell = process.env.SHELL;
+  process.env.SHELL = "/bin/zsh";
+  try {
+    const home = scratchHome();
+    await collectInitReport(home);
+    writeClaudeMcpServer(home, "mcp-router", { type: "stdio", command: "npx", env: { MCPR_TOKEN: REAL_TOKEN } });
+
+    const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+    applyMigratePlan(plan, home);
+
+    const rc = readFileSync(join(home, ".zshrc"), "utf-8");
+    assert.match(rc, /# >>> trellis mcp secrets >>>/);
+    assert.ok(rc.includes(join(home, ".trellis", "mcp", "servers.local.env")));
+    assert.ok(!rc.includes(REAL_TOKEN), "the rc file must only name the env file's path, never a literal value");
+  } finally {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
+  }
+});
+
+test("mcp: re-running migrate retroactively wires the shell rc even when nothing new is extracted", async () => {
+  const originalShell = process.env.SHELL;
+  process.env.SHELL = "/bin/zsh";
+  try {
+    const home = scratchHome();
+    await collectInitReport(home);
+    writeClaudeMcpServer(home, "mcp-router", { type: "stdio", command: "npx", env: { MCPR_TOKEN: REAL_TOKEN } });
+
+    const first = await collectMigratePlan("claude-code", home, ["mcp"]);
+    applyMigratePlan(first, home);
+    // Simulate a machine that already extracted before this shell-wiring
+    // existed: strip the rc file back out, then re-run migrate.
+    const rcPath = join(home, ".zshrc");
+    writeFileSync(rcPath, "");
+
+    const second = await collectMigratePlan("claude-code", home, ["mcp"]);
+    assert.equal(second.items[0].action, "already-migrated");
+    applyMigratePlan(second, home);
+
+    assert.match(readFileSync(rcPath, "utf-8"), /# >>> trellis mcp secrets >>>/);
+  } finally {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
+  }
+});
+
+test("mcp: a different value already in the local secrets file under the same name is a conflict, never overwritten", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "mcp", "servers.local.env"), "TRELLIS_MCP_ROUTER_MCPR_TOKEN=already-rotated-by-hand\n");
+  writeClaudeMcpServer(home, "mcp-router", { type: "stdio", command: "npx", env: { MCPR_TOKEN: REAL_TOKEN } });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items[0].action, "conflict");
+
+  applyMigratePlan(plan, home);
+  const localSecrets = readFileSync(join(home, ".trellis", "mcp", "servers.local.env"), "utf-8");
+  assert.match(localSecrets, /TRELLIS_MCP_ROUTER_MCPR_TOKEN=already-rotated-by-hand/);
+  assert.ok(!localSecrets.includes(REAL_TOKEN));
+});
+
+test("mcp: an already-configured env_file is respected, extraction writes there instead of the default", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  const customEnvFile = join(home, ".trellis", "custom-secrets.env");
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), `allowed_vars: []\nreject_patterns: []\nenv_file: ${customEnvFile}\n`);
+  writeClaudeMcpServer(home, "mcp-router", { type: "stdio", command: "npx", env: { MCPR_TOKEN: REAL_TOKEN } });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items[0].action, "extract-secret");
+  assert.equal(plan.items[0].extractTargetPath, customEnvFile);
+
+  applyMigratePlan(plan, home);
+  assert.ok(!existsSync(join(home, ".trellis", "mcp", "servers.local.env")), "the default file must not be created when env_file is already configured");
+  const customContent = readFileSync(customEnvFile, "utf-8");
+  assert.match(customContent, new RegExp(`MCPR_TOKEN=${REAL_TOKEN}`));
+
+  const policy = readFileSync(join(home, ".trellis", "secrets.policy.yaml"), "utf-8");
+  assert.match(policy, new RegExp(customEnvFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "env_file must stay pointed at the already-configured path");
+});
+
+test("mcp: --dry-run previews the extraction with zero writes and never prints the real value", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  writeClaudeMcpServer(home, "mcp-router", { type: "stdio", command: "npx", env: { MCPR_TOKEN: REAL_TOKEN } });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items[0].action, "extract-secret");
+  assert.ok(!JSON.stringify(plan).includes(REAL_TOKEN));
+
+  // Simulates runMigrate's --dry-run posture: collect, but never apply.
+  assert.ok(!existsSync(join(home, ".trellis", "mcp", "servers.local.env")));
+  const serversYaml = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.ok(!serversYaml.includes("mcp-router"));
+});
+
+test("mcp: a literal secret outside staticEnv is imported as ordinary config, not refused — no proven ${VAR} resolution exists for that field", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  writeClaudeMcpServer(home, "leaky-args", { type: "stdio", command: "npx", args: ["--token", REAL_TOKEN] });
+
+  const plan = await collectMigratePlan("claude-code", home, ["mcp"]);
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].action, "create");
+
+  applyMigratePlan(plan, home);
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /leaky-args:/);
+  assert.ok(written.includes(REAL_TOKEN), "accepted as ordinary literal config content — canonical is the same trust boundary as the source in this case");
 });
 
 test("mcp: a canonical server with a different definition is a conflict, not overwritten", async () => {

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseDotenv, resolveSecretEnv } from "../../src/lib/secretEnv.js";
+import { parseDotenv, resolveSecretEnv, writeLocalSecretValue } from "../../src/lib/secretEnv.js";
 import type { SecretsPolicy } from "../../src/core/types.js";
 
 function scratchEnvFile(content: string): string {
@@ -58,4 +58,45 @@ test("resolveSecretEnv: with envFile set, an absent name never falls back to amb
 test("resolveSecretEnv: a nonexistent envFile path resolves every name to undefined, no throw", () => {
   const policy: SecretsPolicy = { allowedVars: [], rejectPatterns: [], envFile: "/nonexistent/path/secrets.env" };
   assert.deepEqual(resolveSecretEnv(["ANY_NAME"], policy), { ANY_NAME: undefined });
+});
+
+// writeLocalSecretValue (trellis-migrate-extract-static-env-secrets):
+// the idempotent dotenv-append writer migrate's extraction path uses.
+
+test("writeLocalSecretValue: creates the file and its parent directory when neither exists yet", () => {
+  const dir = mkdtempSync(join(tmpdir(), "trellis-secretenv-"));
+  const path = join(dir, "nested", "servers.local.env");
+  assert.equal(existsSync(path), false);
+
+  const outcome = writeLocalSecretValue(path, "MCPR_TOKEN", "real-value-123");
+  assert.equal(outcome, "created");
+  assert.deepEqual(parseDotenv(readFileSync(path, "utf-8")), { MCPR_TOKEN: "real-value-123" });
+});
+
+test("writeLocalSecretValue: appends to an existing file without disturbing other entries", () => {
+  const file = scratchEnvFile("OTHER_VAR=already-here\n");
+  const outcome = writeLocalSecretValue(file, "MCPR_TOKEN", "real-value-123");
+  assert.equal(outcome, "created");
+  assert.deepEqual(parseDotenv(readFileSync(file, "utf-8")), { OTHER_VAR: "already-here", MCPR_TOKEN: "real-value-123" });
+});
+
+test("writeLocalSecretValue: appends correctly even when the existing file has no trailing newline", () => {
+  const file = scratchEnvFile("OTHER_VAR=already-here"); // no trailing \n
+  writeLocalSecretValue(file, "MCPR_TOKEN", "real-value-123");
+  assert.deepEqual(parseDotenv(readFileSync(file, "utf-8")), { OTHER_VAR: "already-here", MCPR_TOKEN: "real-value-123" });
+});
+
+test("writeLocalSecretValue: the identical name+value already present is a no-op, not a duplicate line", () => {
+  const file = scratchEnvFile("MCPR_TOKEN=real-value-123\n");
+  const outcome = writeLocalSecretValue(file, "MCPR_TOKEN", "real-value-123");
+  assert.equal(outcome, "already-present");
+  const content = readFileSync(file, "utf-8");
+  assert.equal(content.match(/MCPR_TOKEN=/g)?.length, 1);
+});
+
+test("writeLocalSecretValue: the same name with a different existing value is a conflict, never overwritten", () => {
+  const file = scratchEnvFile("MCPR_TOKEN=already-rotated-by-hand\n");
+  const outcome = writeLocalSecretValue(file, "MCPR_TOKEN", "the-value-migrate-just-read");
+  assert.equal(outcome, "conflict");
+  assert.deepEqual(parseDotenv(readFileSync(file, "utf-8")), { MCPR_TOKEN: "already-rotated-by-hand" });
 });

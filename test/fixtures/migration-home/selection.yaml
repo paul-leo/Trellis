@@ -1,0 +1,9 @@
+skills: all
+mcp_servers: all
+memories: none
+mcp_routes:
+  codex:
+    mode: direct
+    servers: [migrated-tool]
+runtime_delivery:
+  codex: mcp

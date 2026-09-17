@@ -1,0 +1,13 @@
+servers:
+  shared-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+known_host_injected: []
+routes:
+  codex:
+    mode: direct
+    servers: [shared-tool]
+runtime:
+  delivery:
+    codex: mcp

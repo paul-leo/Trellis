@@ -192,3 +192,26 @@ test("secrets audit: no canonical MCP servers means zero missing-env-value findi
     [],
   );
 });
+
+test("secrets audit: a literal in canonical servers.yaml itself (command/url/args/headers) is flagged, agent 'canonical' (design.md D11)", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeServersYaml(home, 'servers:\n  leaky:\n    transport: stdio\n    command: "glpat-abc123def456ghijklmno"\n');
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  const finding = report.findings.find((f) => f.kind === "literal-secret" && f.agent === "canonical");
+  assert.ok(finding, "expected a literal-secret finding on canonical itself");
+  assert.match(finding!.file, /servers\.yaml$/);
+});
+
+test("secrets audit: a clean canonical servers.yaml (only variable names, no literals) yields no canonical finding", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeServersYaml(home, 'servers:\n  gitlab:\n    transport: stdio\n    command: npx\n    env:\n      - GITLAB_PERSONAL_ACCESS_TOKEN\n');
+
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  assert.deepEqual(
+    report.findings.filter((f) => f.agent === "canonical"),
+    [],
+  );
+});

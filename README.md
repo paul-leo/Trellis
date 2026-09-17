@@ -118,15 +118,16 @@ restore with zero writes.
 
 ## Status
 
-**Early, pre-1.0.** All eight CLI commands above (`onboard`, `init`,
-`migrate`, `doctor`, `sync`, `mcp sync`, `secrets audit`, `rollback`) are implemented,
-unit-tested, and verified end-to-end against real Docker containers (never a
-developer's own dotfiles during development — see
-[`docs/architecture.md`](docs/architecture.md)'s testing philosophy). See
-[`docs/roadmap.md`](docs/roadmap.md) for what's shipped (P0–P6) vs. planned
-(P7, a GUI). `onboard` picks one agent as the migration base when more than
-one is present — merging differing content across multiple agents into one
-result is named future work, not built yet.
+**Early, pre-1.0.** The CLI commands above are implemented, unit-tested, and
+verified against isolated Linux Docker scenarios (never a developer's own
+dotfiles during development — see
+[`docs/architecture.md`](docs/architecture.md)'s testing philosophy). The
+sandbox matrix covers migration, steady-state management, runtime routing,
+failure isolation, and expected conflicts. A separate agent image installs
+real Codex, Claude Code, Kiro CLI, and pi binaries to verify their isolated
+configuration behavior. `onboard` picks one agent as the migration base when
+more than one is present; merging differing content across multiple agents
+into one result is named future work, not built yet.
 
 **Known limitations, honestly stated rather than discovered the hard way:**
 - MCP servers are never spawned/handshake-tested by `trellis mcp sync` or
@@ -136,11 +137,10 @@ result is named future work, not built yet.
 - The pi bridge extension (`trellis-pi-mcp-bridge`) has been verified to
   load and register tools without erroring, never against a real LLM tool
   call in production.
-- Verification has run against real Docker containers and a real,
-  isolated pi CLI install — not yet against a developer's actual, existing
-  `~/.claude`/`~/.codex`/`~/.kiro`/`~/.pi` in daily use. If you hit
-  something a clean-room sandbox wouldn't have caught, please open an
-  issue.
+- Verification has run against real Docker containers and real isolated
+  Codex, Claude Code, Kiro CLI, and pi installs — not against a developer's
+  actual daily-use agent directories. If you hit something a clean-room
+  sandbox wouldn't have caught, please open an issue.
 - Automatic removal of an MCP server is deliberately unsupported (create/
   repair only) until an ownership-tracking mechanism exists — see
   `docs/roadmap.md`'s P2 note.

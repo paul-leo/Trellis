@@ -5,9 +5,33 @@
 # into git and must stay a clean, deterministic starting point every run.
 set -e
 
-cp -r /fixtures-ro/home /root-scratch
+FIXTURE_HOME_PATH=${TRELLIS_FIXTURE_HOME:-/fixtures-ro/home}
+mkdir -p /root-scratch
+cp -R "${FIXTURE_HOME_PATH}"/. /root-scratch/
 export HOME=/root-scratch
+export KIRO_HOME="$HOME/.kiro"
 export PATH="/trellis/node_modules/.bin:$PATH"
+
+# Optional host-auth bridge. The launcher mounts one selected auth file
+# read-only at /host-auth/auth.json. Only that file is copied into the
+# container-local auth volume; its value is never printed.
+case "${TRELLIS_HOST_AUTH_AGENT:-}" in
+  codex)
+    mkdir -p "$HOME/.codex"
+    cp /host-auth/auth.json "$HOME/.codex/auth.json"
+    chmod 600 "$HOME/.codex/auth.json"
+    ;;
+  pi)
+    mkdir -p "$HOME/.pi/agent"
+    cp /host-auth/auth.json "$HOME/.pi/agent/auth.json"
+    chmod 600 "$HOME/.pi/agent/auth.json"
+    ;;
+  "") ;;
+  *)
+    echo "unsupported host auth agent: $TRELLIS_HOST_AUTH_AGENT" >&2
+    exit 2
+    ;;
+esac
 
 # Every name test/fixtures/home/.trellis/secrets.policy.yaml's allowed_vars
 # lists is presumed, by the fixture's own design, to resolve to *something*

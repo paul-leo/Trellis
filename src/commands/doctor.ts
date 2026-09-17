@@ -11,6 +11,7 @@ import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import { loadCanonicalSource } from "../core/canonical.js";
+import { resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot } from "../core/types.js";
 
@@ -30,6 +31,7 @@ export type FindingKind =
   | "drift"
   | "case-mismatch"
   | "parse-diagnostic"
+  | "runtime-drift"
   | "mcp-unreachable";
 
 export interface Finding {
@@ -52,6 +54,7 @@ const EXIT_NONZERO_KINDS: ReadonlySet<FindingKind> = new Set([
   "drift",
   "case-mismatch",
   "parse-diagnostic",
+  "runtime-drift",
 ]);
 
 export interface RunDoctorOptions {
@@ -151,13 +154,22 @@ export async function collectDoctorReport(
     }
   });
 
-  findings.push(
+  let canonical: ReturnType<typeof loadCanonicalSource> | undefined;
+  try {
+    canonical = loadCanonicalSource(homeDir);
+  } catch {
+    // Doctor remains useful as a standalone cross-agent scanner when
+    // canonical has not been initialized yet.
+  }
+
+ findings.push(
     ...detectDuplication(snapshots),
     ...detectCollisions(snapshots, knownHostInjected),
     ...detectCrossAgentDrift(snapshots),
-    ...detectCaseMismatches(snapshots),
-    ...detectParseDiagnostics(snapshots),
-    ...detectMcpUnreachable(snapshots),
+   ...detectCaseMismatches(snapshots),
+   ...detectParseDiagnostics(snapshots),
+    ...(canonical ? detectRuntimeDrift(snapshots, canonical) : []),
+   ...detectMcpUnreachable(snapshots),
   );
 
   return { snapshots, findings };
@@ -299,6 +311,33 @@ export function detectMcpUnreachable(snapshots: AgentSnapshot[]): Finding[] {
           kind: "mcp-unreachable",
           agent: snap.agent,
           message: `MCP server "${server.name}" did not respond to handshake: ${server.probe.error ?? "unknown error"}`,
+        });
+      }
+    }
+  }
+  return findings;
+}
+
+/** Compares runtime entries against the same canonical MCP plan that sync
+ * uses. Only missing Trellis-owned runtime edges are reported; extra
+ * user-authored MCP entries remain outside doctor ownership. */
+export function detectRuntimeDrift(
+  snapshots: AgentSnapshot[],
+  canonical: Pick<ReturnType<typeof loadCanonicalSource>, "mcp" | "managedAgents" | "secretsPolicy">,
+): Finding[] {
+  const findings: Finding[] = [];
+  for (const snap of snapshots) {
+    if (!snap.present || !canonical.managedAgents.includes(snap.agent) || snap.agent === "pi") continue;
+    const expected = resolveMcpPlan(snap.agent, canonical.mcp, canonical.managedAgents, canonical.secretsPolicy).desired
+      .map((entry) => entry.name)
+      .filter((name) => name === "trellis-runtime" || name === "trellis-gateway");
+    const actual = new Set(snap.mcpServers.map((server) => server.name));
+    for (const name of expected) {
+      if (!actual.has(name)) {
+        findings.push({
+          kind: "runtime-drift",
+          agent: snap.agent,
+          message: "canonical expects MCP runtime entry \"" + name + "\" for " + snap.agent + ", but it is missing from the agent static configuration",
         });
       }
     }

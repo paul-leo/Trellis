@@ -1,0 +1,10 @@
+{
+  "customSetting": "preserve-me",
+  "mcpServers": {
+    "user-kiro": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/fixtures/sample-mcp-server.js"]
+    }
+  }
+}

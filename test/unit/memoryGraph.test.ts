@@ -101,6 +101,21 @@ test("planMemorySync: every other entity and every relation is passed through co
   assert.ok(plan.nextGraph!.some((l) => JSON.stringify(l) === JSON.stringify(relation)));
 });
 
+test("planMemorySync: an explicit selection updates only selected canonical memories", () => {
+  const dir = mkdtempSync(join(tmpdir(), "trellis-memgraph-"));
+  const selected = memoryFile(dir, "selected", "new selected content\n");
+  const untouched = memoryFile(dir, "untouched", "new untouched content\n");
+  const existing = [
+    { type: "entity", name: "selected", entityType: TRELLIS_MEMORY_ENTITY_TYPE, observations: ["old"] },
+    { type: "entity", name: "untouched", entityType: TRELLIS_MEMORY_ENTITY_TYPE, observations: ["keep"] },
+  ].map((line) => JSON.stringify(line)).join("\n");
+
+  const plan = planMemorySync({ memories: [selected, untouched] }, existing, ["selected"]);
+  assert.deepEqual(plan.items.map((item) => item.name), ["selected"]);
+  assert.equal(plan.items[0].action, "create");
+  assert.ok(plan.nextGraph?.some((line) => line.type === "entity" && line.name === "untouched" && line.observations[0] === "keep"));
+});
+
 test("renderExtractedMemoryFile: an entity with observations and no relations renders without a Relations section", () => {
   const entity = { type: "entity" as const, name: "Sprint Tasks Q2", entityType: "project", observations: ["task A", "task B"] };
   const rendered = renderExtractedMemoryFile(entity, []);

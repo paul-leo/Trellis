@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
 import { isInScope } from "../core/adapter.js";
+import { usesNativeCapabilityDelivery } from "../core/types.js";
 import type { CanonicalSource } from "../core/types.js";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
@@ -38,7 +39,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     const skillsRoot = join(this.homeDir, ".claude", "skills");
 
     const desiredSkills = canonical.skills
-      .filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents))
+      .filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
     const skillItems = planSymlinks({
@@ -100,7 +101,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
+    const desiredNames = new Set(canonical.skills.filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

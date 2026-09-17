@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "migrated-tool": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/fixtures/sample-mcp-server.js"]
+    }
+  }
+}

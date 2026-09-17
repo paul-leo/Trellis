@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { loadCanonicalSource, upsertServerYaml, removeServerYaml, type ServersYamlWriteResult } from "../core/canonical.js";
 import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
 import { ALL_AGENTS, resolveScope } from "../core/types.js";
-import type { AgentId, McpServerDef, Transport } from "../core/types.js";
+import type { AgentId, McpConfig, McpServerDef, Transport } from "../core/types.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
@@ -33,6 +33,9 @@ export interface RunMcpSyncOptions {
   /** Onboard-only seam — see RunSyncOptions.managedAgents. Never a CLI
    * flag. */
   managedAgents?: readonly AgentId[];
+  /** Onboard-only canonical MCP override used to preview a route selection
+   * before writing it to servers.yaml. */
+  mcp?: McpConfig;
   /** Onboard-only seam — see RunSyncOptions.backupSession. Never a CLI
    * flag. */
   backupSession?: BackupSession;
@@ -64,7 +67,11 @@ function buildAdapters(homeDir: string, managedAgents: readonly AgentId[]): Trel
 export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promise<McpSyncReport> {
   const homeDir = opts.homeDir ?? homedir();
   const loaded = loadCanonicalSource(homeDir);
-  const canonical = opts.managedAgents ? { ...loaded, managedAgents: opts.managedAgents } : loaded;
+  const canonical = {
+    ...loaded,
+    ...(opts.managedAgents ? { managedAgents: opts.managedAgents } : {}),
+    ...(opts.mcp ? { mcp: opts.mcp } : {}),
+  };
   const reports: AgentMcpSyncReport[] = [];
   const ownSession = !opts.dryRun && !opts.backupSession ? openBackupSession(homeDir, "mcp-sync") : undefined;
   const backup = opts.backupSession ?? ownSession;

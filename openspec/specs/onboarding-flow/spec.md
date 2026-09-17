@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change trellis-cli-onboard. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: `trellis onboard` chains init, agent detection, migrate, and sync into one guided flow
 
 The system SHALL run `trellis init`'s own idempotent bootstrap first, then
@@ -513,3 +515,142 @@ SHALL change meaning or be removed by this change.
   before this change
 - **THEN** that field is present and means what it meant before
 
+### Requirement: Interactive onboarding uses a styled prompt adapter
+
+The system SHALL use one shared interaction adapter backed by a maintained
+prompt library for source-agent selection, managed-agent selection, migration
+category selection, and dry-run confirmation on a capable TTY. The adapter
+SHALL return the same domain values as the existing orchestration contracts.
+
+#### Scenario: Source selection uses a colored select prompt
+
+- **WHEN** multiple present agents require a source choice on a capable TTY
+- **THEN** onboarding shows a colored single-select prompt with concise agent
+  summaries and returns the selected agent id after confirmation
+
+#### Scenario: Managed selection uses a colored multiselect prompt
+
+- **WHEN** the managed set is not supplied by `--manage` on a capable TTY
+- **THEN** onboarding shows all four supported agents with aggregate status and
+  returns the checked agent ids after confirmation
+
+#### Scenario: Category selection only shows real categories
+
+- **WHEN** the source has two or more real migration categories
+- **THEN** the multiselect lists exactly those categories and no unrelated
+  skill/server names
+
+### Requirement: Interactive rendering does not change automation contracts
+
+The system SHALL not initialize the prompt library for `--json`, piped input,
+or a non-TTY invocation. Interactive chrome SHALL be written to stderr, while
+reports and JSON payloads SHALL remain on stdout. Existing numbered fallbacks
+and explicit refusal behavior SHALL remain unchanged.
+
+#### Scenario: JSON output contains no prompt escape sequences
+
+- **WHEN** `trellis onboard --json` runs
+- **THEN** stdout is valid JSON and contains no interactive prompt or spinner
+  output
+
+#### Scenario: Non-TTY uses the existing fallback
+
+- **WHEN** onboarding receives non-TTY input without enough explicit flags
+- **THEN** it uses the existing numbered fallback or clean refusal and performs
+  no guessed selection
+
+### Requirement: Agent summaries are progressively disclosed
+
+The system SHALL show agent identity, presence, aggregate skill/MCP counts, and
+brief health status in onboarding choices. It SHALL NOT list individual skill
+names in the interactive picker.
+
+#### Scenario: A large skill set stays compact
+
+- **WHEN** an agent has many skills
+- **THEN** the prompt shows a count such as `36 skills` and remains within the
+  terminal layout without enumerating skill names
+
+### Requirement: Prompt cancellation is safe
+
+The system SHALL restore terminal input state on cancellation or error, print a
+clear cancellation message, and perform no canonical or agent configuration
+writes.
+
+#### Scenario: Ctrl+C during a prompt
+
+- **WHEN** the user cancels any onboarding prompt
+- **THEN** the terminal is restored, onboarding exits through its existing
+  cancellation path, and no write plan is applied
+
+### Requirement: Onboarding SHALL select individual capabilities
+
+The system SHALL build an item-level inventory for skills, MCP servers, and
+available memory entries before applying migration. On a capable TTY it SHALL
+offer searchable multiselects; in non-interactive mode it SHALL accept explicit
+lists or a selection file. Existing category-level flags SHALL remain valid.
+
+#### Scenario: Select only a subset of skills
+
+- **WHEN** the source exposes four skills and the user selects two
+- **THEN** only those two are planned for canonical migration, while the other
+  two remain untouched
+
+#### Scenario: Select only a subset of MCP servers
+
+- **WHEN** the source exposes six MCP servers and the user selects two
+- **THEN** only those two are imported, synced, and verified
+
+#### Scenario: A conflict affects one item only
+
+- **WHEN** one selected skill conflicts with canonical and another selected MCP
+  server is clean
+- **THEN** the skill is reported as a conflict and the MCP server still follows
+  its own plan
+
+### Requirement: Onboarding SHALL resolve MCP routing per managed agent
+
+The system SHALL allow each managed agent to use `direct`, `gateway`, or `hub`
+delivery. Direct and gateway routes SHALL support a selected MCP subset. A
+gateway SHALL expose only the upstream servers selected for that agent. A hub
+route SHALL select the external endpoint but SHALL report that tool-level
+filtering is owned by the external hub. Existing shorthand fields SHALL remain
+backwards compatible.
+
+#### Scenario: Codex uses gateway for a subset while Claude uses direct
+
+- **WHEN** Codex is assigned gateway mode for `figma` and `mcp-router`, and
+  Claude Code is assigned direct mode for `tanka`
+- **THEN** Codex receives one gateway entry whose upstream set is exactly the
+  two selected servers, while Claude receives only the direct `tanka` entry
+
+#### Scenario: Existing gateway shorthand remains valid
+
+- **WHEN** canonical has the existing `gateway.enabled` configuration and no
+  explicit route map
+- **THEN** the current gateway behavior is preserved without requiring a
+  migration of the canonical file
+
+### Requirement: Onboarding SHALL report unsupported memory sources explicitly
+
+The system SHALL distinguish canonical memories, provider-backed runtime
+memories, and native agent memory formats. It SHALL not represent an
+unsupported native memory reader as an empty successful selection.
+
+#### Scenario: Native memory has no reader
+
+- **WHEN** a source agent has a private memory store with no Trellis reader
+- **THEN** the inventory reports it as unsupported with an actionable message,
+  and does not silently claim that the source has no memory
+
+### Requirement: Re-running onboarding SHALL preserve item selection and routes
+
+The system SHALL treat omitted fine-grained selections as “preserve current
+canonical state”. Re-running onboarding SHALL not re-import previously
+unselected items or reset per-agent MCP routes.
+
+#### Scenario: Bare re-run is a no-op for selection
+
+- **WHEN** a prior run selected two skills and assigned Codex gateway mode to
+  two MCP servers, and the next run supplies no selection flags
+- **THEN** the same desired state is retained and no unrelated item is added

@@ -126,6 +126,22 @@ export interface GatewayConfig {
   agents?: AgentId[];
 }
 
+export type McpRouteMode = "direct" | "gateway" | "hub";
+
+export interface McpRoute {
+  mode: McpRouteMode;
+  /** Omit to expose every eligible canonical server for this agent. */
+  servers?: string[];
+}
+
+export type CapabilityDelivery = "native" | "mcp" | "both";
+
+export interface McpRuntimeConfig {
+  /** Per-agent delivery for Trellis-owned capabilities and upstream MCP.
+   * Omitted means native, preserving the existing adapter behavior. */
+  delivery?: Partial<Record<AgentId, CapabilityDelivery>>;
+}
+
 export interface McpConfig {
   servers: Record<string, McpServerDef>;
   /**
@@ -144,6 +160,19 @@ export interface McpConfig {
    * two mean different things and may both be set, in which case gateway
    * wins per agent (trellis-mcp-gateway-hosting design.md D5/D6). */
   gateway?: GatewayConfig;
+  /** Optional per-agent route overrides. Explicit routes take precedence
+   * over the legacy hub/gateway shorthand for the named agent. */
+  routes?: Partial<Record<AgentId, McpRoute>>;
+  /** Optional runtime delivery preferences. */
+  runtime?: McpRuntimeConfig;
+}
+
+export function capabilityDeliveryForAgent(agentId: AgentId, mcp: McpConfig): CapabilityDelivery {
+  return mcp.runtime?.delivery?.[agentId] ?? "native";
+}
+
+export function usesNativeCapabilityDelivery(agentId: AgentId, mcp: McpConfig): boolean {
+  return capabilityDeliveryForAgent(agentId, mcp) !== "mcp";
 }
 
 export interface SkillRef {

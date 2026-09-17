@@ -1,0 +1,1 @@
+# Real agent MCP smoke

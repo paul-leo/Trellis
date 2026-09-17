@@ -90,7 +90,11 @@ export interface MemorySyncPlan {
  * entity and every relation passes through completely untouched,
  * regardless of what canonical wants.
  */
-export function planMemorySync(canonical: Pick<CanonicalSource, "memories">, currentGraphContent: string | undefined): MemorySyncPlan {
+export function planMemorySync(
+  canonical: Pick<CanonicalSource, "memories">,
+  currentGraphContent: string | undefined,
+  selectedMemoryNames?: readonly string[],
+): MemorySyncPlan {
   const existingLines = currentGraphContent !== undefined ? parseMemoryGraph(currentGraphContent) : [];
   const untouchedLines = existingLines.filter((line) => !(line.type === "entity" && line.entityType === TRELLIS_MEMORY_ENTITY_TYPE));
   const existingTrellisEntities = new Map(
@@ -100,13 +104,17 @@ export function planMemorySync(canonical: Pick<CanonicalSource, "memories">, cur
     existingLines.filter((line): line is MemoryEntity => line.type === "entity" && line.entityType !== TRELLIS_MEMORY_ENTITY_TYPE).map((e) => e.name),
   );
 
+  const selected = selectedMemoryNames !== undefined ? new Set(selectedMemoryNames) : undefined;
+  const selectedMemories = selected ? canonical.memories.filter((memory) => selected.has(memory.name)) : canonical.memories;
   const items: MemorySyncItem[] = [];
-  const nextTrellisEntities: MemoryEntity[] = [];
+  const nextTrellisEntities: MemoryEntity[] = selected
+    ? [...existingTrellisEntities.values()].filter((entity) => !selected.has(entity.name))
+    : [];
   let changed = false;
 
   const canonicalNames = new Set(canonical.memories.map((m) => m.name));
 
-  for (const memory of canonical.memories) {
+  for (const memory of selectedMemories) {
     if (existingOtherEntityNames.has(memory.name)) {
       items.push({ name: memory.name, action: "conflict", detail: `an entity named "${memory.name}" already exists in the graph and wasn't created by Trellis — resolve by hand` });
       continue;
@@ -132,6 +140,7 @@ export function planMemorySync(canonical: Pick<CanonicalSource, "memories">, cur
   }
 
   for (const [name] of existingTrellisEntities) {
+    if (selected) continue;
     if (canonicalNames.has(name)) continue; // still wanted, handled above
     items.push({ name, action: "remove", detail: "no longer in canonical — will be removed from the graph" });
     changed = true;

@@ -1,0 +1,23 @@
+# Optional input for `trellis onboard --selection ./selection.yaml`.
+# Omitted sections mean "all"; use `none` to explicitly skip a kind.
+
+skills: [api-review, e2e-test]
+mcp_servers: [tanka, figma]
+memories: none
+
+# Per-agent MCP routes. `servers` is supported for direct/gateway routes.
+# A hub route selects the external endpoint; the external hub owns its tool set.
+mcp_routes:
+  claude-code:
+    mode: direct
+    servers: [tanka]
+  codex:
+    mode: gateway
+    servers: [figma]
+
+# Optional per-agent capability delivery. Omitted agents stay native.
+# mcp removes native skill projection and exposes the Trellis runtime entry;
+# both keeps native skills and adds the runtime entry.
+runtime_delivery:
+  codex: mcp
+  claude-code: both

@@ -71,6 +71,27 @@ test("normalizeMigrateVerdict: only conflict items become blocked, detail carrie
   assert.equal(items[0].message, "already has different content");
 });
 
+test("normalizeMigrateVerdict: an extract-secret item is a warning, never blocked, and reminds that the source file was left untouched", () => {
+  const plan: MigratePlan = {
+    items: [
+      {
+        kind: "mcp",
+        name: "mcp-router",
+        action: "extract-secret",
+        detail: 'will extract "MCPR_TOKEN" to ~/.trellis/mcp/servers.local.env, referencing it from servers.yaml instead of holding the literal value',
+        extractVarName: "MCPR_TOKEN",
+        extractTargetPath: "~/.trellis/mcp/servers.local.env",
+      },
+    ],
+  };
+  const items = normalizeMigrateVerdict(plan);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].stage, "migrate");
+  assert.equal(items[0].severity, "warning");
+  assert.match(items[0].remediation ?? "", /source agent's own configuration/);
+  assert.match(items[0].remediation ?? "", /MCPR_TOKEN/);
+});
+
 test("normalizeMemorySyncVerdict: unconfigured is a warning, never blocked", () => {
   const result: MemorySyncResult = { configured: false, reason: "no memory server configured" };
   const items = normalizeMemorySyncVerdict(result);

@@ -1,0 +1,17 @@
+servers:
+  healthy-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+  hanging-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/hanging-mcp-server.js", "before-initialize"]
+known_host_injected: []
+routes:
+  codex:
+    mode: direct
+    servers: [healthy-tool, hanging-tool]
+runtime:
+  delivery:
+    codex: mcp

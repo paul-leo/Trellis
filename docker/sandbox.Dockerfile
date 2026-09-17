@@ -19,6 +19,7 @@ COPY test/fixtures/sample-mcp-server.js /fixtures/sample-mcp-server.js
 # bundle, not the raw src/pi-bridge/index.ts, before any adapter symlinks
 # to it.
 RUN node scripts/build-pi-bridge.mjs
+RUN npm run build && chmod +x /trellis/dist/cli.js /trellis/scripts/fake-codex.mjs && ln -s /trellis/dist/cli.js /usr/local/bin/trellis && ln -s /trellis/scripts/fake-codex.mjs /usr/local/bin/codex
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

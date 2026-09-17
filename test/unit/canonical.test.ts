@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadCanonicalSource, upsertServerYaml, writeMcpModeYaml } from "../../src/core/canonical.js";
+import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml, writeSecretsPolicyExtraction } from "../../src/core/canonical.js";
 
 function tmpHome(): string {
   return mkdtempSync(join(tmpdir(), "trellis-canonical-"));
@@ -257,4 +257,219 @@ test("writeMcpModeYaml: preserves an unrelated hand-authored comment and the ser
   assert.match(written, /# hand-authored note/);
   const source = loadCanonicalSource(home);
   assert.equal(source.mcp.servers.tanka.command, "tanka-mcp");
+});
+
+test("writeMcpRoutesYaml: writes per-agent routes and round-trips them", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "servers: {}\n");
+
+  const result = writeMcpRoutesYaml(path, {
+    codex: { mode: "gateway", servers: ["figma", "mcp-router"] },
+    "claude-code": { mode: "direct", servers: ["tanka"] },
+  });
+  assert.equal(result.ok, true);
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp.routes, {
+    codex: { mode: "gateway", servers: ["figma", "mcp-router"] },
+    "claude-code": { mode: "direct", servers: ["tanka"] },
+  });
+});
+
+test("writeMcpRoutesYaml: an empty map removes routes without touching servers", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "servers:\n  tanka:\n    transport: stdio\n    command: tanka-mcp\nroutes:\n  codex:\n    mode: gateway\n");
+
+  assert.equal(writeMcpRoutesYaml(path, {}).ok, true);
+  const source = loadCanonicalSource(home);
+  assert.equal(source.mcp.routes, undefined);
+  assert.equal(source.mcp.servers.tanka.command, "tanka-mcp");
+});
+
+test("writeMcpRuntimeDeliveryYaml: writes per-agent runtime delivery and round-trips it", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "servers: {}\n");
+
+  assert.equal(writeMcpRuntimeDeliveryYaml(path, { codex: "mcp", "claude-code": "both" }).ok, true);
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp.runtime?.delivery, { codex: "mcp", "claude-code": "both" });
+});
+
+test("writeMcpRuntimeDeliveryYaml: an empty map removes runtime delivery without touching servers", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "servers: {}\nruntime:\n  delivery:\n    codex: mcp\n");
+
+  assert.equal(writeMcpRuntimeDeliveryYaml(path, {}).ok, true);
+  assert.equal(loadCanonicalSource(home).mcp.runtime, undefined);
+});
+
+test("writeSecretsPolicyExtraction: refuses when secrets.policy.yaml does not exist", () => {
+  const home = tmpHome();
+  const path = join(home, ".trellis", "secrets.policy.yaml");
+  const result = writeSecretsPolicyExtraction(path, { varName: "MCPR_TOKEN", envFilePath: "~/.trellis/mcp/servers.local.env" });
+  assert.equal(result.ok, false);
+});
+
+test("writeSecretsPolicyExtraction: sets env_file when not already set, and adds the var to allowed_vars", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, "secrets.policy.yaml");
+  writeFileSync(path, "allowed_vars: []\nreject_patterns: []\n");
+
+  const result = writeSecretsPolicyExtraction(path, { varName: "MCPR_TOKEN", envFilePath: "~/.trellis/mcp/servers.local.env" });
+  assert.equal(result.ok, true);
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.secretsPolicy.allowedVars, ["MCPR_TOKEN"]);
+  assert.equal(source.secretsPolicy.envFile, join(home, ".trellis", "mcp", "servers.local.env"));
+});
+
+test("writeSecretsPolicyExtraction: an already-set env_file is left untouched", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, "secrets.policy.yaml");
+  writeFileSync(path, "allowed_vars: []\nreject_patterns: []\nenv_file: ~/.config/agent-env/secrets.env\n");
+
+  const result = writeSecretsPolicyExtraction(path, { varName: "MCPR_TOKEN", envFilePath: "~/.trellis/mcp/servers.local.env" });
+  assert.equal(result.ok, true);
+
+  const source = loadCanonicalSource(home);
+  assert.equal(source.secretsPolicy.envFile, join(home, ".config", "agent-env", "secrets.env"));
+  assert.deepEqual(source.secretsPolicy.allowedVars, ["MCPR_TOKEN"]);
+});
+
+test("writeSecretsPolicyExtraction: adding a name already present in allowed_vars is a no-op, not a duplicate", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, "secrets.policy.yaml");
+  writeFileSync(path, "allowed_vars: [MCPR_TOKEN]\nreject_patterns: []\n");
+
+  const result = writeSecretsPolicyExtraction(path, { varName: "MCPR_TOKEN", envFilePath: "~/.trellis/mcp/servers.local.env" });
+  assert.equal(result.ok, true);
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.secretsPolicy.allowedVars, ["MCPR_TOKEN"]);
+});
+
+test("writeSecretsPolicyExtraction: preserves existing allowed_vars entries and an unrelated comment", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, "secrets.policy.yaml");
+  writeFileSync(path, "# hand-authored note\nallowed_vars:\n  - GITLAB_PERSONAL_ACCESS_TOKEN\nreject_patterns: []\n");
+
+  const result = writeSecretsPolicyExtraction(path, { varName: "MCPR_TOKEN", envFilePath: "~/.trellis/mcp/servers.local.env" });
+  assert.equal(result.ok, true);
+
+  const written = readFileSync(path, "utf-8");
+  assert.match(written, /# hand-authored note/);
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.secretsPolicy.allowedVars, ["GITLAB_PERSONAL_ACCESS_TOKEN", "MCPR_TOKEN"]);
+});
+
+test("ensureGitignoreEntry: creates .gitignore with the line when none exists", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, ".gitignore");
+  ensureGitignoreEntry(path, "mcp/servers.local.env");
+  assert.equal(readFileSync(path, "utf-8"), "mcp/servers.local.env\n");
+});
+
+test("ensureGitignoreEntry: appends to an existing .gitignore without disturbing other entries", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, ".gitignore");
+  writeFileSync(path, "*.log\n");
+  ensureGitignoreEntry(path, "mcp/servers.local.env");
+  assert.equal(readFileSync(path, "utf-8"), "*.log\nmcp/servers.local.env\n");
+});
+
+test("ensureGitignoreEntry: is a no-op when the line is already present", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, ".gitignore");
+  writeFileSync(path, "*.log\nmcp/servers.local.env\n");
+  ensureGitignoreEntry(path, "mcp/servers.local.env");
+  assert.equal(readFileSync(path, "utf-8"), "*.log\nmcp/servers.local.env\n");
+});
+
+test("ensureGitignoreEntry: handles an existing file with no trailing newline", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, ".gitignore");
+  writeFileSync(path, "*.log"); // no trailing newline
+  ensureGitignoreEntry(path, "mcp/servers.local.env");
+  assert.equal(readFileSync(path, "utf-8"), "*.log\nmcp/servers.local.env\n");
+});
+
+test("ensureShellEnvSource: creates the rc file with the source block when none exists", () => {
+  const home = tmpHome();
+  const rcPath = join(home, ".zshrc");
+  const envFile = join(home, ".trellis", "mcp", "servers.local.env");
+  ensureShellEnvSource(rcPath, envFile);
+  const written = readFileSync(rcPath, "utf-8");
+  assert.match(written, /# >>> trellis mcp secrets >>>/);
+  assert.match(written, /# <<< trellis mcp secrets <<</);
+  assert.match(written, /set -a/);
+  assert.match(written, /set \+a/);
+  assert.ok(written.includes(`source "${envFile}"`));
+});
+
+test("ensureShellEnvSource: appends to an existing rc file without disturbing its content", () => {
+  const home = tmpHome();
+  const rcPath = join(home, ".zshrc");
+  writeFileSync(rcPath, 'export PATH="/usr/local/bin:$PATH"\n');
+  ensureShellEnvSource(rcPath, join(home, ".trellis", "mcp", "servers.local.env"));
+  const written = readFileSync(rcPath, "utf-8");
+  assert.match(written, /^export PATH="\/usr\/local\/bin:\$PATH"\n/);
+  assert.match(written, /# >>> trellis mcp secrets >>>/);
+});
+
+test("ensureShellEnvSource: is a no-op when the block is already present", () => {
+  const home = tmpHome();
+  const rcPath = join(home, ".zshrc");
+  const envFile = join(home, ".trellis", "mcp", "servers.local.env");
+  ensureShellEnvSource(rcPath, envFile);
+  const firstWrite = readFileSync(rcPath, "utf-8");
+  ensureShellEnvSource(rcPath, envFile);
+  assert.equal(readFileSync(rcPath, "utf-8"), firstWrite);
+});
+
+test("ensureShellEnvSource: handles an existing rc file with no trailing newline", () => {
+  const home = tmpHome();
+  const rcPath = join(home, ".zshrc");
+  writeFileSync(rcPath, "alias ll='ls -la'"); // no trailing newline
+  ensureShellEnvSource(rcPath, join(home, ".trellis", "mcp", "servers.local.env"));
+  const written = readFileSync(rcPath, "utf-8");
+  assert.match(written, /^alias ll='ls -la'\n# >>> trellis mcp secrets >>>/);
+});
+
+test("ensureShellEnvSource: never writes a literal secret value, only the env file's path", () => {
+  const home = tmpHome();
+  const rcPath = join(home, ".zshrc");
+  const envDir = join(home, ".trellis", "mcp");
+  mkdirSync(envDir, { recursive: true });
+  const envFile = join(envDir, "servers.local.env");
+  writeFileSync(envFile, "MCPR_TOKEN=mcpr_realSecretValue123\n");
+  ensureShellEnvSource(rcPath, envFile);
+  const written = readFileSync(rcPath, "utf-8");
+  assert.ok(!written.includes("mcpr_realSecretValue123"));
 });

@@ -1,0 +1,57 @@
+servers:
+  shared-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+
+  claude-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+    agents: [claude-code]
+
+  codex-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+    agents: [codex]
+
+  kiro-tool:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+    agents: [kiro]
+
+  retired-mcp:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+
+  memory:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+    static_env:
+      MEMORY_FILE_PATH: "/root-scratch/.trellis/memories/graph.jsonl"
+
+known_host_injected: []
+
+routes:
+  claude-code:
+    mode: direct
+    servers: [shared-tool, claude-tool, retired-mcp]
+  codex:
+    mode: direct
+    servers: [shared-tool, codex-tool]
+  kiro:
+    mode: direct
+    servers: [shared-tool, kiro-tool]
+  pi:
+    mode: direct
+    servers: [shared-tool]
+
+runtime:
+  delivery:
+    codex: mcp
+    kiro: both
+    pi: mcp

@@ -1,15 +1,23 @@
 /**
  * `trellis secrets audit` — reads every present, MCP-capable agent's real
- * config file (never the canonical source) and checks it against
- * `CanonicalSource.secretsPolicy`: a literal-value scan against
- * `rejectPatterns`, and a declared-env-var-name check against
- * `allowedVars`. Also checks, agent-agnostically, whether every env var
- * name declared across canonical `mcp.servers[*].env` actually resolves
- * to a value via the same `resolveSecretEnv` the pi bridge uses
- * (trellis-secrets-env-management) — authoritative for pi, a best-effort
- * proxy for the other three (design.md D3 in that change). Read-only —
- * never writes anything. Fails non-zero on any finding
- * (trellis-secrets-audit-p3).
+ * config file and checks it against `CanonicalSource.secretsPolicy`: a
+ * literal-value scan against `rejectPatterns`, and a declared-env-var-name
+ * check against `allowedVars`. Also checks, agent-agnostically, whether
+ * every env var name declared across canonical `mcp.servers[*].env`
+ * actually resolves to a value via the same `resolveSecretEnv` the pi
+ * bridge uses (trellis-secrets-env-management) — authoritative for pi, a
+ * best-effort proxy for the other three (design.md D3 in that change).
+ *
+ * Also scans canonical's own `mcp/servers.yaml` for the reject-pattern
+ * literal-value check (trellis-migrate-extract-static-env-secrets design.md
+ * D11): a literal in `command`/`url`/`args`/`headers` is now accepted into
+ * canonical by `migrate` rather than refused (no natural name to extract
+ * to, or no `${VAR}` resolution proven for every consumer), so canonical
+ * is no longer guaranteed clean by construction the way it used to be —
+ * this keeps that acceptance from being silent. Never the
+ * unexpected-var-name check, which is about agent-native serialized
+ * `env`/`env_vars` syntax specifically. Read-only — never writes
+ * anything. Fails non-zero on any finding (trellis-secrets-audit-p3).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -35,8 +43,9 @@ export interface RunSecretsAuditOptions {
 
 export interface SecretsFinding {
   /** "environment" for `missing-env-value` — that check isn't scoped to
-   * any single agent's config file (see module doc comment). */
-  agent: AgentId | "environment";
+   * any single agent's config file. "canonical" for a literal found in
+   * `~/.trellis/mcp/servers.yaml` itself (see module doc comment). */
+  agent: AgentId | "environment" | "canonical";
   file: string;
   kind: "literal-secret" | "unexpected-var-name" | "missing-env-value";
   detail: string;
@@ -91,6 +100,26 @@ function findMissingEnvValues(servers: Record<string, McpServerDef>, policy: Sec
     }));
 }
 
+/**
+ * Reject-pattern-only scan of canonical's own `mcp/servers.yaml` (design.md
+ * D11) — no `unexpected-var-name` check here, that one is specifically
+ * about names extracted from an agent's own serialized `env`/`env_vars`
+ * syntax, not canonical's `env:` name list (which holding a name matching
+ * a reject pattern would be an absurd false positive, not a real finding).
+ */
+function auditCanonicalServersYaml(homeDir: string, policy: SecretsPolicy): SecretsFinding[] {
+  const file = join(homeDir, ".trellis", "mcp", "servers.yaml");
+  if (!existsSync(file)) return [];
+  const content = readFileSync(file, "utf-8");
+  const findings: SecretsFinding[] = [];
+  for (const pattern of policy.rejectPatterns) {
+    if (pattern.test(content)) {
+      findings.push({ agent: "canonical", file, kind: "literal-secret", detail: `matches reject pattern ${pattern}` });
+    }
+  }
+  return findings;
+}
+
 function auditFile(agent: AgentId, file: string, content: string, policy: SecretsPolicy, extractNames: (content: string) => string[]): SecretsFinding[] {
   const findings: SecretsFinding[] = [];
 
@@ -128,6 +157,7 @@ export async function collectSecretsAuditReport(opts: RunSecretsAuditOptions = {
   }
 
   findings.push(...findMissingEnvValues(canonical.mcp.servers, canonical.secretsPolicy));
+  findings.push(...auditCanonicalServersYaml(homeDir, canonical.secretsPolicy));
 
   return { findings };
 }

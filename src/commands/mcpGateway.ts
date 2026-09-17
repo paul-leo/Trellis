@@ -15,19 +15,22 @@
  * changing.
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
-import { resolveMcpPlan } from "../adapters/mcpPlan.js";
+import { isGatewayAgent, resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { LocalBackend, type GatewayBackend, type UpstreamSpec } from "../lib/gatewayBackend.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
+import { BuiltinRegistry, createRuntimeServer, UpstreamProvider } from "../lib/mcpRuntime.js";
+import { RuntimeMemoryProvider } from "../lib/memoryProvider.js";
+import { SkillProvider } from "../lib/skillProvider.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 
 const CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-gateway", version: "0.0.0" };
 const SERVER_INFO = { name: "trellis-mcp-gateway", version: "0.0.0" };
+const RUNTIME_CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-runtime", version: "0.0.0" };
+const RUNTIME_SERVER_INFO = { name: "trellis-mcp-runtime", version: "0.0.0" };
 
 export interface RunMcpGatewayOptions {
   agentId: AgentId;
@@ -68,7 +71,15 @@ export function resolveGatewayUpstreams(
   agentId: AgentId,
   canonical: Pick<ReturnType<typeof loadCanonicalSource>, "mcp" | "managedAgents" | "secretsPolicy">,
 ): { upstreams: UpstreamSpec[]; conflicts: string[] } {
-  const direct = { ...canonical.mcp, gateway: undefined };
+  const route = canonical.mcp.routes?.[agentId];
+  const hubActive = route ? route.mode === "hub" : Boolean(canonical.mcp.hub) && !isGatewayAgent(agentId, canonical.mcp, canonical.managedAgents);
+  if (hubActive) {
+    return { upstreams: [], conflicts: [] };
+  }
+  const directRoutes = canonical.mcp.routes && route
+    ? { ...canonical.mcp.routes, [agentId]: { mode: "direct" as const, ...(route.servers ? { servers: route.servers } : {}) } }
+    : canonical.mcp.routes;
+  const direct = { ...canonical.mcp, gateway: undefined, hub: undefined, routes: directRoutes, runtime: undefined };
   // The managed set is passed through unchanged, so an unmanaged agent
   // reaches nothing. Being spawned is NOT treated as consent here, which
   // is a deliberate divergence from `src/pi-bridge/index.ts` (which passes
@@ -88,6 +99,21 @@ export function resolveGatewayUpstreams(
 }
 
 export async function runMcpGateway(opts: RunMcpGatewayOptions): Promise<{ exitCode: number }> {
+  return runMcpEdge(opts, CLIENT_INFO, SERVER_INFO);
+}
+
+/** The first-class runtime entrypoint. mcp-gateway remains a compatibility
+ * alias for existing native agent config, but both edges use the same
+ * provider registry and backend construction path. */
+export async function runMcpRuntime(opts: RunMcpGatewayOptions): Promise<{ exitCode: number }> {
+  return runMcpEdge(opts, RUNTIME_CLIENT_INFO, RUNTIME_SERVER_INFO);
+}
+
+async function runMcpEdge(
+  opts: RunMcpGatewayOptions,
+  clientInfo: McpClientInfo,
+  serverInfo: { name: string; version: string },
+): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
   const connectTimeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
 
@@ -111,7 +137,7 @@ export async function runMcpGateway(opts: RunMcpGatewayOptions): Promise<{ exitC
     ? await opts.backendFactory(upstreams, homeDir)
     : await LocalBackend.connect(upstreams, {
         secretsPolicy: canonical.secretsPolicy,
-        clientInfo: CLIENT_INFO,
+        clientInfo,
         connectTimeoutMs,
         // Enables silent OAuth refresh-before-connect. Never an
         // interactive grant: that is `trellis mcp auth`'s job, and this
@@ -119,18 +145,13 @@ export async function runMcpGateway(opts: RunMcpGatewayOptions): Promise<{ exitC
         homeDir,
       });
 
-  const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await backend.listTools() }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await backend.callTool(request.params.name, request.params.arguments as Record<string, unknown> | undefined);
-    return result as Awaited<ReturnType<typeof backend.callTool>> as never;
-  });
+  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new UpstreamProvider(backend)]);
+  const server = createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  await waitForShutdown(backend, server);
+  await waitForShutdown(registry, server);
   return { exitCode: 0 };
 }
 
@@ -144,14 +165,14 @@ export async function runMcpGateway(opts: RunMcpGatewayOptions): Promise<{ exitC
  * Without this, each agent session would permanently leak a gateway plus
  * its entire upstream process set (design.md D13).
  */
-function waitForShutdown(backend: GatewayBackend, server: Server): Promise<void> {
+function waitForShutdown(registry: BuiltinRegistry, server: Awaited<ReturnType<typeof createRuntimeServer>>): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
     const shutdown = async (): Promise<void> => {
       if (settled) return;
       settled = true;
       try {
-        await backend.close();
+        await registry.close();
       } catch (err) {
         console.error(`trellis-mcp-gateway: failed to close backend: ${err instanceof Error ? err.message : String(err)}`);
       }

@@ -120,9 +120,9 @@ test("mcp sync: a server colliding with known_host_injected is refused as a conf
   assert.equal(claudeConfig.mcpServers, undefined, "colliding server must never be written");
 });
 
-test("mcp sync: a literal-secret-shaped value is refused as a conflict, never written (pre-write secrets guard)", async () => {
+test("mcp sync: a literal-secret-shaped value in staticEnv is refused as a conflict, never written (pre-write secrets guard)", async () => {
   const home = scratchHome();
-  initCanonical(home, 'servers:\n  bad:\n    transport: stdio\n    command: "glpat-abc123"\n');
+  initCanonical(home, 'servers:\n  bad:\n    transport: stdio\n    command: node\n    static_env:\n      TOKEN: "glpat-abc123"\n');
 
   const report = await collectMcpSyncReport({ homeDir: home });
   for (const agentReport of report.reports.filter((r) => r.agent !== "pi")) {
@@ -130,6 +130,19 @@ test("mcp sync: a literal-secret-shaped value is refused as a conflict, never wr
   }
   const claudeConfig = JSON.parse(readFileSync(join(home, ".claude.json"), "utf-8"));
   assert.equal(claudeConfig.mcpServers, undefined);
+});
+
+test("mcp sync: a literal-secret-shaped value in command/url/args/headers is written as ordinary config, not refused", async () => {
+  const home = scratchHome();
+  initCanonical(home, 'servers:\n  bad:\n    transport: stdio\n    command: "glpat-abc123"\n');
+
+  const report = await collectMcpSyncReport({ homeDir: home });
+  for (const agentReport of report.reports.filter((r) => r.agent !== "pi")) {
+    assert.ok(!agentReport.items.some((i) => i.action === "conflict"), `${agentReport.agent} should not refuse a literal in command`);
+    assert.ok(agentReport.items.some((i) => i.action === "create"));
+  }
+  const claudeConfig = JSON.parse(readFileSync(join(home, ".claude.json"), "utf-8"));
+  assert.equal(claudeConfig.mcpServers.bad.command, "glpat-abc123");
 });
 
 test("mcp sync: hub mode collapses every server into a single trellis-hub entry", async () => {

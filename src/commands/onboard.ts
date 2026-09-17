@@ -17,18 +17,19 @@ import { createInterface } from "node:readline/promises";
 import { homedir } from "node:os";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { canUseInteractivePicker, runMultiSelectPicker, runSingleSelectPicker } from "../lib/terminalPicker.js";
+import { canUseInteractivePicker, runMultiSelectPicker, runSearchMultiSelectPicker, runSingleSelectPicker } from "../lib/terminalPicker.js";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import { ALL_AGENTS } from "../core/types.js";
-import type { AgentId, AgentSnapshot } from "../core/types.js";
-import { loadCanonicalSource, removeServerYaml, upsertServerYaml, writeMcpModeYaml } from "../core/canonical.js";
+import type { AgentId, AgentSnapshot, McpConfig } from "../core/types.js";
+import { loadCanonicalSource, removeServerYaml, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml } from "../core/canonical.js";
 import type { McpMode } from "../core/canonical.js";
+import { buildCapabilityInventory, parseCapabilitySelectionFile, resolveSelectedNames, selectionContains, type CapabilityInventory, type CapabilitySelection } from "../core/capabilitySelection.js";
 import { INSTALL_HINTS, collectInitReport } from "./init.js";
 import { applyMigratePlan, collectMigratePlan, printPlan as printMigratePlan } from "./migrate.js";
-import type { MigrateKind, MigratePlan } from "./migrate.js";
+import type { MigrateKind, MigratePlan, MigratePlanItem } from "./migrate.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
 import { collectMcpSyncReport, printReport as printMcpSyncReport } from "./mcp.js";
@@ -77,6 +78,7 @@ export interface OnboardAgentSummary {
    * memory). 0 for pi, which has no MCP reader at all — not a gap here,
    * the same fact `migrate.ts` already establishes. */
   mcpServerCount: number;
+  mcpServerNames: string[];
 }
 
 export async function collectOnboardSummary(homeDir: string = homedir()): Promise<OnboardAgentSummary[]> {
@@ -84,18 +86,35 @@ export async function collectOnboardSummary(homeDir: string = homedir()): Promis
     ALL_AGENTS.map(async (agent) => {
       const snapshot = await PROBES[agent](homeDir);
       if (!snapshot.present) {
-        return { agent, present: false, skillCount: 0, skillNames: [], hasRealInstructions: false, mcpServerCount: 0 };
+        return { agent, present: false, skillCount: 0, skillNames: [], hasRealInstructions: false, mcpServerCount: 0, mcpServerNames: [] };
       }
       const skillNames = snapshot.skillRoots.flatMap((root) => root.skills.map((s) => s.name));
       const hasRealInstructions = snapshot.instructionsFile !== undefined && !snapshot.instructionsFile.isSymlink;
       const mcpPlan = await collectMigratePlan(agent, homeDir, ["mcp"]);
-      return { agent, present: true, skillCount: skillNames.length, skillNames, hasRealInstructions, mcpServerCount: mcpPlan.items.length };
+      return { agent, present: true, skillCount: skillNames.length, skillNames, hasRealInstructions, mcpServerCount: mcpPlan.items.length, mcpServerNames: mcpPlan.items.map((item) => item.name) };
     }),
   );
 }
 
 function hasContent(s: OnboardAgentSummary): boolean {
   return s.skillCount > 0 || s.hasRealInstructions || s.mcpServerCount > 0;
+}
+
+function hasSelectedSourceContent(s: OnboardAgentSummary, selection: CapabilitySelection | undefined): boolean {
+  if (!selection) return hasContent(s);
+  const hasSkills = selection.skills !== "none" && s.skillNames.some((name) => selectionContains(selection.skills, name));
+  const hasMcp = selection.mcpServers !== "none" && s.mcpServerNames.some((name) => selectionContains(selection.mcpServers, name));
+  return hasSkills || hasMcp || s.hasRealInstructions;
+}
+
+function filterMigratePlan(plan: MigratePlan, selection: CapabilitySelection | undefined): MigratePlan {
+  if (!selection) return plan;
+  const items = plan.items.filter((item: MigratePlanItem) => {
+    if (item.kind === "skill") return selectionContains(selection.skills, item.name);
+    if (item.kind === "mcp") return selectionContains(selection.mcpServers, item.name);
+    return true;
+  });
+  return { ...plan, items };
 }
 
 export interface RunOnboardOptions {
@@ -119,6 +138,8 @@ export interface RunOnboardOptions {
    * Omitted leaves whatever's already configured untouched — same
    * no-prompt posture as `mcpMode` (design.md D12). */
   memory?: string;
+  /** Optional YAML/JSON item-level capability selection for automation. */
+  selectionFile?: string;
   dryRun?: boolean;
   json?: boolean;
   /** Defaults to the real `~`; overridable for tests only. */
@@ -157,6 +178,7 @@ export interface OnboardInstallResult {
 
 export interface OnboardResult {
   summary: OnboardAgentSummary[];
+  inventory?: CapabilityInventory;
   source?: AgentId;
   sourceReason?: "auto-selected" | "flag" | "prompt";
   /** The full managed set this run acted against — the union of whatever
@@ -249,11 +271,11 @@ function agentSummaryLabel(s: OnboardAgentSummary): string {
  * D2) — used only when the terminal can't support the raw-mode picker
  * (`canUseInteractivePicker()` false). Unchanged from before that change. */
 async function promptForAgentNumbered(present: OnboardAgentSummary[]): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
-    console.log("Multiple agents detected:");
+    console.error("Multiple agents detected:");
     present.forEach((s, i) => {
-      console.log(`  ${i + 1}) ${agentSummaryLabel(s)}`);
+      console.error(`  ${i + 1}) ${agentSummaryLabel(s)}`);
     });
     for (let attempt = 0; attempt < 2; attempt++) {
       const answer = (await rl.question(`Choose a migration source [1-${present.length}]: `)).trim();
@@ -263,7 +285,7 @@ async function promptForAgentNumbered(present: OnboardAgentSummary[]): Promise<s
       const byIndex = present[Number(answer) - 1];
       if (byIndex) return byIndex.agent;
       if (present.some((s) => s.agent === answer)) return answer;
-      console.log(`Not a valid choice: enter a number from 1-${present.length}, or one of ${present.map((s) => s.agent).join(", ")}`);
+      console.error(`Not a valid choice: enter a number from 1-${present.length}, or one of ${present.map((s) => s.agent).join(", ")}`);
     }
     throw new Error("no valid migration source chosen after 2 attempts");
   } finally {
@@ -282,10 +304,10 @@ async function promptForAgentReal(present: OnboardAgentSummary[]): Promise<strin
   if (!canUseInteractivePicker()) {
     return promptForAgentNumbered(present);
   }
-  console.log("Multiple agents detected — use Up/Down (or j/k) and Enter to choose a migration source:");
+  console.error("Multiple agents detected — use the selector to choose a migration source:");
   const index = await runSingleSelectPicker(present.map(agentSummaryLabel));
   if (index === null) {
-    console.log("cancelled, no changes made");
+    console.error("cancelled, no changes made");
     process.exit(1);
   }
   return present[index].agent;
@@ -294,13 +316,13 @@ async function promptForAgentReal(present: OnboardAgentSummary[]): Promise<strin
 /** Numbered-typing fallback — unchanged from before this change (see
  * `promptForAgentNumbered`'s doc comment). */
 async function promptForManagedAgentsNumbered(candidates: OnboardAgentSummary[], alreadyManaged: readonly AgentId[]): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
-    console.log("Which agents should Trellis manage? (comma-separated numbers; enter for none new)");
+    console.error("Which agents should Trellis manage? (comma-separated numbers; enter for none new)");
     candidates.forEach((s, i) => {
       const status = s.present ? `present, ${s.skillCount} skill(s)` : "not installed";
       const tag = alreadyManaged.includes(s.agent) ? " [already managed]" : "";
-      console.log(`  ${i + 1}) ${s.agent} — ${status}${tag}`);
+      console.error(`  ${i + 1}) ${s.agent} — ${status}${tag}`);
     });
     const answer = (await rl.question("Select: ")).trim();
     return answer;
@@ -319,7 +341,7 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
   if (!canUseInteractivePicker()) {
     return promptForManagedAgentsNumbered(candidates, alreadyManaged);
   }
-  console.log("Which agents should Trellis manage? Up/Down (or j/k) to move, Space to toggle, Enter to confirm:");
+  console.error("Which agents should Trellis manage? Use the selector to toggle agents:");
   const labels = candidates.map((s) => {
     const status = s.present ? `present, ${s.skillCount} skill(s)` : "not installed";
     return `${s.agent} — ${status}`;
@@ -327,7 +349,7 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
   const initiallyChecked = candidates.map((s) => alreadyManaged.includes(s.agent));
   const indices = await runMultiSelectPicker(labels, initiallyChecked);
   if (indices === null) {
-    console.log("cancelled, no changes made");
+    console.error("cancelled, no changes made");
     process.exit(1);
   }
   return indices.map((i) => candidates[i].agent).join(",");
@@ -346,14 +368,18 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
  * An empty result is a valid answer: "skip migrate for this run"
  * (design.md D6), left for the caller to act on.
  */
-async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOnboardOptions): Promise<MigrateKind[]> {
+async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOnboardOptions, selection?: CapabilitySelection): Promise<MigrateKind[]> {
   // Built dynamically, in skill/instructions/mcp display order — not a
   // fixed two- or three-slot structure, so a fourth category some day
   // would only need an entry here, not a rewritten branch (design.md D2).
   const candidates: { kind: MigrateKind; label: string }[] = [];
-  if (source.skillCount > 0) candidates.push({ kind: "skill", label: "skills" });
+  if (source.skillCount > 0 && (!selection || selection.skills !== "none") && (!selection || source.skillNames.some((name) => selectionContains(selection.skills, name)))) {
+    candidates.push({ kind: "skill", label: "skills" });
+  }
   if (source.hasRealInstructions) candidates.push({ kind: "instructions", label: "instructions" });
-  if (source.mcpServerCount > 0) candidates.push({ kind: "mcp", label: "mcp" });
+  if (source.mcpServerCount > 0 && (!selection || selection.mcpServers !== "none") && (!selection || source.mcpServerNames.some((name) => selectionContains(selection.mcpServers, name)))) {
+    candidates.push({ kind: "mcp", label: "mcp" });
+  }
 
   // The choice is only meaningful when two or more kinds are real — same
   // gate for the injected test seam as for the real picker, mirroring
@@ -364,13 +390,13 @@ async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOn
       return opts.promptForMigrateCategories(source);
     }
     if (canUseInteractivePicker()) {
-      console.log(`Which categories should be migrated from ${source.agent}? Space to toggle, Enter to confirm:`);
+      console.error(`Which categories should be migrated from ${source.agent}? Use the selector to toggle categories:`);
       const indices = await runMultiSelectPicker(
         candidates.map((c) => c.label),
         candidates.map(() => true),
       );
       if (indices === null) {
-        console.log("cancelled, no changes made");
+        console.error("cancelled, no changes made");
         process.exit(1);
       }
       return indices.map((i) => candidates[i].kind);
@@ -378,6 +404,48 @@ async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOn
   }
 
   return candidates.map((c) => c.kind);
+}
+
+async function resolveInteractiveCapabilitySelection(source: OnboardAgentSummary, opts: RunOnboardOptions): Promise<CapabilitySelection | undefined> {
+  if (opts.json || opts.promptForMigrateCategories || !canUseInteractivePicker()) return undefined;
+  const skills = source.skillNames.length > 0 ? await runSearchMultiSelectPicker(source.skillNames) : [];
+  if (skills === null) {
+    console.error("cancelled, no changes made");
+    process.exit(1);
+  }
+  const mcpServers = source.mcpServerNames.length > 0 ? await runSearchMultiSelectPicker(source.mcpServerNames) : [];
+  if (mcpServers === null) {
+    console.error("cancelled, no changes made");
+    process.exit(1);
+  }
+  return { skills: skills ?? "none", mcpServers: mcpServers ?? "none", memories: "all", mcpRoutes: {}, runtimeDelivery: {} };
+}
+
+async function resolveInteractiveMcpRoutes(agentIds: readonly AgentId[], serverNames: readonly string[]): Promise<CapabilitySelection["mcpRoutes"]> {
+  const routes: CapabilitySelection["mcpRoutes"] = {};
+  for (const agent of agentIds) {
+    const modeIndex = await runSingleSelectPicker(
+      ["direct", "gateway", "hub"],
+      undefined,
+      `选择 ${agent} 的 MCP 路由模式`,
+    );
+    if (modeIndex === null) {
+      console.error("cancelled, no changes made");
+      process.exit(1);
+    }
+    const mode = (["direct", "gateway", "hub"] as const)[modeIndex];
+    if (mode === "hub") {
+      routes[agent] = { mode };
+      continue;
+    }
+    const selected = await runSearchMultiSelectPicker(serverNames, undefined, `选择 ${agent} 的 MCP 服务器`);
+    if (selected === null) {
+      console.error("cancelled, no changes made");
+      process.exit(1);
+    }
+    routes[agent] = { mode, servers: selected ?? [] };
+  }
+  return routes;
 }
 
 /** Shared by `--manage` and the interactive prompt's answer — same
@@ -559,6 +627,12 @@ function writeManagedYaml(homeDir: string, agents: AgentId[]): void {
 
 export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<OnboardResult> {
   const homeDir = opts.homeDir ?? homedir();
+  let capabilitySelection: CapabilitySelection | undefined;
+  if (opts.selectionFile) {
+    const parsedSelection = parseCapabilitySelectionFile(opts.selectionFile);
+    if (!parsedSelection.ok) return { summary: [], refusal: parsedSelection.error, verdict: [] };
+    capabilitySelection = parsedSelection.selection;
+  }
   await collectInitReport(homeDir);
   const summary = await collectOnboardSummary(homeDir);
   const present = summary.filter((s) => s.present);
@@ -582,7 +656,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     return { summary, refusal: memoryValidation.error, verdict: [] };
   }
 
-  const sourceCandidates = present.filter(hasContent);
+  const sourceCandidates = present.filter((candidate) => hasSelectedSourceContent(candidate, capabilitySelection));
   let source: AgentId | undefined;
   let sourceReason: OnboardResult["sourceReason"];
 
@@ -671,6 +745,14 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // resolves to "no change requested" here too (design.md D1/D12) — no
   // writer call at all, on either a first run or a later one.
   const canonicalForModeAndMemory = loadCanonicalSource(homeDir);
+  const sourceSummaryForInventory = source ? summary.find((item) => item.agent === source) : undefined;
+  const inventory = sourceSummaryForInventory
+    ? buildCapabilityInventory(
+        sourceSummaryForInventory,
+        canonicalForModeAndMemory,
+        [{ name: `${source}:native`, detail: "native agent memory has no Trellis reader; use a provider-specific import when available" }],
+      )
+    : undefined;
   const mcpModeResolution = resolveMcpModeChange(mcpModeValidation.mode, mcpModeValueOf(canonicalForModeAndMemory.mcp));
   const mcpMode = { current: mcpModeResolution.current, previous: mcpModeResolution.previous, changed: mcpModeResolution.changed };
   const serversYamlPath = join(homeDir, ".trellis", "mcp", "servers.yaml");
@@ -697,14 +779,54 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   logProgress(opts, "migrate");
   if (source) {
     const sourceSummary = summary.find((s) => s.agent === source)!;
-    const categories = await resolveMigrateCategories(sourceSummary, opts);
+    const interactiveSelection = capabilitySelection ?? await resolveInteractiveCapabilitySelection(sourceSummary, opts);
+    const categories = await resolveMigrateCategories(sourceSummary, opts, interactiveSelection);
     if (categories.length > 0) {
-      migratePlan = await collectMigratePlan(source, homeDir, categories);
+      migratePlan = filterMigratePlan(await collectMigratePlan(source, homeDir, categories), interactiveSelection);
       if (!opts.dryRun) {
         applyMigratePlan(migratePlan, homeDir);
       }
     } else {
       migrateSkipped = "migrate skipped — no categories selected";
+    }
+  }
+
+  const currentMcpAfterMigration = loadCanonicalSource(homeDir).mcp;
+  const migratedMcpNames = migratePlan?.items.filter((item) => item.kind === "mcp").map((item) => item.name) ?? [];
+  const availableMcpNames = [...new Set([...Object.keys(currentMcpAfterMigration.servers), ...migratedMcpNames])];
+  let requestedRoutes = capabilitySelection?.mcpRoutes;
+  const shouldPromptForRoutes = !opts.selectionFile
+    && opts.mcpMode === undefined
+    && !currentMcpAfterMigration.routes
+    && !currentMcpAfterMigration.gateway
+    && !currentMcpAfterMigration.hub
+    && managedAgents.length > 0
+    && availableMcpNames.length > 0
+    && canUseInteractivePicker();
+  if (!requestedRoutes && shouldPromptForRoutes) {
+    requestedRoutes = await resolveInteractiveMcpRoutes(managedAgents, availableMcpNames);
+  }
+
+  const requestedRuntimeDelivery = capabilitySelection?.runtimeDelivery;
+  let mcpSyncOverride: McpConfig | undefined;
+  if ((requestedRoutes && Object.keys(requestedRoutes).length > 0) || (requestedRuntimeDelivery && Object.keys(requestedRuntimeDelivery).length > 0)) {
+    const currentMcp = currentMcpAfterMigration;
+    const routes = requestedRoutes && Object.keys(requestedRoutes).length > 0
+      ? { ...(currentMcp.routes ?? {}), ...requestedRoutes }
+      : currentMcp.routes;
+    const delivery = requestedRuntimeDelivery && Object.keys(requestedRuntimeDelivery).length > 0
+      ? { ...(currentMcp.runtime?.delivery ?? {}), ...requestedRuntimeDelivery }
+      : currentMcp.runtime?.delivery;
+    mcpSyncOverride = {
+      ...currentMcp,
+      ...(routes ? { routes } : {}),
+      ...(delivery ? { runtime: { ...(currentMcp.runtime ?? {}), delivery } } : {}),
+    };
+    if (!opts.dryRun && requestedRoutes && Object.keys(requestedRoutes).length > 0) {
+      writeMcpRoutesYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), routes ?? {});
+    }
+    if (!opts.dryRun && requestedRuntimeDelivery && Object.keys(requestedRuntimeDelivery).length > 0) {
+      writeMcpRuntimeDeliveryYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), delivery ?? {});
     }
   }
 
@@ -724,7 +846,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // written, so there is nothing to verify.
   const syncVerification = opts.dryRun ? undefined : await collectSyncReport({ homeDir, dryRun: true, managedAgents });
   logProgress(opts, "mcp sync");
-  const mcpSyncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession });
+  const mcpSyncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession, mcp: mcpSyncOverride });
   const mcpSyncVerification = opts.dryRun ? undefined : await collectMcpSyncReport({ homeDir, dryRun: true, managedAgents });
   backupSession?.finalize();
 
@@ -734,7 +856,8 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // unconfigured `memory` server is a legitimate "nothing to do yet"
   // state (design.md D5), not gated on any prior step here.
   logProgress(opts, "memory sync");
-  const memorySyncResult = collectMemorySyncResult(homeDir);
+  const selectedMemoryNames = capabilitySelection ? resolveSelectedNames(capabilitySelection.memories, loadCanonicalSource(homeDir).memories.map((memory) => memory.name)) : undefined;
+  const memorySyncResult = collectMemorySyncResult(homeDir, selectedMemoryNames);
   if (!opts.dryRun) {
     applyMemorySync(memorySyncResult);
   }
@@ -770,6 +893,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
 
   return {
     summary,
+    inventory,
     source,
     sourceReason,
     managedAgents,
@@ -799,7 +923,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
 async function offerToApply(opts: RunOnboardOptions): Promise<boolean> {
   if (opts.promptToApply) return opts.promptToApply();
   if (!canUseInteractivePicker()) return false;
-  console.log("");
+  console.error("");
   const choice = await runSingleSelectPicker(["No, don't apply", "Yes, apply now"]);
   return choice === 1;
 }

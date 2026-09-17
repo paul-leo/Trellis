@@ -15,9 +15,11 @@ export { ALL_AGENTS, resolveScope } from "./core/types.js";
 export type {
   AgentId,
   AgentProfile,
+  CapabilityDelivery,
   CanonicalSource,
   HubConfig,
   McpConfig,
+  McpRuntimeConfig,
   McpServerDef,
   MemoryEntry,
   Scope,

@@ -16,11 +16,51 @@
 #   scripts/sandbox.sh --real             # interactive shell, THIS machine's
 #                                         # real allowlisted home
 #   scripts/sandbox.sh --real npm run dev doctor
+#   scripts/sandbox.sh --runtime          # Linux multi-agent runtime lab
+#                                         # (Claude/Codex/Kiro/pi differ
+#                                         # deliberately; no real dotfiles)
+#   scripts/sandbox.sh --migration        # Kiro -> Codex post-migration
+#                                         # usability acceptance lab
+#   scripts/sandbox.sh --management      # steady-state unified
+#                                         # management/idempotency lab
+#   scripts/sandbox.sh --failure         # hanging upstream isolation lab
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 MOUNT_SRC="$(pwd)/test/fixtures/home"
+
+if [ "${1:-}" = "--runtime" ]; then
+  shift
+  MOUNT_SRC="$(pwd)/test/fixtures/runtime-home"
+  if [ "$#" -eq 0 ]; then
+    set -- node scripts/runtime-lab.mjs
+  fi
+fi
+
+if [ "${1:-}" = "--migration" ]; then
+  shift
+  MOUNT_SRC="$(pwd)/test/fixtures/migration-home"
+  if [ "$#" -eq 0 ]; then
+    set -- node scripts/migration-lab.mjs
+  fi
+fi
+
+if [ "${1:-}" = "--management" ]; then
+  shift
+  MOUNT_SRC="$(pwd)/test/fixtures/management-home"
+  if [ "$#" -eq 0 ]; then
+    set -- node scripts/management-lab.mjs
+  fi
+fi
+
+if [ "${1:-}" = "--failure" ]; then
+  shift
+  MOUNT_SRC="$(pwd)/test/fixtures/failure-home"
+  if [ "$#" -eq 0 ]; then
+    set -- node scripts/failure-lab.mjs
+  fi
+fi
 
 if [ "${1:-}" = "--real" ]; then
   shift
