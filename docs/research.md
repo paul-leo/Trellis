@@ -91,6 +91,40 @@ agent identity and re-checks scope; skill providers read bounded content only;
 model-visible tools never mutate canonical configuration or execute skill
 scripts by default.
 
+### Local Claude Code / pi dogfood — 2026-09-18
+
+After an external, credential-minimized host snapshot, the managed set was
+narrowed from all four agents to Claude Code and pi through `trellis manage
+set`. Hashes of Codex and Kiro's relevant native state were identical before
+and after detaching them. All 36 pre-existing Claude skill directories were
+byte-identical to canonical, moved intact into the snapshot directory, and
+replaced by Trellis-managed symlinks; pi received the same 36 skills,
+`AGENTS.md`, and the packaged MCP bridge. Subsequent `sync` and `mcp sync`
+dry-runs were empty, `doctor` had zero findings, and `secrets audit` was clean.
+
+Real startup exposed runtime issues that structural tests correctly cannot
+predict:
+
+- Claude connected `chrome-devtools`, `mcp-router`, `tanka`, and
+  `harness-solo`; Figma and Sentry require their native OAuth flows.
+- A real Claude model session waited for `chrome-devtools` and emitted an
+  actual `list_pages` tool call, proving model-to-MCP registration. The direct
+  six-server catalog—dominated by Tanka's large tool surface—drove roughly
+  167k input tokens and hit the verification budget before the tool result was
+  returned. Fine-grained MCP routes are therefore operationally necessary,
+  not merely a UI convenience.
+- pi loaded the Trellis bridge and attempted every canonical upstream. It
+  reported `tanka-mcp` missing from pi's process PATH, plus missing Figma and
+  Sentry authorization. Its `openai-codex` OAuth check was ready, but a real
+  model turn failed before streaming began with WebSocket/SSE `fetch failed`;
+  no tool call occurred. That is a pi-provider transport issue, separate from
+  bridge discovery and tool registration.
+
+The next local pilot should route only a small healthy MCP subset to Claude
+and pi before enabling Runtime delivery. Repeating real model calls against
+the full catalog would spend quota without testing the abstraction we care
+about.
+
 ## Shared memory (reuse)
 
 Checked directly against this real machine before writing this section,

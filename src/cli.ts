@@ -17,9 +17,10 @@ import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
 import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
 import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
+import { parseManageArgs, runManage } from "./commands/manage.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "memory", "secrets", "rollback"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "memory", "manage", "secrets", "rollback"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -141,6 +142,16 @@ Commands:
               round-trip byte-for-byte back through memory sync.
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
+  manage list
+            Show the canonical managed-agent write boundary.
+  manage set <ids|none>
+  manage add <ids>
+  manage remove <ids>
+            Explicitly replace, extend, or narrow the managed set. Removing
+              an agent preserves its existing native state; future Trellis
+              writes stop reaching it. Mutations are backup/rollback-enabled.
+              --dry-run    preview current -> desired, write nothing
+              --json       machine-readable output
   secrets audit
             Scan each present agent's real MCP config for leaked
             credentials and unexpected env var names
@@ -362,6 +373,17 @@ async function main(argv: string[]): Promise<void> {
     }
     console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory sync|extract\n`);
     process.exitCode = 1;
+    return;
+  }
+
+  if (command === "manage") {
+    const parsed = parseManageArgs(rest);
+    if ("error" in parsed) {
+      console.error(`${parsed.error}\nUsage: trellis manage list|set <ids|none>|add <ids>|remove <ids> [--dry-run] [--json]\n`);
+      process.exitCode = 1;
+      return;
+    }
+    process.exitCode = runManage(parsed).exitCode;
     return;
   }
 

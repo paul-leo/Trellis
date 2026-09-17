@@ -51,6 +51,9 @@ that.
    Selecting an agent that isn't installed yet is itself the authorization to
    install it (one confirmation, then a real `npm install -g <package>`);
    Kiro has no CLI package and is refused with its download URL instead.
+   Onboarding is intentionally additive: an agent already managed remains
+   managed if a later onboarding run omits it. Use the explicit `trellis
+   manage` lifecycle commands below when you intend to detach one.
 3. **MCP mode** — direct (the default), hub, or gateway. Flag-only, never
    prompted: pass `--mcp-mode direct|hub|gateway` to change it (`--hub-url
    <url>` is required with `hub`; `--gateway-agents <ids>` is optional with
@@ -192,6 +195,32 @@ across multiple agents into one canonical result isn't built yet — see
 The rest of this page is the same flow broken into its individual steps —
 useful if you want more control over any one part, or just want to
 understand what `onboard` did.
+
+## `trellis manage` — change the write boundary explicitly
+
+The managed set is Trellis's hard outer authorization boundary. Use the
+standalone lifecycle command when you need to inspect, replace, extend, or
+narrow it without running migration or sync:
+
+```
+trellis manage list
+trellis manage set claude-code,pi --dry-run
+trellis manage set claude-code,pi
+trellis manage add codex
+trellis manage remove kiro
+trellis manage set none
+```
+
+`set` is exact; `add` unions; `remove` subtracts. Every real change to
+`managed.yaml` is recorded under `~/.trellis/backups/` and can be reversed by
+`trellis rollback`. A dry run or no-op creates no backup.
+
+Detaching only prevents future Trellis writes. It never deletes or rewrites
+the detached agent's existing skills, instructions, MCP entries, extensions,
+or login state. Cleanup, if desired, is a separate explicit decision.
+
+This differs deliberately from `onboard --manage`: onboarding remains
+additive so an omitted checkbox cannot silently revoke management.
 
 ## Two starting points
 

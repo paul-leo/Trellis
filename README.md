@@ -62,6 +62,11 @@ type by hand. If no agent is detected, it prints each supported agent's
 real install command/URL and stops — it never installs anything on its own
 initiative. Add `--dry-run` to preview the whole thing with zero writes.
 
+Onboarding only adds to the existing managed set. To deliberately narrow or
+replace Trellis's future write boundary without touching an agent's current
+native state, use `trellis manage list|set|add|remove`; these mutations are
+dry-runnable and backed by `trellis rollback`.
+
 ```
 trellis onboard --agent claude-code --manage pi
 ```

@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change trellis-backup-rollback. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Every real write `sync` or `mcp sync` perform is recorded before it happens
 
 The system SHALL, for every file or symlink `sync` or `mcp sync` create,
@@ -88,3 +90,19 @@ other path in the same rollback from being restored.
 - **THEN** the command exits non-zero, same as every other command in
   this project when it reports a conflict or finding
 
+### Requirement: Managed-set mutations are recoverable
+
+The system SHALL snapshot `managed.yaml` through the existing Trellis backup
+mechanism before a standalone manage command changes it. A no-op or dry run
+SHALL create no backup run.
+
+#### Scenario: Manage set can be rolled back
+
+- **WHEN** `trellis manage set claude-code,pi` changes `managed.yaml`
+- **THEN** the change creates one backup run and an immediate `trellis
+  rollback` restores the exact previous managed set
+
+#### Scenario: No-op manage command creates no backup
+
+- **WHEN** `trellis manage set` requests the set already persisted
+- **THEN** the command reports no change and creates no backup directory
