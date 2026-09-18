@@ -15,6 +15,11 @@ export interface PickerStreams {
   output: NodeJS.WriteStream | Writable;
 }
 
+export interface PickerOption {
+  label: string;
+  disabled?: boolean;
+}
+
 function defaultStreams(): PickerStreams {
   return { input: process.stdin, output: process.stderr };
 }
@@ -49,10 +54,18 @@ function wasCancelled(value: unknown): boolean {
  * Single-select prompt. The returned number is the original item index, so
  * callers do not depend on display labels or prompt-library values.
  */
-export async function runSingleSelectPicker(items: string[], streams: PickerStreams = defaultStreams(), message = "请选择一个迁移来源"): Promise<number | null> {
+export async function runSingleSelectPicker(
+  items: readonly (string | PickerOption)[],
+  streams: PickerStreams = defaultStreams(),
+  message = "请选择一个迁移来源",
+): Promise<number | null> {
   const result = await select<number>({
     message,
-    options: items.map((label, value) => ({ label, value })),
+    options: items.map((item, value) => ({
+      label: typeof item === "string" ? item : item.label,
+      value,
+      ...(typeof item === "string" || item.disabled === undefined ? {} : { disabled: item.disabled }),
+    })),
     input: streams.input,
     output: streams.output,
     showInstructions: true,

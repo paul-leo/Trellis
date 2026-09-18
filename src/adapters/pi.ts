@@ -10,9 +10,10 @@
  * same symlink create/repair/remove machinery as skills/instructions.
  */
 
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
 import { isInScope } from "../core/adapter.js";
 import { usesNativeCapabilityDelivery } from "../core/types.js";
@@ -22,6 +23,21 @@ import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
 import type { BackupSession } from "../lib/backup.js";
 
 const BRIDGE_SYMLINK_NAME = "trellis-mcp-bridge.js";
+
+/**
+ * A source-checkout bridge can survive a switch to the packaged CLI. Adopt it
+ * only when it has the Trellis bridge artifact shape and is byte-identical
+ * to the bundle this installation would write. This is intentionally not a
+ * general symlink ownership rule.
+ */
+function isEquivalentTrellisBridge(existingTarget: string, desiredTarget: string): boolean {
+  if (!existingTarget.endsWith(`${sep}${join("dist", "pi-bridge", "bundle.js")}`)) return false;
+  try {
+    return readFileSync(existingTarget).equals(readFileSync(desiredTarget));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The bundled bridge file's location — always `<repo-root>/dist/pi-bridge/
@@ -91,6 +107,7 @@ export class PiAdapter implements TrellisAdapter {
       // (design.md D2), same role `canonicalRoot` plays for skills.
       canonicalRoot: dirname(bridgeFile),
       kind: "extension",
+      adoptExistingSymlink: isEquivalentTrellisBridge,
     });
 
     return [...skillItems, ...instructionsItems, ...extensionItems];

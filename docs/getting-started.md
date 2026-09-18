@@ -54,10 +54,17 @@ that.
    Onboarding is intentionally additive: an agent already managed remains
    managed if a later onboarding run omits it. Use the explicit `trellis
    manage` lifecycle commands below when you intend to detach one.
-3. **MCP mode** — direct (the default), hub, or gateway. Flag-only, never
-   prompted: pass `--mcp-mode direct|hub|gateway` to change it (`--hub-url
-   <url>` is required with `hub`; `--gateway-agents <ids>` is optional with
-   `gateway`, omitted meaning every managed agent). Omitting `--mcp-mode`
+3. **MCP mode** — direct, gateway, or hub. In the interactive route picker,
+   **Gateway is recommended for local Trellis hosting**: Trellis runs the
+   local MCP entry and manages upstream connections for the Agent session;
+   no extra service is needed. Choose **Direct** when each Agent should
+   connect to MCP servers independently. Choose **Hub only when an external
+   MCP Hub is already running**: each Agent connects to one external HTTP
+   endpoint, and the Hub owns the upstream server list. Trellis does not
+   deploy the Hub. The non-interactive mode is flag-only: pass
+   `--mcp-mode direct|hub|gateway` to change it (`--hub-url <url>` is required
+   with `hub`; `--gateway-agents <ids>` is optional with `gateway`, omitted
+   meaning every managed agent). Omitting `--mcp-mode`
    entirely leaves whatever's already configured untouched — on a fresh
    machine that's direct, on one you've already switched that's whatever
    you last set — so a plain `trellis onboard` re-run never resets it. This
@@ -138,6 +145,14 @@ other and never read canonical, so they cannot prove a write held — only
 a re-plan against canonical can. If a write somehow didn't hold (a
 filesystem permission problem, a race), it surfaces in the verdict as its
 own `blocked` item, separate from whatever the write's own stage reported.
+
+Onboarding treats a mode change as a route transition, not a reset: canonical
+Skills, MCP definitions, memories, and secrets policy stay in place. When an
+interactive run changes mode, it shows the current mode, target mode, and
+affected managed Agents before asking for confirmation. A blocking failure in
+the transaction automatically restores canonical and native files together;
+the backup remains available in `~/.trellis/backups/` for inspection or a
+later explicit rollback.
 
 **The health scan is `trellis doctor` itself**, run at the end against
 every agent (not just the ones this run manages) — so a genuinely new

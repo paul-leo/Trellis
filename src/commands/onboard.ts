@@ -14,8 +14,9 @@
  */
 
 import { createInterface } from "node:readline/promises";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { canUseInteractivePicker, runMultiSelectPicker, runSearchMultiSelectPicker, runSingleSelectPicker } from "../lib/terminalPicker.js";
 import * as claudeCodeProbe from "../probes/claude-code.js";
@@ -24,7 +25,7 @@ import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
 import { ALL_AGENTS } from "../core/types.js";
-import type { AgentId, AgentSnapshot, McpConfig } from "../core/types.js";
+import type { AgentId, AgentSnapshot, McpConfig, McpRouteMode } from "../core/types.js";
 import { loadCanonicalSource, removeServerYaml, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml } from "../core/canonical.js";
 import type { McpMode } from "../core/canonical.js";
 import { buildCapabilityInventory, parseCapabilitySelectionFile, resolveSelectedNames, selectionContains, type CapabilityInventory, type CapabilitySelection } from "../core/capabilitySelection.js";
@@ -41,7 +42,9 @@ import { applyMemorySync, collectMemorySyncResult, printMemorySyncResult, DEFAUL
 import type { MemorySyncResult } from "./memory.js";
 import { collectDoctorReport, printReport as printDoctorReport, resolveKnownHostInjected } from "./doctor.js";
 import type { DoctorReport } from "./doctor.js";
-import { openBackupSession } from "../lib/backup.js";
+import { openBackupSession, type BackupSession } from "../lib/backup.js";
+import { applyRollbackPlan, collectRollbackPlan, loadManifest } from "./rollback.js";
+import type { RollbackReport } from "./rollback.js";
 import { confirmAndInstall } from "../lib/installAgent.js";
 import type { ConfirmAndInstallOptions } from "../lib/installAgent.js";
 import {
@@ -63,6 +66,42 @@ const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
   pi: (homeDir) => piProbe.probe(homeDir),
   "kimi-code": (homeDir) => kimiCodeProbe.probe(homeDir),
 };
+
+/**
+ * Scores only real source-side content. The recommendation is a hint for a
+ * first-time user, never a filter: every candidate remains selectable.
+ */
+export function migrationSourceScore(summary: Pick<OnboardAgentSummary, "skillCount" | "mcpServerCount" | "hasRealInstructions">): number {
+  return summary.skillCount + summary.mcpServerCount + (summary.hasRealInstructions ? 1 : 0);
+}
+
+export function recommendedMigrationSource(summaries: readonly (Pick<OnboardAgentSummary, "agent" | "skillCount" | "mcpServerCount" | "hasRealInstructions">)[]): AgentId | undefined {
+  return summaries.reduce<Pick<OnboardAgentSummary, "agent" | "skillCount" | "mcpServerCount" | "hasRealInstructions"> | undefined>((best, current) => {
+    if (!best || migrationSourceScore(current) > migrationSourceScore(best)) return current;
+    return best;
+  }, undefined)?.agent;
+}
+
+export const MCP_ROUTE_OPTIONS = [
+  {
+    mode: "gateway" as const,
+    label: "gateway（推荐：本机统一托管） — Trellis 在本机会话中运行 MCP 入口，不需要额外部署服务",
+  },
+  {
+    mode: "direct" as const,
+    label: "direct（简单直连） — Agent 分别连接每个 MCP，适合不需要统一托管的情况",
+  },
+  {
+    mode: "hub" as const,
+    label: "hub（已有外部 Hub 时使用） — Agent 连接一个外部 HTTP MCP 服务",
+  },
+] satisfies readonly { mode: McpRouteMode; label: string }[];
+
+export function interactiveMcpRouteOptions(hubConfigured: boolean): Array<{ mode: McpRouteMode; label: string; disabled?: boolean }> {
+  return MCP_ROUTE_OPTIONS.map((option) => option.mode === "hub" && !hubConfigured
+    ? { ...option, label: "hub（暂不可选：需要先配置外部 Hub URL） — 不会自动部署 Hub", disabled: true }
+    : { ...option });
+}
 
 export interface OnboardAgentSummary {
   agent: AgentId;
@@ -166,6 +205,8 @@ export interface RunOnboardOptions {
    * (design.md D9). `true` means "apply for real", matching what
    * accepting the real picker's "Yes, apply now" option means. */
   promptToApply?: () => Promise<boolean>;
+  /** Test-only: replaces the real mode-transition confirmation. */
+  promptForModeChange?: (previous: "direct" | "hub" | "gateway", next: "direct" | "hub" | "gateway", agents: readonly AgentId[]) => Promise<boolean>;
   /** Test-only: injected into every `confirmAndInstall` call for a
    * selected, not-yet-present agent. Never a real terminal prompt or a
    * real `npm install` in a unit test. */
@@ -216,6 +257,8 @@ export interface OnboardResult {
    * inconsistent across agents independent of this run.
    */
   doctorReport?: DoctorReport;
+  /** Present when a blocking real run was automatically restored. */
+  rollback?: RollbackReport;
   /**
    * The resolved MCP mode after this run (trellis-onboard-mcp-mode
    * design.md D7) — `current` reflects canonical's state whether or not
@@ -265,8 +308,9 @@ function logProgress(opts: RunOnboardOptions, stage: (typeof PROGRESS_STAGES)[nu
  * (found via a real mirasim terminal session). The full names are still
  * available from `trellis doctor`/`--json`; a picker row's job is to
  * let you tell agents apart at a glance, not enumerate everything. */
-function agentSummaryLabel(s: OnboardAgentSummary): string {
-  return `${s.agent} — ${s.skillCount} skill(s), instructions: ${s.hasRealInstructions ? "yes" : "no"}, mcp: ${s.mcpServerCount}`;
+function agentSummaryLabel(s: OnboardAgentSummary, recommendedAgent?: AgentId): string {
+  const recommendation = s.agent === recommendedAgent ? "（推荐：可迁移内容最多）" : "";
+  return `${s.agent} — ${s.skillCount} skill(s), instructions: ${s.hasRealInstructions ? "yes" : "no"}, mcp: ${s.mcpServerCount} ${recommendation}`;
 }
 
 /** Numbered-typing fallback (trellis-onboard-interactive-picker design.md
@@ -274,10 +318,11 @@ function agentSummaryLabel(s: OnboardAgentSummary): string {
  * (`canUseInteractivePicker()` false). Unchanged from before that change. */
 async function promptForAgentNumbered(present: OnboardAgentSummary[]): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const recommendedAgent = recommendedMigrationSource(present);
   try {
-    console.error("Multiple agents detected:");
+    console.error("检测到多个 Agent。推荐选择可迁移内容最多的 Agent 作为来源：");
     present.forEach((s, i) => {
-      console.error(`  ${i + 1}) ${agentSummaryLabel(s)}`);
+      console.error(`  ${i + 1}) ${agentSummaryLabel(s, recommendedAgent)}`);
     });
     for (let attempt = 0; attempt < 2; attempt++) {
       const answer = (await rl.question(`Choose a migration source [1-${present.length}]: `)).trim();
@@ -306,8 +351,9 @@ async function promptForAgentReal(present: OnboardAgentSummary[]): Promise<strin
   if (!canUseInteractivePicker()) {
     return promptForAgentNumbered(present);
   }
-  console.error("Multiple agents detected — use the selector to choose a migration source:");
-  const index = await runSingleSelectPicker(present.map(agentSummaryLabel));
+  const recommendedAgent = recommendedMigrationSource(present);
+  console.error("选择迁移来源。推荐选择可迁移内容最多的 Agent；这只决定从哪里读取，不会自动托管它：");
+  const index = await runSingleSelectPicker(present.map((summary) => agentSummaryLabel(summary, recommendedAgent)), undefined, "迁移来源");
   if (index === null) {
     console.error("cancelled, no changes made");
     process.exit(1);
@@ -320,11 +366,12 @@ async function promptForAgentReal(present: OnboardAgentSummary[]): Promise<strin
 async function promptForManagedAgentsNumbered(candidates: OnboardAgentSummary[], alreadyManaged: readonly AgentId[]): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
-    console.error("Which agents should Trellis manage? (comma-separated numbers; enter for none new)");
+    console.error("选择 Trellis 要托管的 Agent（推荐选择已安装的 Agent；直接回车表示本次不新增）:");
     candidates.forEach((s, i) => {
       const status = s.present ? `present, ${s.skillCount} skill(s)` : "not installed";
       const tag = alreadyManaged.includes(s.agent) ? " [already managed]" : "";
-      console.error(`  ${i + 1}) ${s.agent} — ${status}${tag}`);
+      const recommendation = s.present ? "（推荐：已安装）" : "";
+      console.error(`  ${i + 1}) ${s.agent} — ${status}${recommendation}${tag}`);
     });
     const answer = (await rl.question("Select: ")).trim();
     return answer;
@@ -343,10 +390,12 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
   if (!canUseInteractivePicker()) {
     return promptForManagedAgentsNumbered(candidates, alreadyManaged);
   }
-  console.error("Which agents should Trellis manage? Use the selector to toggle agents:");
+  console.error("选择 Trellis 要托管的 Agent。推荐选择已安装的 Agent；选择未安装的 Agent 会先请求安装确认：");
   const labels = candidates.map((s) => {
     const status = s.present ? `present, ${s.skillCount} skill(s)` : "not installed";
-    return `${s.agent} — ${status}`;
+    const recommendation = s.present ? "（推荐：已安装）" : "";
+    const managed = alreadyManaged.includes(s.agent) ? "（已托管）" : "";
+    return `${s.agent} — ${status}${recommendation}${managed}`;
   });
   const initiallyChecked = candidates.map((s) => alreadyManaged.includes(s.agent));
   const indices = await runMultiSelectPicker(labels, initiallyChecked);
@@ -392,10 +441,12 @@ async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOn
       return opts.promptForMigrateCategories(source);
     }
     if (canUseInteractivePicker()) {
-      console.error(`Which categories should be migrated from ${source.agent}? Use the selector to toggle categories:`);
+      console.error(`选择要从 ${source.agent} 迁移的内容（默认全选，推荐先完整迁移，之后再清理不需要的项）：`);
       const indices = await runMultiSelectPicker(
-        candidates.map((c) => c.label),
+        candidates.map((c) => `${c.label}（推荐迁移）`),
         candidates.map(() => true),
+        undefined,
+        "迁移内容",
       );
       if (indices === null) {
         console.error("cancelled, no changes made");
@@ -410,12 +461,16 @@ async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOn
 
 async function resolveInteractiveCapabilitySelection(source: OnboardAgentSummary, opts: RunOnboardOptions): Promise<CapabilitySelection | undefined> {
   if (opts.json || opts.promptForMigrateCategories || !canUseInteractivePicker()) return undefined;
-  const skills = source.skillNames.length > 0 ? await runSearchMultiSelectPicker(source.skillNames) : [];
+  const skills = source.skillNames.length > 0
+    ? await runSearchMultiSelectPicker(source.skillNames, undefined, "选择要迁移的 Skills（默认全选，推荐先全部保留）")
+    : [];
   if (skills === null) {
     console.error("cancelled, no changes made");
     process.exit(1);
   }
-  const mcpServers = source.mcpServerNames.length > 0 ? await runSearchMultiSelectPicker(source.mcpServerNames) : [];
+  const mcpServers = source.mcpServerNames.length > 0
+    ? await runSearchMultiSelectPicker(source.mcpServerNames, undefined, "选择要迁移的 MCP（默认全选，推荐先全部保留）")
+    : [];
   if (mcpServers === null) {
     console.error("cancelled, no changes made");
     process.exit(1);
@@ -423,24 +478,25 @@ async function resolveInteractiveCapabilitySelection(source: OnboardAgentSummary
   return { skills: skills ?? "none", mcpServers: mcpServers ?? "none", memories: "all", mcpRoutes: {}, runtimeDelivery: {} };
 }
 
-async function resolveInteractiveMcpRoutes(agentIds: readonly AgentId[], serverNames: readonly string[]): Promise<CapabilitySelection["mcpRoutes"]> {
+async function resolveInteractiveMcpRoutes(agentIds: readonly AgentId[], serverNames: readonly string[], hubConfigured: boolean): Promise<CapabilitySelection["mcpRoutes"]> {
   const routes: CapabilitySelection["mcpRoutes"] = {};
   for (const agent of agentIds) {
+    const options = interactiveMcpRouteOptions(hubConfigured);
     const modeIndex = await runSingleSelectPicker(
-      ["direct", "gateway", "hub"],
+      options,
       undefined,
-      `选择 ${agent} 的 MCP 路由模式`,
+      `选择 ${agent} 的 MCP 模式（推荐 Gateway：Trellis 本机统一托管；Hub 只用于已有外部服务）`,
     );
     if (modeIndex === null) {
       console.error("cancelled, no changes made");
       process.exit(1);
     }
-    const mode = (["direct", "gateway", "hub"] as const)[modeIndex];
+    const mode = options[modeIndex].mode;
     if (mode === "hub") {
       routes[agent] = { mode };
       continue;
     }
-    const selected = await runSearchMultiSelectPicker(serverNames, undefined, `选择 ${agent} 的 MCP 服务器`);
+    const selected = await runSearchMultiSelectPicker(serverNames, undefined, `选择 ${agent} 的 MCP 服务器（默认全选，推荐先全部启用）`);
     if (selected === null) {
       console.error("cancelled, no changes made");
       process.exit(1);
@@ -539,6 +595,29 @@ function validateMemoryOption(memory: string | undefined): { value?: "on" | "off
   return { value: memory };
 }
 
+function preflightMcpMode(mode: McpMode | undefined): string | undefined {
+  if (!mode) return undefined;
+  if (mode.kind === "hub") {
+    try {
+      const parsed = new URL(mode.url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return `Hub URL must use http:// or https:// (got "${mode.url}")`;
+      }
+    } catch {
+      return `Hub URL is not valid: "${mode.url}"`;
+    }
+    return undefined;
+  }
+  if (mode.kind === "gateway") {
+    try {
+      execFileSync("which", ["trellis"], { stdio: "ignore" });
+    } catch {
+      return "gateway mode requires the `trellis` executable to be available on PATH before any Agent config is changed";
+    }
+  }
+  return undefined;
+}
+
 function mcpModeValueOf(mcp: { gateway?: { enabled: boolean }; hub?: { url: string } }): McpModeValue {
   if (mcp.gateway?.enabled) return "gateway";
   if (mcp.hub) return "hub";
@@ -597,6 +676,25 @@ function memoryStatusLine(memory: { current: "on" | "off"; previous: "on" | "off
   return `memory: ${memory.current} (changed from ${memory.previous})`;
 }
 
+async function confirmMcpModeChange(
+  previous: "direct" | "hub" | "gateway",
+  next: "direct" | "hub" | "gateway",
+  agents: readonly AgentId[],
+  opts: RunOnboardOptions,
+): Promise<boolean> {
+  if (opts.promptForModeChange) return opts.promptForModeChange(previous, next, agents);
+  if (!canUseInteractivePicker()) return true;
+  const affected = agents.length > 0 ? agents.join(", ") : "(none)";
+  console.error(`MCP 模式将从 ${previous} 切换到 ${next}，影响托管 Agent：${affected}`);
+  if (next === "hub") console.error("Hub 模式会让 Agent 连接外部 HTTP MCP 服务；Trellis 不会自动部署该服务。");
+  if (next === "gateway") console.error("Gateway 模式会由 Trellis 在本机运行 MCP 入口并托管上游连接。");
+  const choice = await runSingleSelectPicker([
+    "取消切换（推荐：保持当前模式）",
+    "确认切换",
+  ], undefined, "确认 MCP 模式切换");
+  return choice === 1;
+}
+
 async function resolveManagedAgents(
   opts: RunOnboardOptions,
   summary: OnboardAgentSummary[],
@@ -623,8 +721,12 @@ function readManagedYaml(homeDir: string): AgentId[] {
   return loadCanonicalSource(homeDir).managedAgents as AgentId[];
 }
 
-function writeManagedYaml(homeDir: string, agents: AgentId[]): void {
-  writeFileSync(join(homeDir, ".trellis", "managed.yaml"), `agents: [${agents.join(", ")}]\n`);
+function writeManagedYaml(homeDir: string, agents: AgentId[], backup?: BackupSession): void {
+  const content = `agents: [${agents.join(", ")}]\n`;
+  const path = join(homeDir, ".trellis", "managed.yaml");
+  if (existsSync(path) && readFileSync(path, "utf-8") === content) return;
+  if (backup) backup.writeFile(path, content);
+  else writeFileSync(path, content);
 }
 
 export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<OnboardResult> {
@@ -656,6 +758,10 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   const memoryValidation = validateMemoryOption(opts.memory);
   if ("error" in memoryValidation) {
     return { summary, refusal: memoryValidation.error, verdict: [] };
+  }
+  const modePreflightError = preflightMcpMode(mcpModeValidation.mode);
+  if (modePreflightError) {
+    return { summary, refusal: modePreflightError, verdict: [] };
   }
 
   const sourceCandidates = present.filter((candidate) => hasSelectedSourceContent(candidate, capabilitySelection));
@@ -735,17 +841,9 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   }
 
   const managedAgents = [...new Set([...alreadyManaged, ...resolvedNew])];
-  if (!opts.dryRun) {
-    writeManagedYaml(homeDir, managedAgents);
-  }
 
-  // MCP mode + memory-server resolution (design.md D5/D11) — grouped
-  // with managed-set above as "how is this machine configured"
-  // decisions resolved once per run, ahead of migrate/sync/mcp-sync/
-  // memory-sync below, which act on the result. Both flags were already
-  // validated before managed-set was even touched; omitting either
-  // resolves to "no change requested" here too (design.md D1/D12) — no
-  // writer call at all, on either a first run or a later one.
+  // Resolve all mode/memory decisions before opening the transaction. A
+  // refusal here must leave both canonical and managed state untouched.
   const canonicalForModeAndMemory = loadCanonicalSource(homeDir);
   const sourceSummaryForInventory = source ? summary.find((item) => item.agent === source) : undefined;
   const inventory = sourceSummaryForInventory
@@ -758,9 +856,6 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   const mcpModeResolution = resolveMcpModeChange(mcpModeValidation.mode, mcpModeValueOf(canonicalForModeAndMemory.mcp));
   const mcpMode = { current: mcpModeResolution.current, previous: mcpModeResolution.previous, changed: mcpModeResolution.changed };
   const serversYamlPath = join(homeDir, ".trellis", "mcp", "servers.yaml");
-  if (mcpModeResolution.write && !opts.dryRun) {
-    writeMcpModeYaml(serversYamlPath, mcpModeResolution.write);
-  }
 
   const memoryConfiguredBefore = canonicalForModeAndMemory.mcp.servers[MEMORY_SERVER_NAME] !== undefined;
   const memoryResolution = resolveMemoryToggle(memoryValidation.value, memoryConfiguredBefore, canonicalForModeAndMemory.mcp.knownHostInjected);
@@ -768,11 +863,32 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     return { summary, source, sourceReason, managedAgents, mcpMode, refusal: memoryResolution.refusal, verdict: [] };
   }
   const memory = { current: memoryResolution.current, previous: memoryResolution.previous, changed: memoryResolution.changed };
+
+  if (
+    !opts.dryRun
+    && !opts.json
+    && mcpMode.changed
+    && (opts.isTTY ?? process.stdin.isTTY === true)
+    && (opts.promptForModeChange || canUseInteractivePicker())
+  ) {
+    const accepted = await confirmMcpModeChange(mcpMode.previous, mcpMode.current, managedAgents, opts);
+    if (!accepted) return { summary, source, sourceReason, managedAgents, mcpMode, memory, refusal: "MCP mode change cancelled — current mode was preserved", verdict: [] };
+  }
+
+  // One transaction for the entire onboarding run, including canonical
+  // state. A dry run opens no session and a no-op session creates no backup.
+  const backupSession = opts.dryRun ? undefined : openBackupSession(homeDir, "onboard");
+  if (!opts.dryRun) {
+    writeManagedYaml(homeDir, managedAgents, backupSession);
+  }
+  if (mcpModeResolution.write && !opts.dryRun) {
+    writeMcpModeYaml(serversYamlPath, mcpModeResolution.write, backupSession);
+  }
   if (memory.changed && !opts.dryRun) {
     if (memory.current === "on") {
-      upsertServerYaml(serversYamlPath, MEMORY_SERVER_NAME, DEFAULT_MEMORY_SERVER_DEF);
+      upsertServerYaml(serversYamlPath, MEMORY_SERVER_NAME, DEFAULT_MEMORY_SERVER_DEF, backupSession);
     } else {
-      removeServerYaml(serversYamlPath, MEMORY_SERVER_NAME);
+      removeServerYaml(serversYamlPath, MEMORY_SERVER_NAME, backupSession);
     }
   }
 
@@ -786,7 +902,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     if (categories.length > 0) {
       migratePlan = filterMigratePlan(await collectMigratePlan(source, homeDir, categories), interactiveSelection);
       if (!opts.dryRun) {
-        applyMigratePlan(migratePlan, homeDir);
+        applyMigratePlan(migratePlan, homeDir, backupSession);
       }
     } else {
       migrateSkipped = "migrate skipped — no categories selected";
@@ -806,7 +922,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     && availableMcpNames.length > 0
     && canUseInteractivePicker();
   if (!requestedRoutes && shouldPromptForRoutes) {
-    requestedRoutes = await resolveInteractiveMcpRoutes(managedAgents, availableMcpNames);
+    requestedRoutes = await resolveInteractiveMcpRoutes(managedAgents, availableMcpNames, currentMcpAfterMigration.hub !== undefined);
   }
 
   const requestedRuntimeDelivery = capabilitySelection?.runtimeDelivery;
@@ -825,18 +941,16 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
       ...(delivery ? { runtime: { ...(currentMcp.runtime ?? {}), delivery } } : {}),
     };
     if (!opts.dryRun && requestedRoutes && Object.keys(requestedRoutes).length > 0) {
-      writeMcpRoutesYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), routes ?? {});
+      writeMcpRoutesYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), routes ?? {}, backupSession);
     }
     if (!opts.dryRun && requestedRuntimeDelivery && Object.keys(requestedRuntimeDelivery).length > 0) {
-      writeMcpRuntimeDeliveryYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), delivery ?? {});
+      writeMcpRuntimeDeliveryYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), delivery ?? {}, backupSession);
     }
   }
 
-  // One session for the whole chained run (trellis-backup-rollback) —
-  // `--dry-run` opens none, there's nothing either stage will write.
-  // Neither collectSyncReport nor collectMcpSyncReport finalizes a
-  // session they were handed; only this caller does, once, after both.
-  const backupSession = opts.dryRun ? undefined : openBackupSession(homeDir, "onboard");
+  // The same session now covers canonical and native writes. Neither
+  // collectSyncReport nor collectMcpSyncReport finalizes it; this caller
+  // finalizes once after every verification stage has completed.
   logProgress(opts, "sync");
   const syncReport = await collectSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession });
   // The self-verification re-plan (design.md D2b): immediately after a
@@ -850,8 +964,6 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   logProgress(opts, "mcp sync");
   const mcpSyncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession, mcp: mcpSyncOverride });
   const mcpSyncVerification = opts.dryRun ? undefined : await collectMcpSyncReport({ homeDir, dryRun: true, managedAgents });
-  backupSession?.finalize();
-
   // Independent of `managedAgents` — the shared memory server is not
   // per-agent (design.md D4, trellis-onboard-mcp-memory), unlike
   // sync/mcp-sync above. Runs unconditionally once reached; an
@@ -861,7 +973,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   const selectedMemoryNames = capabilitySelection ? resolveSelectedNames(capabilitySelection.memories, loadCanonicalSource(homeDir).memories.map((memory) => memory.name)) : undefined;
   const memorySyncResult = collectMemorySyncResult(homeDir, selectedMemoryNames);
   if (!opts.dryRun) {
-    applyMemorySync(memorySyncResult);
+    applyMemorySync(memorySyncResult, backupSession);
   }
 
   // Read-only, no dryRun concept — same report either way, run last since
@@ -893,6 +1005,22 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     ...normalizeDoctorVerdict(doctorReport, managedAgents),
   ];
 
+  let rollback: RollbackReport | undefined;
+  if (!opts.dryRun && backupSession?.hasOperations()) {
+    backupSession.finalize();
+    // Doctor intentionally scans the whole machine, including unmanaged
+    // Agents and pre-existing cross-agent drift. It is informative health
+    // state, not proof that this transaction failed. Roll back only stages
+    // whose writes/on-write verification belong to this onboard run.
+    const transactionBlocked = verdict.some((item) => item.severity === "blocked" && !item.stage.startsWith("doctor"));
+    if (transactionBlocked) {
+      rollback = await collectRollbackPlan(homeDir, backupSession.runId);
+      await applyRollbackPlan(homeDir, rollback.runId, loadManifest(homeDir, rollback.runId), rollback.items);
+    }
+  } else {
+    backupSession?.finalize();
+  }
+
   return {
     summary,
     inventory,
@@ -909,6 +1037,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     memorySyncResult,
     secretsAuditReport,
     doctorReport,
+    rollback,
     mcpMode,
     memory,
     verdict,
@@ -926,7 +1055,10 @@ async function offerToApply(opts: RunOnboardOptions): Promise<boolean> {
   if (opts.promptToApply) return opts.promptToApply();
   if (!canUseInteractivePicker()) return false;
   console.error("");
-  const choice = await runSingleSelectPicker(["No, don't apply", "Yes, apply now"]);
+  const choice = await runSingleSelectPicker([
+    "暂不应用（推荐：先检查上面的预览）",
+    "立即应用",
+  ], undefined, "预览已完成，是否写入配置？");
   return choice === 1;
 }
 
@@ -1014,6 +1146,10 @@ function printResult(result: OnboardResult, dryRun: boolean, showStatusLine: boo
   // already uses.
   if (showStatusLine && result.mcpMode) {
     console.log(mcpModeStatusLine(result.mcpMode));
+    if (result.mcpMode.changed) {
+      const affected = result.managedAgents && result.managedAgents.length > 0 ? result.managedAgents.join(", ") : "(none)";
+      console.log(`mode transition impact: ${result.mcpMode.previous} → ${result.mcpMode.current}; managed agents: ${affected}`);
+    }
   }
   if (showStatusLine && result.memory) {
     console.log(memoryStatusLine(result.memory));
@@ -1057,5 +1193,12 @@ function printResult(result: OnboardResult, dryRun: boolean, showStatusLine: boo
     // own writes took effect (design.md D2b).
     console.log("\nhealth scan (trellis doctor)");
     printDoctorReport(result.doctorReport);
+  }
+
+  if (result.rollback) {
+    console.log("\nautomatic rollback");
+    const restored = result.rollback.items.filter((item) => item.action === "restore").length;
+    const conflicts = result.rollback.items.filter((item) => item.action === "conflict").length;
+    console.log(`↩️  restored ${restored} path(s), ${conflicts} rollback conflict(s); backup: ${result.rollback.runId}`);
   }
 }

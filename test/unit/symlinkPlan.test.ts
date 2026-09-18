@@ -85,6 +85,28 @@ test("remove: a Trellis-managed symlink no longer in desired is planned for remo
   assert.equal(plan[0].action, "remove");
 });
 
+test("repair: a dangling canonical link remains repairable", () => {
+  const { canonicalRoot, rootDir } = scratch();
+  const target = join(canonicalRoot, "foo");
+  mkdirSync(target);
+  symlinkSync(join(canonicalRoot, "deleted"), join(rootDir, "foo"));
+  const plan = planSymlinks({ rootDir, desired: [{ name: "foo", target }], canonicalRoot, kind: "skill" });
+  assert.equal(plan[0].action, "create");
+  assert.equal(plan[0].linkTarget, target);
+});
+
+test("conflict: a dangling foreign link is not treated as an absent entry", async () => {
+  const { base, canonicalRoot, rootDir } = scratch();
+  const target = join(canonicalRoot, "foo");
+  const foreignTarget = join(base, "missing-user-owned-file");
+  mkdirSync(target);
+  symlinkSync(foreignTarget, join(rootDir, "foo"));
+  const plan = planSymlinks({ rootDir, desired: [{ name: "foo", target }], canonicalRoot, kind: "skill" });
+  assert.equal(plan[0].action, "conflict");
+  await applySymlinkPlan(plan, openBackupSession(base, "test-foreign-dangling"));
+  assert.equal(readlinkSync(join(rootDir, "foo")), foreignTarget);
+});
+
 test("remove: a BROKEN symlink (canonical target already deleted) is still planned for removal", () => {
   // Regression test: realpath() throws on a broken symlink, so an
   // ownership check based on realpath silently skips exactly the case

@@ -173,7 +173,21 @@ the hub instead — meaningfully less code and one fewer class of failure
 the project that is an agent runtime extension, not a config generator,
 regardless of hub mode.
 
+The pi bridge symlink follows the currently executing Trellis installation.
+When switching from a checkout to a global package (or between installation
+roots), sync can repair an outside-root link only if its target ends in
+`dist/pi-bridge/bundle.js` and its bytes match the current bridge bundle.
+The repair is backed up, including the old symlink target. Modified, unrelated,
+or dangling outside-root links remain conflicts; this exception applies only
+to the bridge extension, not to Skill or instruction symlinks.
+
 ## MCP hub mode
+
+For onboarding, the short rule is: **Gateway is the recommended local
+Trellis mode; Hub is for an already-running external service**. Gateway is a
+local stdio subprocess that Trellis starts for the Agent session. Hub is an
+HTTP endpoint operated outside this process; Trellis only writes the URL and
+does not deploy, configure, or health-manage that Hub.
 
 Every agent's MCP surface can be either N direct server definitions
 (default) or one static entry pointing at a single HTTP endpoint — `mcp.hub.url`

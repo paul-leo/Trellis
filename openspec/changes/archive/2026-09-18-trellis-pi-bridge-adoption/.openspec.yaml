@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Repair Trellis-created pi bridge links when installation roots change
+  without taking over unrelated symlinks

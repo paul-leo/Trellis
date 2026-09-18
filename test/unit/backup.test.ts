@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { backupsRoot, openBackupSession } from "../../src/lib/backup.js";
+import { applyRollbackPlan, collectRollbackPlan, loadManifest } from "../../src/commands/rollback.js";
 import type { BackupManifest } from "../../src/lib/backup.js";
 
 function scratchHome(): string {
@@ -140,4 +141,19 @@ test("run ids stay in chronological order even when opened within the same milli
     // lexical sort; if this ordering is wrong it restores the wrong run.
     "lexical sort must reproduce creation order, not command-name order",
   );
+});
+
+test("rollback restores repeated writes to one file in reverse order", async () => {
+  const home = scratchHome();
+  const target = join(home, "servers.yaml");
+  writeFileSync(target, "original\n");
+  const session = openBackupSession(home, "onboard");
+  session.writeFile(target, "mode\n");
+  session.writeFile(target, "mode-and-routes\n");
+  session.finalize();
+
+  const [runId] = readdirSync(backupsRoot(home));
+  const report = await collectRollbackPlan(home, runId);
+  await applyRollbackPlan(home, runId, loadManifest(home, runId), report.items);
+  assert.equal(readFileSync(target, "utf-8"), "original\n");
 });

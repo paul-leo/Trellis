@@ -170,7 +170,10 @@ async function restoreOperation(homeDir: string, runId: string, op: BackupOperat
 
 export async function applyRollbackPlan(homeDir: string, runId: string, manifest: BackupManifest, items: RollbackPlanItem[]): Promise<void> {
   const restorePaths = new Set(items.filter((i) => i.action === "restore").map((i) => i.path));
-  for (const op of manifest.operations) {
+  // Restore in reverse write order. A single onboarding transaction may
+  // update servers.yaml several times (mode, memory, routes); replaying
+  // restores forward would leave the file at an intermediate snapshot.
+  for (const op of [...manifest.operations].reverse()) {
     if (!restorePaths.has(op.path)) continue;
     await restoreOperation(homeDir, runId, op);
   }

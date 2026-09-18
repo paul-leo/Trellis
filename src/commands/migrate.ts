@@ -5,7 +5,7 @@
  * plan-then-apply split every adapter already uses.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import * as claudeCodeProbe from "../probes/claude-code.js";
@@ -22,6 +22,7 @@ import { findLiteralSecret } from "../adapters/mcpPlan.js";
 import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsertServerYaml, writeSecretsPolicyExtraction } from "../core/canonical.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpServerDef, SecretsPolicy } from "../core/types.js";
+import type { BackupSession } from "../lib/backup.js";
 
 /** Where a `staticEnv` literal secret's real value goes when
  * `secrets.policy.yaml` doesn't already have its own `env_file`
@@ -393,33 +394,48 @@ export async function collectMigratePlan(agent: AgentId, homeDir: string = homed
  * written under, design.md D11) are looked up and written under
  * separately — they are not, in general, the same string.
  */
-function applyStaticEnvExtraction(agent: AgentId, serverName: string, sourceKey: string, varName: string, targetPath: string, homeDir: string): void {
+function applyStaticEnvExtraction(agent: AgentId, serverName: string, sourceKey: string, varName: string, targetPath: string, homeDir: string, backup?: BackupSession): void {
   const reader = MCP_READERS[agent];
   const realValue = reader?.(homeDir).entries.find((e) => e.name === serverName)?.def.staticEnv?.[sourceKey];
   if (realValue === undefined) return; // source changed between plan and apply; nothing left to extract
 
   if (targetPath === defaultLocalSecretsEnvFilePath(homeDir)) {
-    ensureGitignoreEntry(join(homeDir, ".trellis", ".gitignore"), "mcp/servers.local.env");
+    ensureGitignoreEntry(join(homeDir, ".trellis", ".gitignore"), "mcp/servers.local.env", backup);
   }
-  writeLocalSecretValue(targetPath, varName, realValue);
-  writeSecretsPolicyExtraction(join(homeDir, ".trellis", "secrets.policy.yaml"), { varName, envFilePath: DEFAULT_LOCAL_SECRETS_ENV_FILE_TILDE });
+  writeLocalSecretValue(targetPath, varName, realValue, backup);
+  writeSecretsPolicyExtraction(join(homeDir, ".trellis", "secrets.policy.yaml"), { varName, envFilePath: DEFAULT_LOCAL_SECRETS_ENV_FILE_TILDE }, backup);
 }
 
-export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir()): void {
+function copyDirectoryThroughBackup(sourceDir: string, destDir: string, backup: BackupSession): void {
+  for (const entry of readdirSync(sourceDir)) {
+    const source = join(sourceDir, entry);
+    const dest = join(destDir, entry);
+    if (statSync(source).isDirectory()) {
+      mkdirSync(dest, { recursive: true });
+      copyDirectoryThroughBackup(source, dest, backup);
+    } else {
+      backup.writeFile(dest, readFileSync(source, "utf-8"));
+    }
+  }
+}
+
+export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir(), backup?: BackupSession): void {
   const canonicalRoot = join(homeDir, ".trellis");
   for (const item of plan.items) {
     if (item.action !== "create" && item.action !== "reclassify" && item.action !== "extract-secret") continue;
     if (item.kind === "skill" && item.sourceDir) {
       const dest = join(canonicalRoot, "skills", item.name);
       mkdirSync(dest, { recursive: true });
-      cpSync(item.sourceDir, dest, { recursive: true });
+      if (backup) copyDirectoryThroughBackup(item.sourceDir, dest, backup);
+      else cpSync(item.sourceDir, dest, { recursive: true });
     } else if (item.kind === "instructions" && item.sourceContent !== undefined) {
       mkdirSync(canonicalRoot, { recursive: true });
-      writeFileSync(join(canonicalRoot, "agents.md"), item.sourceContent);
+      if (backup) backup.writeFile(join(canonicalRoot, "agents.md"), item.sourceContent);
+      else writeFileSync(join(canonicalRoot, "agents.md"), item.sourceContent);
     } else if (item.kind === "mcp" && item.mcpDef) {
-      upsertServerYaml(join(canonicalRoot, "mcp", "servers.yaml"), item.name, item.mcpDef);
+      upsertServerYaml(join(canonicalRoot, "mcp", "servers.yaml"), item.name, item.mcpDef, backup);
       if (item.action === "extract-secret" && item.extractVarName && item.extractTargetPath && item.extractSourceKey) {
-        applyStaticEnvExtraction(plan.agent, item.name, item.extractSourceKey, item.extractVarName, item.extractTargetPath, homeDir);
+        applyStaticEnvExtraction(plan.agent, item.name, item.extractSourceKey, item.extractVarName, item.extractTargetPath, homeDir, backup);
       }
     }
   }
@@ -429,7 +445,7 @@ export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir())
   // migrate runs at all, not only on its next brand-new extraction.
   const envFile = loadCanonicalSource(homeDir).secretsPolicy.envFile;
   if (envFile) {
-    ensureShellEnvSource(defaultShellRcPath(homeDir), envFile);
+    ensureShellEnvSource(defaultShellRcPath(homeDir), envFile, backup);
   }
 }
 

@@ -12,6 +12,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { SecretsPolicy } from "../core/types.js";
+import type { BackupSession } from "./backup.js";
 
 const LINE_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
 
@@ -63,7 +64,7 @@ export type WriteLocalSecretOutcome = "created" | "already-present" | "conflict"
  * would be exactly the kind of value-clobbering this whole feature
  * exists to prevent, just relocated to a new file).
  */
-export function writeLocalSecretValue(path: string, name: string, value: string): WriteLocalSecretOutcome {
+export function writeLocalSecretValue(path: string, name: string, value: string, backup?: BackupSession): WriteLocalSecretOutcome {
   const existingContent = existsSync(path) ? readFileSync(path, "utf-8") : "";
   const existing = parseDotenv(existingContent);
   if (Object.hasOwn(existing, name)) {
@@ -71,6 +72,8 @@ export function writeLocalSecretValue(path: string, name: string, value: string)
   }
   mkdirSync(dirname(path), { recursive: true });
   const separator = existingContent.length > 0 && !existingContent.endsWith("\n") ? "\n" : "";
-  appendFileSync(path, `${separator}${name}=${value}\n`);
+  const next = `${existingContent}${separator}${name}=${value}\n`;
+  if (backup) backup.writeFile(path, next);
+  else appendFileSync(path, `${separator}${name}=${value}\n`);
   return "created";
 }

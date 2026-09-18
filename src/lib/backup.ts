@@ -29,10 +29,12 @@ export interface BackupManifest {
 }
 
 export interface BackupSession {
+  readonly runId: string;
   writeFile(path: string, content: string): void;
   createSymlink(path: string, linkTarget: string): Promise<void>;
   repairSymlink(path: string, oldLinkTarget: string, newLinkTarget: string): Promise<void>;
   removeSymlink(path: string, oldLinkTarget: string): Promise<void>;
+  hasOperations(): boolean;
   /** Writes manifest.json. No-op (creates nothing) if zero operations
    * were ever recorded. */
   finalize(): void;
@@ -97,6 +99,7 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
   }
 
   return {
+    runId,
     writeFile(path: string, content: string): void {
       ensureDir();
       const afterHash = sha256(content);
@@ -136,6 +139,10 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
       ensureDir();
       await rm(path, { force: true });
       operations.push({ kind: "symlink-remove", path, beforeLinkTarget: oldLinkTarget });
+    },
+
+    hasOperations(): boolean {
+      return operations.length > 0;
     },
 
     finalize(): void {

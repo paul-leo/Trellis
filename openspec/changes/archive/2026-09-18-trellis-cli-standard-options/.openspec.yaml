@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Make trellis --version/-v and help aliases predictable and side-effect free

@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadCanonicalSource } from "../core/canonical.js";
 import type { McpServerDef } from "../core/types.js";
+import type { BackupSession } from "../lib/backup.js";
 import { parseMemoryGraph, planMemoryExtraction, planMemorySync, renderMemoryGraph, type MemoryExtractionPlan, type MemorySyncPlan } from "../lib/memoryGraph.js";
 
 /** Exported so `onboard` (`trellis onboard --memory on|off`,
@@ -89,10 +90,12 @@ export function collectMemorySyncResult(homeDir: string = homedir(), selectedMem
   return { configured: true, graphPath: lookup.graphPath, plan };
 }
 
-export function applyMemorySync(result: MemorySyncResult): void {
+export function applyMemorySync(result: MemorySyncResult, backup?: BackupSession): void {
   if (!result.configured || !result.plan.nextGraph) return;
   mkdirSync(dirname(result.graphPath), { recursive: true });
-  writeFileSync(result.graphPath, renderMemoryGraph(result.plan.nextGraph));
+  const content = renderMemoryGraph(result.plan.nextGraph);
+  if (backup) backup.writeFile(result.graphPath, content);
+  else writeFileSync(result.graphPath, content);
 }
 
 /**

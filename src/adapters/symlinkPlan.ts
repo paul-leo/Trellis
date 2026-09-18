@@ -5,9 +5,9 @@
  * reused by every adapter rather than reimplemented per agent.
  */
 
-import { existsSync, lstatSync, readdirSync, readlinkSync } from "node:fs";
+import { lstatSync, readdirSync, readlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { isSymlinkTo } from "../lib/fsIdentity.js";
 import { currentLinkTarget, type BackupSession } from "../lib/backup.js";
 import type { AdapterPlanItem } from "../core/adapter.js";
@@ -18,6 +18,13 @@ export interface DesiredSymlink {
   /** Absolute path the symlink should point at (inside `canonicalRoot`). */
   target: string;
 }
+
+/**
+ * A narrowly-scoped escape hatch for artifacts that Trellis can identify
+ * across installation roots. The default ownership rule remains path-based;
+ * callers must opt in explicitly for a particular artifact kind.
+ */
+export type ExistingSymlinkAdoption = (existingTarget: string, desiredTarget: string) => boolean;
 
 function isUnderRoot(path: string, root: string): boolean {
   const normalizedRoot = resolve(root);
@@ -43,8 +50,9 @@ export function planSymlinks(opts: {
   desired: DesiredSymlink[];
   canonicalRoot: string;
   kind: "skill" | "instructions" | "extension";
+  adoptExistingSymlink?: ExistingSymlinkAdoption;
 }): AdapterPlanItem[] {
-  const { rootDir, desired, kind } = opts;
+  const { rootDir, desired, kind, adoptExistingSymlink } = opts;
   const items: AdapterPlanItem[] = [];
   const desiredNames = new Set(desired.map((d) => d.name));
   const canonicalRootResolved = resolve(opts.canonicalRoot);
@@ -56,8 +64,15 @@ export function planSymlinks(opts: {
       continue; // already correct — no-op
     }
 
-    if (existsSync(path)) {
-      const isSymlink = lstatSync(path).isSymbolicLink();
+    // lstat sees dangling links too; existsSync would treat them as absent
+    // and bypass the foreign-link protection below.
+    const existing = lstatSync(path, { throwIfNoEntry: false });
+    if (existing) {
+      const isSymlink = existing.isSymbolicLink();
+      const rawExistingTarget = isSymlink ? readlinkSync(path) : undefined;
+      const resolvedExistingTarget = rawExistingTarget === undefined
+        ? undefined
+        : resolve(dirname(path), rawExistingTarget);
       // A symlink whose stored target resolves outside canonicalRoot is
       // owned by something else (e.g. a user's own dotfile-management
       // setup) — repairing it as if it were a stale Trellis entry would
@@ -65,14 +80,16 @@ export function planSymlinks(opts: {
       // symlink Trellis itself left pointing at a since-removed canonical
       // entry is broken by construction and must still be treated as
       // ours to repair, not thrown out to a conflict by a realpath error.
-      const isForeign = isSymlink && !isUnderRoot(readlinkSync(path), canonicalRootResolved);
+      const isForeign = resolvedExistingTarget !== undefined
+        && !isUnderRoot(resolvedExistingTarget, canonicalRootResolved)
+        && adoptExistingSymlink?.(resolvedExistingTarget, target) !== true;
       if (!isSymlink || isForeign) {
         items.push({
           action: "conflict",
           kind,
           target: path,
           description: isForeign
-            ? `${path} exists as a symlink to ${readlinkSync(path)}, not owned by Trellis — left untouched`
+            ? `${path} exists as a symlink to ${rawExistingTarget}, not owned by Trellis — left untouched`
             : `${path} exists and is not a Trellis-managed symlink — left untouched`,
           remediation: isForeign
             ? `remove the existing symlink at ${path} if you want Trellis to manage it, then re-run sync — otherwise leave it, Trellis will not touch it`

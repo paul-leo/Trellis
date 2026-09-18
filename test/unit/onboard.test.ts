@@ -12,7 +12,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectInitReport } from "../../src/commands/init.js";
-import { collectOnboardPlan, runOnboard } from "../../src/commands/onboard.js";
+import {
+  collectOnboardPlan,
+  interactiveMcpRouteOptions,
+  migrationSourceScore,
+  recommendedMigrationSource,
+  runOnboard,
+} from "../../src/commands/onboard.js";
 
 /** Captures every `console.log` line for the duration of `fn`, restoring
  * the real one afterward even if `fn` throws. */
@@ -105,6 +111,31 @@ function writeMemoryServer(home: string, graphPath: string): void {
 function readManaged(home: string): string {
   return readFileSync(join(home, ".trellis", "managed.yaml"), "utf-8");
 }
+
+test("interactive recommendations: the most populated source is recommended without filtering candidates", () => {
+  const summaries = [
+    { agent: "claude-code" as const, skillCount: 2, mcpServerCount: 1, hasRealInstructions: false },
+    { agent: "codex" as const, skillCount: 1, mcpServerCount: 1, hasRealInstructions: true },
+  ];
+  assert.equal(migrationSourceScore(summaries[0]), 3);
+  assert.equal(migrationSourceScore(summaries[1]), 3);
+  assert.equal(recommendedMigrationSource(summaries), "claude-code", "ties keep the stable discovery order");
+});
+
+test("interactive recommendations: gateway is first and hub is disabled until an external URL exists", () => {
+  const withoutHub = interactiveMcpRouteOptions(false);
+  assert.equal(withoutHub[0].mode, "gateway");
+  assert.match(withoutHub[0].label, /推荐/);
+  assert.match(withoutHub[0].label, /本机统一托管/);
+  assert.match(withoutHub[1].label, /直连/);
+  assert.equal(withoutHub[2].mode, "hub");
+  assert.equal(withoutHub[2].disabled, true);
+  assert.match(withoutHub[2].label, /需要先配置外部 Hub URL/);
+
+  const withHub = interactiveMcpRouteOptions(true);
+  assert.equal(withHub[2].disabled, undefined);
+  assert.match(withHub[2].label, /已有外部 Hub/);
+});
 
 test("zero agents present: install hints for all supported agents, exit 0, no writes beyond init's own bootstrap", async () => {
   const home = scratchHome();
@@ -645,9 +676,25 @@ test("memory sync: a real conflict (colliding non-trellis entity) makes onboard 
   writeMemoryServer(home, graphPath);
   writeFileSync(join(home, ".trellis", "memories", "notes.md"), "canonical content\n");
 
-  const { exitCode } = await runOnboard({ homeDir: home, manage: "none", json: true });
-  assert.equal(exitCode, 1);
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
+  assert.ok(result.verdict.some((item) => item.stage === "memory sync" && item.severity === "blocked"));
   assert.ok(readFileSync(graphPath, "utf-8").includes("not ours"), "the pre-existing entity must survive untouched");
+});
+
+test("transactional onboard: a failed memory enable rolls back the canonical server write", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const graphPath = join(home, ".trellis", "memories", "graph.jsonl");
+  mkdirSync(join(home, ".trellis", "memories"), { recursive: true });
+  writeFileSync(graphPath, `${JSON.stringify({ type: "entity", name: "notes", entityType: "person", observations: ["not ours"] })}\n`);
+  writeFileSync(join(home, ".trellis", "memories", "notes.md"), "canonical content\n");
+
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on" });
+  assert.ok(result.verdict.some((item) => item.stage === "memory sync" && item.severity === "blocked"));
+  assert.ok(result.rollback, "a blocking memory verification must trigger the full onboard rollback");
+  assert.equal(readServersYaml(home).includes("memory:"), false, "the failed memory enable must be rolled back");
+  assert.ok(readFileSync(graphPath, "utf-8").includes("not ours"));
 });
 
 // trellis-onboard-closed-loop: the normalized verdict is the single
@@ -1162,6 +1209,38 @@ test("mcp mode: --mcp-mode hub without --hub-url refuses cleanly, writes nothing
   const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "hub" });
   assert.match(result.refusal ?? "", /--hub-url/);
   assert.equal(readServersYaml(home), before);
+});
+
+test("mcp mode: invalid Hub URL is refused before the transaction opens", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const before = readServersYaml(home);
+  const result = await collectOnboardPlan({ homeDir: home, manage: "none", mcpMode: "hub", hubUrl: "not-a-url" });
+  assert.match(result.refusal ?? "", /Hub URL is not valid/);
+  assert.equal(readServersYaml(home), before);
+  assert.equal(existsSync(join(home, ".trellis", "backups")), false);
+});
+
+test("mcp mode: interactive transition can be cancelled without a write", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const before = readServersYaml(home);
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    manage: "none",
+    mcpMode: "gateway",
+    isTTY: true,
+    promptForModeChange: async (previous, next) => {
+      assert.equal(previous, "direct");
+      assert.equal(next, "gateway");
+      return false;
+    },
+  });
+  assert.match(result.refusal ?? "", /mode change cancelled/);
+  assert.equal(readServersYaml(home), before);
+  assert.equal(existsSync(join(home, ".trellis", "backups")), false);
 });
 
 test("mcp mode: --mcp-mode hub --hub-url writes the hub entry and clears an existing gateway", async () => {

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Reconcile onboarding changes safely without reset, with one backup
+  boundary and automatic rollback on failed verification

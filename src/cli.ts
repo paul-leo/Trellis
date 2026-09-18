@@ -19,6 +19,7 @@ import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
 import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseManageArgs, runManage } from "./commands/manage.js";
 import { runKimi } from "./commands/kimi.js";
+import { TRELLIS_VERSION } from "./lib/cliMetadata.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
 const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "memory", "manage", "kimi", "secrets", "rollback"] as const;
@@ -28,8 +29,15 @@ function printUsage(): void {
 
 Usage:
   trellis <command>
+  trellis --version
+  trellis --help
+
+Options:
+  -v, --version    print the installed Trellis version
+  -h, --help       show this help
 
 Commands:
+  help      Show this help
   onboard   Guided flow: init -> detect agents -> pick a migration source ->
             pick which agents to manage -> migrate -> sync -> mcp sync ->
             secrets audit, in one command. Source (read from) and managed
@@ -44,10 +52,11 @@ Commands:
                                     (required with no terminal to prompt
                                     in, e.g. --json)
               --mcp-mode <direct|hub|gateway>
-                                    change the MCP mode; omit to leave
-                                    whatever's already configured
-                                    untouched (never prompted)
-              --hub-url <url>       required with --mcp-mode hub
+                                    direct = Agent 分别直连；gateway =
+                                    Trellis 本机统一托管（推荐）；hub =
+                                    连接已有的外部 MCP Hub
+              --hub-url <url>       required with --mcp-mode hub; Trellis
+                                    does not deploy an external Hub
               --gateway-agents <ids>
                                     optional with --mcp-mode gateway;
                                     omit for every managed agent
@@ -174,10 +183,24 @@ Commands:
 See docs/roadmap.md for what's built vs. planned.`);
 }
 
+function printVersion(): void {
+  console.log(TRELLIS_VERSION);
+}
+
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
 
   if (!command || command === "--help" || command === "-h") {
+    printUsage();
+    return;
+  }
+
+  if (command === "--version" || command === "-v") {
+    printVersion();
+    return;
+  }
+
+  if (command === "help") {
     printUsage();
     return;
   }
@@ -194,7 +217,7 @@ async function main(argv: string[]): Promise<void> {
   // sync --help`) must never fall through to actually running the command
   // it was asking about (real incident: `--help` isn't a flag any branch
   // recognizes, so it silently ran a real, non-dry-run `mcp sync`).
-  if (rest.includes("--help") || rest.includes("-h")) {
+  if (command !== "kimi" && (rest.includes("--help") || rest.includes("-h"))) {
     printUsage();
     return;
   }

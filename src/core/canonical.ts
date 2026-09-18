@@ -11,6 +11,7 @@ import { basename, dirname, join } from "node:path";
 import { isMap, isSeq, parse as parseYaml, parseDocument } from "yaml";
 import type { AgentId, AgentProfile, CapabilityDelivery, CanonicalSource, GatewayConfig, McpConfig, McpRoute, McpRouteMode, McpRuntimeConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
 import { ALL_AGENTS } from "./types.js";
+import type { BackupSession } from "../lib/backup.js";
 
 interface ScopeYaml {
   skills?: Record<string, AgentId[]>;
@@ -203,7 +204,13 @@ function forceBlockStyle(node: unknown): void {
   }
 }
 
-export function upsertServerYaml(path: string, name: string, def: McpServerDef): ServersYamlWriteResult {
+function persistText(path: string, content: string, backup?: BackupSession): void {
+  if (existsSync(path) && readFileSync(path, "utf-8") === content) return;
+  if (backup) backup.writeFile(path, content);
+  else writeFileSync(path, content);
+}
+
+export function upsertServerYaml(path: string, name: string, def: McpServerDef, backup?: BackupSession): ServersYamlWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
   }
@@ -216,13 +223,13 @@ export function upsertServerYaml(path: string, name: string, def: McpServerDef):
   doc.setIn(["servers", name], toServerDefYaml(def));
   forceBlockStyle(doc.get("servers", true));
   forceBlockStyle(doc.getIn(["servers", name], true));
-  writeFileSync(path, doc.toString());
+  persistText(path, doc.toString(), backup);
   return { ok: true };
 }
 
 /** Inverse of `upsertServerYaml` — same preservation guarantee, same
  * refusal posture on a missing/unparseable file. */
-export function removeServerYaml(path: string, name: string): ServersYamlWriteResult {
+export function removeServerYaml(path: string, name: string, backup?: BackupSession): ServersYamlWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
   }
@@ -233,7 +240,7 @@ export function removeServerYaml(path: string, name: string): ServersYamlWriteRe
     return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
   }
   doc.deleteIn(["servers", name]);
-  writeFileSync(path, doc.toString());
+  persistText(path, doc.toString(), backup);
   return { ok: true };
 }
 
@@ -255,7 +262,7 @@ export type McpMode = { kind: "direct" } | { kind: "hub"; url: string } | { kind
  * starter file). Selecting one mode always clears the other two
  * (design.md D3) — never left for the caller to remember.
  */
-export function writeMcpModeYaml(path: string, mode: McpMode): ServersYamlWriteResult {
+export function writeMcpModeYaml(path: string, mode: McpMode, backup?: BackupSession): ServersYamlWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
   }
@@ -286,7 +293,7 @@ export function writeMcpModeYaml(path: string, mode: McpMode): ServersYamlWriteR
       forceBlockStyle(doc.get("gateway", true));
       break;
   }
-  writeFileSync(path, doc.toString());
+  persistText(path, doc.toString(), backup);
   return { ok: true };
 }
 
@@ -294,7 +301,7 @@ export type McpRoutesWriteResult = ServersYamlWriteResult;
 
 /** Writes explicit per-agent routes while preserving legacy hub/gateway
  * shorthand. An empty route map removes the optional key. */
-export function writeMcpRoutesYaml(path: string, routes: Partial<Record<AgentId, McpRoute>>): McpRoutesWriteResult {
+export function writeMcpRoutesYaml(path: string, routes: Partial<Record<AgentId, McpRoute>>, backup?: BackupSession): McpRoutesWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
   }
@@ -313,13 +320,13 @@ export function writeMcpRoutesYaml(path: string, routes: Partial<Record<AgentId,
     doc.set("routes", serialized);
     forceBlockStyle(doc.get("routes", true));
   }
-  writeFileSync(path, doc.toString());
+  persistText(path, doc.toString(), backup);
   return { ok: true };
 }
 
 /** Writes per-agent capability delivery preferences into servers.yaml.
  * Omitted entries continue to use the native default. */
-export function writeMcpRuntimeDeliveryYaml(path: string, delivery: Partial<Record<AgentId, CapabilityDelivery>>): ServersYamlWriteResult {
+export function writeMcpRuntimeDeliveryYaml(path: string, delivery: Partial<Record<AgentId, CapabilityDelivery>>, backup?: BackupSession): ServersYamlWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: path + " does not exist — run trellis init first" };
   }
@@ -339,7 +346,7 @@ export function writeMcpRuntimeDeliveryYaml(path: string, delivery: Partial<Reco
     forceBlockStyle(doc.get("runtime", true));
     forceBlockStyle(doc.getIn(["runtime", "delivery"], true));
   }
-  writeFileSync(path, doc.toString());
+  persistText(path, doc.toString(), backup);
   return { ok: true };
 }
 
@@ -369,7 +376,7 @@ export type SecretsPolicyWriteResult = { ok: true } | { ok: false; error: string
  * `varName` to `allowed_vars` only if not already present (dedup, same
  * "already there is a no-op" rule every other Trellis writer follows).
  */
-export function writeSecretsPolicyExtraction(path: string, extraction: { varName: string; envFilePath: string }): SecretsPolicyWriteResult {
+export function writeSecretsPolicyExtraction(path: string, extraction: { varName: string; envFilePath: string }, backup?: BackupSession): SecretsPolicyWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };
   }
@@ -390,7 +397,7 @@ export function writeSecretsPolicyExtraction(path: string, extraction: { varName
     doc.set("allowed_vars", [...currentAllowedVars, extraction.varName]);
     forceBlockStyle(doc.get("allowed_vars", true));
   }
-  writeFileSync(path, doc.toString());
+  persistText(path, doc.toString(), backup);
   return { ok: true };
 }
 
@@ -404,12 +411,12 @@ export function writeSecretsPolicyExtraction(path: string, extraction: { varName
  * init`'s own bootstrap, so a machine that never extracts a secret never
  * gains this file at all.
  */
-export function ensureGitignoreEntry(gitignorePath: string, line: string): void {
+export function ensureGitignoreEntry(gitignorePath: string, line: string, backup?: BackupSession): void {
   const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
   const lines = existing.split("\n").map((l) => l.trim());
   if (lines.includes(line)) return;
   const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-  writeFileSync(gitignorePath, `${existing}${separator}${line}\n`);
+  persistText(gitignorePath, `${existing}${separator}${line}\n`, backup);
 }
 
 const SHELL_ENV_SOURCE_MARKER = "# >>> trellis mcp secrets >>>";
@@ -427,13 +434,13 @@ const SHELL_ENV_SOURCE_END_MARKER = "# <<< trellis mcp secrets <<<";
  * lines `parseDotenv` already expects, so that format never needs an
  * `export` prefix of its own.
  */
-export function ensureShellEnvSource(rcPath: string, envFilePath: string): void {
+export function ensureShellEnvSource(rcPath: string, envFilePath: string, backup?: BackupSession): void {
   const existing = existsSync(rcPath) ? readFileSync(rcPath, "utf-8") : "";
   if (existing.includes(SHELL_ENV_SOURCE_MARKER)) return;
   const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
   const block = `${SHELL_ENV_SOURCE_MARKER}\nif [ -f "${envFilePath}" ]; then\n  set -a\n  source "${envFilePath}"\n  set +a\nfi\n${SHELL_ENV_SOURCE_END_MARKER}\n`;
   mkdirSync(dirname(rcPath), { recursive: true });
-  writeFileSync(rcPath, `${existing}${separator}${block}`);
+  persistText(rcPath, `${existing}${separator}${block}`, backup);
 }
 
 /** `undefined` if the name has no entry in scope.yaml's map — "shared with
