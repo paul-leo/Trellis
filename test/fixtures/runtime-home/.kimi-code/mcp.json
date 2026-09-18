@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kimi-user-owned": {
+      "command": "node",
+      "args": ["/fixtures/sample-mcp-server.js"]
+    }
+  }
+}

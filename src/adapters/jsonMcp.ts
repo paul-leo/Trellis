@@ -35,6 +35,8 @@ export function renderJsonServerEntry(def: McpServerDef): Record<string, unknown
   return entry;
 }
 
+export type JsonMcpEntryRenderer = (def: McpServerDef, name: string) => Record<string, unknown>;
+
 export function planJsonMcp(opts: {
   configPath: string;
   parsed: Record<string, unknown> | undefined;
@@ -47,14 +49,16 @@ export function planJsonMcp(opts: {
    * pass `{}`) to get today's create/repair/conflict-only behavior with
    * zero removal candidates. */
   ownership?: Record<string, unknown>;
+  render?: JsonMcpEntryRenderer;
 }): AdapterPlanItem[] {
   const { configPath, parsed, mcp, agentId, managedAgents, policy, ownership } = opts;
+  const render = opts.render ?? ((def, _name) => renderJsonServerEntry(def));
   const { desired, conflicts } = resolveMcpPlan(agentId, mcp, managedAgents, policy);
   const existingServers = (parsed?.mcpServers as Record<string, unknown> | undefined) ?? {};
 
   const items: AdapterPlanItem[] = [];
   for (const { name, def } of desired) {
-    const rendered = renderJsonServerEntry(def);
+    const rendered = render(def, name);
     const current = existingServers[name];
     if (deepEqual(current, rendered)) {
       continue; // already correct — no-op
@@ -94,7 +98,7 @@ export function planJsonMcp(opts: {
  * file didn't exist) and deletes every `"remove"` item's key, returning
  * the object to stringify — every sibling top-level key on `parsed` is
  * spread through untouched. */
-export function applyJsonMcp(parsed: Record<string, unknown> | undefined, items: AdapterPlanItem[]): Record<string, unknown> {
+export function applyJsonMcp(parsed: Record<string, unknown> | undefined, items: AdapterPlanItem[], render: JsonMcpEntryRenderer = (def, _name) => renderJsonServerEntry(def)): Record<string, unknown> {
   const base = parsed ?? {};
   const existingServers = (base.mcpServers as Record<string, unknown> | undefined) ?? {};
   const mergedServers = { ...existingServers };
@@ -102,7 +106,7 @@ export function applyJsonMcp(parsed: Record<string, unknown> | undefined, items:
   for (const item of items) {
     if (item.kind !== "mcp") continue;
     if (item.action === "create" && item.mcpWrite) {
-      mergedServers[item.mcpWrite.name] = renderJsonServerEntry(item.mcpWrite.def);
+      mergedServers[item.mcpWrite.name] = render(item.mcpWrite.def, item.mcpWrite.name);
     } else if (item.action === "remove" && item.mcpRemove) {
       delete mergedServers[item.mcpRemove.name];
     }

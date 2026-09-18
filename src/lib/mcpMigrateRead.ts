@@ -144,6 +144,10 @@ export function readKiroMcpDefs(homeDir: string): McpMigrateReadResult {
   return readRichJsonMcpDefs(join(homeDir, ".kiro", "settings", "mcp.json"));
 }
 
+export function readKimiCodeMcpDefs(homeDir: string): McpMigrateReadResult {
+  return readRichJsonMcpDefs(join(homeDir, ".kimi-code", "mcp.json"));
+}
+
 export interface CodexMcpEntryRich {
   name: string;
   enabled: boolean;

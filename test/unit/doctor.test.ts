@@ -155,7 +155,7 @@ test("collectDoctorReport: an empty scratch home reports every agent absent, nev
 
   const report = await collectDoctorReport(home);
 
-  assert.equal(report.snapshots.length, 4);
+  assert.equal(report.snapshots.length, 5);
   for (const snapshot of report.snapshots) {
     assert.equal(snapshot.present, false, `${snapshot.agent} must not be present — an empty scratch home has none of its config files`);
   }
@@ -166,5 +166,5 @@ test("collectDoctorReport: homeDir defaults to the real ~ — the same seam ever
   // only that omitting homeDir doesn't throw and resolves against a real
   // path, matching every probe's own `homeDir: string = homedir()` default.
   const report = await collectDoctorReport();
-  assert.equal(report.snapshots.length, 4);
+  assert.equal(report.snapshots.length, 5);
 });

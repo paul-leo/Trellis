@@ -7,13 +7,14 @@
 
 export type Transport = "stdio" | "http" | "sse";
 
-export type AgentId = "claude-code" | "codex" | "kiro" | "pi";
+export type AgentId = "claude-code" | "codex" | "kiro" | "pi" | "kimi-code";
 
 export const ALL_AGENTS: readonly AgentId[] = [
   "claude-code",
   "codex",
   "kiro",
   "pi",
+  "kimi-code",
 ];
 
 /**

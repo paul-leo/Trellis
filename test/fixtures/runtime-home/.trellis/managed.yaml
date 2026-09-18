@@ -1,1 +1,1 @@
-agents: [claude-code, codex, kiro, pi]
+agents: [claude-code, codex, kiro, pi, kimi-code]

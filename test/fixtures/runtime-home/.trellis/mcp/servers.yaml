@@ -49,6 +49,9 @@ routes:
   pi:
     mode: direct
     servers: [shared-tools]
+  kimi-code:
+    mode: direct
+    servers: [shared-tools]
 
 runtime:
   delivery:
@@ -56,3 +59,4 @@ runtime:
     codex: mcp
     kiro: native
     pi: mcp
+    kimi-code: mcp

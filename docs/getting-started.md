@@ -15,7 +15,7 @@ npm install -g agent-trellis
 $ trellis onboard
 ```
 
-Runs `init`, detects which of Claude Code/Codex/Kiro/pi are on this machine,
+Runs `init`, detects which of Claude Code/Codex/Kiro/pi/Kimi Code are on this machine,
 then resolves two styled interactive choices and two flag-only ones before running
 `migrate`, `sync`, `mcp sync`, `memory sync`, `secrets audit`, and a final
 health scan — the whole onboarding path, no follow-up commands to type by
@@ -222,9 +222,34 @@ or login state. Cleanup, if desired, is a separate explicit decision.
 This differs deliberately from `onboard --manage`: onboarding remains
 additive so an omitted checkbox cannot silently revoke management.
 
+## Kimi Code Runtime-first
+
+Kimi Code is supported as `kimi-code`. For Runtime-first delivery, configure
+the capability selection with `runtime_delivery: { kimi-code: mcp }`, then
+sync MCP and launch Kimi through Trellis:
+
+```
+trellis manage add kimi-code --dry-run
+trellis mcp sync --dry-run
+trellis kimi -p "search the Trellis skills for the onboarding workflow"
+```
+
+Runtime-only Kimi receives one `trellis-runtime` entry in
+`~/.kimi-code/mcp.json`. `trellis kimi` passes an empty `--skills-dir` for
+that mode, so Kimi does not also discover the shared `~/.agents/skills`
+directory. The canonical SkillProvider and RuntimeMemoryProvider remain the
+source of Skill/Memory content, while selected upstream MCP servers are
+mounted through the same Runtime/Gateway edge.
+
+Kimi's `deferred` MCP field is enabled on the owned Runtime entry to reduce
+initial tool-list context when Kimi's experimental tool-select capability is
+enabled. Runtime correctness does not depend on that optimization. Native
+Kimi delivery remains available with `native` or `both`; those modes do not
+use the empty Skill-root launcher.
+
 ## Two starting points
 
-**You already use one or more of Claude Code, Codex, Kiro, or pi** and have
+**You already use one or more of Claude Code, Codex, Kiro, pi, or Kimi Code** and have
 real skills/instructions in them today. Go to
 [Migrating from an existing agent](#migrating-from-an-existing-agent).
 
@@ -273,7 +298,7 @@ migrate --from claude-code
   [conflict] instructions — canonical agents.md already has different real content — resolve by hand
 ```
 
-`--from` accepts `claude-code`, `codex`, `kiro`, or `pi`. Run it once per
+`--from` accepts `claude-code`, `codex`, `kiro`, `pi`, or `kimi-code`. Run it once per
 agent you actually use — it's independent per agent, order doesn't matter.
 
 Add `--dry-run` to see the plan without writing anything:

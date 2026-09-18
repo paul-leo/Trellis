@@ -18,7 +18,7 @@ required reading for that.
                 │  trellis sync / trellis doctor
         ┌───────┼────────┬─────────────┬──────────────┐
         ▼                ▼             ▼              ▼
-   Claude Code         Codex          Kiro            pi
+   Claude Code         Codex          Kiro            pi          Kimi Code
   (symlink adapter) (incremental   (symlink adapter) (bridge
                      TOML writer)                    extension)
 ```
@@ -371,6 +371,18 @@ state. A future local-graph/OpenViking source can implement the same
 MemoryProvider contract. Memory writes and configuration mutation require
 separate provider designs and explicit user-control rules.
 
+Kimi Code is Runtime-first. Its adapter writes one `trellis-runtime` entry to
+`~/.kimi-code/mcp.json`; it does not copy canonical Skills into
+`~/.kimi-code/skills` when delivery is `mcp`. Use `trellis kimi` for this mode:
+the launcher passes Kimi's documented `--skills-dir` override an empty
+temporary directory, preventing Kimi's automatic `~/.agents/skills` discovery
+from duplicating the Runtime SkillProvider. Kimi's native mode remains
+available when delivery is `native` or `both`.
+
+Kimi's user MCP registry is `~/.kimi-code/mcp.json`; the adapter preserves
+unowned entries and uses the existing MCP ownership ledger for the one entry
+Trellis owns. The Kimi CLI itself remains responsible for login and OAuth.
+
 ## What Trellis explicitly does not build
 
 - A resident MCP gateway daemon. Gateway mode above is a per-session
@@ -465,7 +477,7 @@ scripts/sandbox.sh --migration         # Kiro -> Codex post-migration lab
 scripts/sandbox.sh --management        # steady-state unified management lab
 scripts/sandbox.sh --failure           # hanging-upstream isolation lab
 scripts/sandbox-matrix.sh              # run the full scenario matrix
-scripts/agent-sandbox.sh               # real Codex/Claude/Kiro/pi CLI config smoke
+scripts/agent-sandbox.sh               # real Codex/Claude/Kiro/pi/Kimi CLI config smoke
 ```
 
 `agent-sandbox.sh` 默认使用一次性 HOME。需要进行授权时，显式使用专用
@@ -547,10 +559,10 @@ divergent fixture rather than expanding the baseline one:
 scripts/sandbox.sh --runtime
 ```
 
-This scenario gives Claude Code, Codex, Kiro, and pi different native
+This scenario gives Claude Code, Codex, Kiro, pi, and Kimi Code different native
 skills, instructions, and MCP entries; adds canonical scope, per-agent
 direct/gateway routes, `native`/`mcp`/`both` delivery, a deliberate
 host-injected collision, and canonical memory content. The lab then runs
 native sync, MCP sync, memory sync, secrets audit, and real MCP client
-handshakes against Claude/Codex/pi runtime views. All writes stay inside
+handshakes against Claude/Codex/pi/Kimi runtime views. All writes stay inside
 the container-local HOME.

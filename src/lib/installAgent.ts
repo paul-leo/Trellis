@@ -2,8 +2,9 @@
  * Install-then-manage (trellis-managed-agents design.md D5): selecting a
  * not-yet-present agent into the managed set is itself the authorization
  * to install it, but never silently — one confirmation, then a real
- * `npm install -g <package>` child process. Kiro has no npm package (a
- * desktop download) and is refused before this module is ever reached.
+ * `npm install -g <package>` child process. Kiro and Kimi Code use official
+ * install scripts rather than an npm package and are refused before this
+ * module is ever reached.
  */
 
 import { execFileSync } from "node:child_process";
@@ -13,7 +14,7 @@ import type { AgentId } from "../core/types.js";
 /** Only agents with a real `npm install -g <pkg>` command — Kiro's own
  * `INSTALL_HINTS` entry is a download URL, not a package, and is never
  * looked up here. */
-export const NPM_INSTALLABLE: Record<Exclude<AgentId, "kiro">, string> = {
+export const NPM_INSTALLABLE: Record<Exclude<AgentId, "kiro" | "kimi-code">, string> = {
   "claude-code": "@anthropic-ai/claude-code",
   codex: "@openai/codex",
   pi: "@earendil-works/pi-coding-agent",
@@ -45,13 +46,14 @@ function runInstallReal(pkg: string): void {
 
 export interface ConfirmAndInstallResult {
   installed: boolean;
-  /** False only when the agent has no npm package at all (Kiro) — the
-   * caller refuses this agent with its download URL instead of prompting. */
+  /** False when the agent has no supported npm installation path — the
+   * caller refuses it with its official installation hint instead of
+   * prompting. */
   installable: boolean;
 }
 
 export async function confirmAndInstall(agent: AgentId, opts: ConfirmAndInstallOptions = {}): Promise<ConfirmAndInstallResult> {
-  if (agent === "kiro") {
+  if (agent === "kiro" || agent === "kimi-code") {
     return { installed: false, installable: false };
   }
   const pkg = NPM_INSTALLABLE[agent];

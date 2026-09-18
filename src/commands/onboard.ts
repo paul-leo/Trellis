@@ -22,6 +22,7 @@ import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
+import * as kimiCodeProbe from "../probes/kimi-code.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpConfig } from "../core/types.js";
 import { loadCanonicalSource, removeServerYaml, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml } from "../core/canonical.js";
@@ -60,6 +61,7 @@ const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
   codex: (homeDir) => codexProbe.probe(homeDir),
   kiro: (homeDir) => kiroProbe.probe(homeDir),
   pi: (homeDir) => piProbe.probe(homeDir),
+  "kimi-code": (homeDir) => kimiCodeProbe.probe(homeDir),
 };
 
 export interface OnboardAgentSummary {

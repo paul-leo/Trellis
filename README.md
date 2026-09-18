@@ -3,9 +3,10 @@
 **A single source of capability for every coding agent you run.**
 
 Skills, MCP servers, subagent definitions, shared memory, and secret policy —
-defined once, adapted natively into Claude Code, Codex, Kiro, and the [pi coding
-agent](https://github.com/earendil-works/pi), without drift and without a second
-copy of anything.
+defined once, adapted into Claude Code, Codex, Kiro, pi, and Kimi Code without
+drift and without a second copy of anything. Kimi Code uses the Runtime-first
+path: one `trellis-runtime` MCP entry, with Skills and Memory consumed through
+Trellis providers.
 
 Trellis does not replace any of these agents' native config. It generates and
 verifies each one's native adapter from one canonical source, and refuses to let
@@ -44,7 +45,7 @@ conflict action means, and troubleshooting.
 trellis onboard
 ```
 
-Creates canonical source, detects which of Claude Code/Codex/Kiro/pi are on
+Creates canonical source, detects which of Claude Code/Codex/Kiro/pi/Kimi Code are on
 this machine, then resolves two independent choices: a **migration source**
 (read from — auto-selected if only one present agent has real content,
 prompted with a numbered choice if more than one, skippable if starting

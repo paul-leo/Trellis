@@ -18,9 +18,10 @@ import { runRollback } from "./commands/rollback.js";
 import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
 import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseManageArgs, runManage } from "./commands/manage.js";
+import { runKimi } from "./commands/kimi.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "memory", "manage", "secrets", "rollback"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "memory", "manage", "kimi", "secrets", "rollback"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -152,6 +153,10 @@ Commands:
               writes stop reaching it. Mutations are backup/rollback-enabled.
               --dry-run    preview current -> desired, write nothing
               --json       machine-readable output
+  kimi [args...]
+            Launch Kimi Code. When kimi-code Runtime delivery is \`mcp\`,
+            starts Kimi with an empty --skills-dir so Skills come from
+            trellis-runtime instead of native discovery.
   secrets audit
             Scan each present agent's real MCP config for leaked
             credentials and unexpected env var names
@@ -384,6 +389,11 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     process.exitCode = runManage(parsed).exitCode;
+    return;
+  }
+
+  if (command === "kimi") {
+    process.exitCode = (await runKimi(rest)).exitCode;
     return;
   }
 

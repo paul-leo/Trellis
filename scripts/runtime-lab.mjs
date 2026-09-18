@@ -34,7 +34,7 @@ function read(path) {
 
 console.log("[runtime-lab] sync native projections and extensions");
 const sync = runJson(["sync", "--json"]);
-assert.ok(sync.value.reports?.length === 4, "all four managed agents must be probed");
+assert.ok(sync.value.reports?.length === 5, "all five managed agents must be probed");
 
 console.log("[runtime-lab] sync agent MCP configurations");
 const mcp = runJson(["mcp", "sync", "--json"]);
@@ -49,6 +49,10 @@ assert.equal(claudeConfig.mcpServers["trellis-runtime"].args[0], "mcp-runtime");
 assert.match(read(`${labHome}/.codex/config.toml`), /\[mcp_servers\.trellis-runtime\]/);
 assert.match(read(`${labHome}/.kiro/settings/mcp.json`), /shared-tools/);
 assert.doesNotMatch(read(`${labHome}/.kiro/settings/mcp.json`), /"sentry"/);
+const kimiConfig = JSON.parse(read(`${labHome}/.kimi-code/mcp.json`));
+assert.deepEqual(kimiConfig.mcpServers["kimi-user-owned"], { command: "node", args: ["/fixtures/sample-mcp-server.js"] });
+assert.equal(kimiConfig.mcpServers["trellis-runtime"].deferred, true);
+assert.deepEqual(kimiConfig.mcpServers["trellis-runtime"].args, ["mcp-runtime", "--agent", "kimi-code"]);
 
 console.log("[runtime-lab] sync canonical memory into the shared graph");
 const memory = runJson(["memory", "sync", "--json"]);
@@ -93,5 +97,6 @@ console.log("[runtime-lab] verify agent-specific runtime views");
 await probeRuntime("claude-code", ["shared-tools__echo", "claude-private-tool__echo"], ["codex-private-tool__echo"]);
 await probeRuntime("codex", ["shared-tools__echo", "codex-private-tool__echo"], ["claude-private-tool__echo"]);
 await probeRuntime("pi", ["shared-tools__echo"], ["claude-private-tool__echo", "codex-private-tool__echo"]);
+await probeRuntime("kimi-code", ["shared-tools__echo"], ["claude-private-tool__echo", "codex-private-tool__echo", "kiro-private-tool__echo"]);
 
 console.log("[runtime-lab] PASS: isolated Linux multi-agent runtime scenario");

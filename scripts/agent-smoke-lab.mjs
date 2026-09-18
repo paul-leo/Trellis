@@ -51,4 +51,11 @@ assert.match(kiroMcp.stderr, /not logged in/i);
 console.log("[agent-smoke] verify real pi installation and managed bridge projection");
 run("pi", ["--version"]);
 
-console.log("[agent-smoke] PASS: real Codex and Claude recognize Runtime config; real Kiro correctly gates MCP listing on login; real pi is executable");
+console.log("[agent-smoke] verify real Kimi Code installation and Runtime MCP entry");
+assert.match(run("kimi", ["--version"]), /\S/);
+assert.match(run("kimi", ["doctor"]), /Kimi doctor/);
+const kimiMcp = readFileSync(labHome + "/.kimi-code/mcp.json", "utf8");
+assert.match(kimiMcp, /trellis-runtime/);
+assert.match(kimiMcp, /"deferred"\s*:\s*true/);
+
+console.log("[agent-smoke] PASS: real Codex, Claude, and Kimi recognize Runtime config; real Kiro correctly gates MCP listing on login; real pi is executable");

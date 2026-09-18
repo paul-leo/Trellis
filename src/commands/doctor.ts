@@ -10,6 +10,7 @@ import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
+import * as kimiCodeProbe from "../probes/kimi-code.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { ALL_AGENTS } from "../core/types.js";
@@ -134,6 +135,7 @@ export async function collectDoctorReport(
     { agent: "codex", run: () => codexProbe.probe(homeDir, { probeMcp }) },
     { agent: "kiro", run: () => kiroProbe.probe(homeDir, { probeMcp }) },
     { agent: "pi", run: () => piProbe.probe(homeDir) },
+    { agent: "kimi-code", run: () => kimiCodeProbe.probe(homeDir, { probeMcp }) },
   ];
 
   // One agent erroring must not blank the other three's results.

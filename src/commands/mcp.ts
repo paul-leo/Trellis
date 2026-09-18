@@ -21,6 +21,7 @@ import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
 import { PiAdapter } from "../adapters/pi.js";
+import { KimiCodeAdapter } from "../adapters/kimi-code.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
 
 export interface RunMcpSyncOptions {
@@ -56,6 +57,7 @@ const ADAPTER_FACTORY: Record<AgentId, (homeDir: string) => TrellisAdapter> = {
   codex: (homeDir) => new CodexAdapter(homeDir),
   kiro: (homeDir) => new KiroAdapter(homeDir),
   pi: (homeDir) => new PiAdapter(homeDir),
+  "kimi-code": (homeDir) => new KimiCodeAdapter(homeDir),
 };
 
 /** Only agents in `canonical.managedAgents` — see src/commands/sync.ts's

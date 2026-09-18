@@ -91,7 +91,7 @@ test("agent presence pointers report every present agent, none for absent ones",
   const home = scratchHome();
   const report = await collectInitReport(home);
 
-  assert.equal(report.agents.length, 4);
+  assert.equal(report.agents.length, 5);
   for (const a of report.agents) {
     assert.equal(a.present, false, `expected ${a.agent} not present in an empty scratch home`);
     assert.match(a.message, /not detected/);

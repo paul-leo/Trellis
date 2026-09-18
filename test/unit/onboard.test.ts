@@ -106,7 +106,7 @@ function readManaged(home: string): string {
   return readFileSync(join(home, ".trellis", "managed.yaml"), "utf-8");
 }
 
-test("zero agents present: install hints for all four, exit 0, no writes beyond init's own bootstrap", async () => {
+test("zero agents present: install hints for all supported agents, exit 0, no writes beyond init's own bootstrap", async () => {
   const home = scratchHome();
   const { exitCode } = await runOnboard({ homeDir: home, json: true });
   assert.equal(exitCode, 0);
@@ -123,6 +123,7 @@ test("zero agents present: result carries an install hint per agent", async () =
   assert.ok(result.installHints);
   assert.ok(result.installHints?.["claude-code"].includes("npm install"));
   assert.ok(result.installHints?.pi.includes("npm install"));
+  assert.ok(result.installHints?.["kimi-code"].includes("code.kimi.com"));
   assert.ok(result.installHints?.kiro.includes("http"));
 });
 
@@ -299,7 +300,7 @@ test("managed-set selection: interactive prompt receives already-managed agents 
     isTTY: true,
     manage: undefined,
     promptForManagedAgents: async (candidates, alreadyManaged) => {
-      assert.equal(candidates.length, 4, "all four agents are offered, present or not");
+      assert.equal(candidates.length, 5, "all supported agents are offered, present or not");
       assert.deepEqual(alreadyManaged, ["kiro"]);
       return "pi"; // pi is not present -> triggers install flow
     },
