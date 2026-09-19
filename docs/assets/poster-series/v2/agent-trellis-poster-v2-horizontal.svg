@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1600" viewBox="0 0 1600 1600">
+  <rect width="1600" height="1600" fill="#fcfcfa"/>
+  <g transform="translate(0 350)">
+    <g fill="none" stroke="#e1e6ec" stroke-width="2">
+  <path d="M100 150H1500M100 798H1500"/>
+  <path d="M100 150v18M1500 150v18M100 798v-18M1500 798v-18"/>
+</g>
+<g fill="#3d6fde" opacity="0.82"><rect x="100" y="150" width="42" height="3"/><rect x="1458" y="795" width="42" height="3"/></g>
+    <g transform="translate(60 48) scale(0.42)" fill="none" stroke="#3d6fde" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M16 48h64"/>
+  <path d="M26 34v28M48 20v56M70 34v28"/>
+</g>
+  <text x="112" y="91" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="21" font-weight="700" letter-spacing="2.4" fill="#15202b">AGENT TRELLIS</text>
+  <text x="1540" y="91" text-anchor="end" font-family="Menlo, SFMono-Regular, monospace" font-size="15" font-weight="400" letter-spacing="1.7" fill="#687582">SYSTEM / 01</text>
+    <text x="100" y="196" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="15" font-weight="400" letter-spacing="2" fill="#3d6fde">ONE RUNTIME / EVERY CODE AGENT</text>
+    <rect x="100" y="242" width="7" height="190" fill="#3d6fde"/>
+    <text x="140" y="320" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="84" font-weight="760" letter-spacing="-2.2" fill="#15202b">One Runtime.</text><text x="140" y="418" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="84" font-weight="760" letter-spacing="-2.2" fill="#15202b">Every Code Agent.</text>
+    <text x="142" y="536" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="27" font-weight="450" letter-spacing="0" fill="#687582">Skills, MCP, Memory and Instructions —</text>
+    <text x="142" y="574" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="27" font-weight="450" letter-spacing="0" fill="#687582">one canonical source for the tools you use.</text>
+    <text x="142" y="672" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="15" font-weight="400" letter-spacing="1.7" fill="#687582">SKILLS · MCP · MEMORY · INSTRUCTIONS</text>
+    <path d="M100 744H760" stroke="#15202b" stroke-width="3"/>
+    <circle cx="112" cy="806" r="5" fill="#3d6fde"/>
+    <text x="132" y="815" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="25" font-weight="500" letter-spacing="0" fill="#15202b">$ npm i -g agent-trellis</text>
+
+    <path d="M932 236H1490V676H932" fill="none" stroke="#e1e6ec" stroke-width="2"/>
+    <path d="M932 236h42M932 236v42M1490 676h-42M1490 676v-42" fill="none" stroke="#3d6fde" stroke-width="3"/>
+    <text x="1045" y="300" text-anchor="middle" font-family="Menlo, SFMono-Regular, monospace" font-size="13" font-weight="400" letter-spacing="1.4" fill="#687582">CLAUDE CODE</text>
+    <text x="1220" y="300" text-anchor="middle" font-family="Menlo, SFMono-Regular, monospace" font-size="13" font-weight="400" letter-spacing="1.4" fill="#687582">CODEX</text>
+    <text x="1395" y="300" text-anchor="middle" font-family="Menlo, SFMono-Regular, monospace" font-size="13" font-weight="400" letter-spacing="1.4" fill="#687582">KIRO / PI</text>
+    <g transform="translate(970 338) scale(3.8)" fill="none" stroke="#3d6fde" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M16 48h64"/>
+  <path d="M26 34v28M48 20v56M70 34v28"/>
+</g>
+    <text x="1210" y="704" text-anchor="middle" font-family="Menlo, SFMono-Regular, monospace" font-size="15" font-weight="400" letter-spacing="2" fill="#3d6fde">ONE CANONICAL RAIL</text>
+    <text x="1490" y="815" text-anchor="end" font-family="Menlo, SFMono-Regular, monospace" font-size="15" font-weight="400" letter-spacing="2" fill="#3d6fde">01 / 04</text>
+  </g>
+</svg>
