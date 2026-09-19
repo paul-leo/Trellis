@@ -19,20 +19,13 @@ Design notes:
   34/35 px, diagram labels at 16-17 px, install line at 32 px. The horizontal
   masters are desktop-first and keep the denser metrics.
 
-## Mark candidates
+## Mark
 
-Three single-ink candidates were explored; see
-[logo-candidates-v3.png](../brand-v3/logo-candidates-v3.png) for the rendered
-comparison at 168/56/32/16 px.
-
-| Candidate | File | Idea |
-|---|---|---|
-| A — Lattice T | [svg](../brand-v3/trellis-mark-v3-a.svg) / [png](../brand-v3/trellis-mark-v3-a.png) | The letter T; its beam is a trellis lattice. The name drawn as the structure. **Used in the v3 posters.** |
-| B — Constellation T | [svg](../brand-v3/trellis-mark-v3-b.svg) / [png](../brand-v3/trellis-mark-v3-b.png) | Nine agent dots; the five on the shared runtime path connect into a T, the rest stay open. |
-| C — Lattice panel | [svg](../brand-v3/trellis-mark-v3-c.svg) / [png](../brand-v3/trellis-mark-v3-c.png) | A classic garden-trellis crosshatch panel holding one agent node. |
-
-To switch the posters to another candidate, replace the `mark()` helper in
-`scripts/generate-poster-series-v3.mjs` with the geometry from the chosen file.
+The brand mark is the **Lattice T** — the letter T whose beam is a trellis
+lattice: [svg](../brand-v3/trellis-mark-v3-a.svg) /
+[png](../brand-v3/trellis-mark-v3-a.png). It is a single-ink symbol and is the
+same mark used in the README header and every poster. Two retired alternates
+(constellation T, lattice panel) remain in git history.
 
 ## Posters
 
@@ -59,7 +52,7 @@ Same approved copy as v1:
 ## Regenerate
 
 ```bash
-node scripts/generate-brand-v3.mjs          # mark candidates + comparison sheet
+node scripts/generate-brand-v3.mjs          # brand mark
 node scripts/generate-poster-series-v3.mjs  # 8 vertical + 2 horizontal posters
 ```
 
