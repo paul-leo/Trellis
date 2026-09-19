@@ -1,16 +1,42 @@
 # Trellis
 
-**A single source of capability for every coding agent you run.**
+<p align="center">
+  <img src="docs/assets/trellis-mark.svg" width="88" alt="Trellis logo" />
+</p>
 
-Skills, MCP servers, subagent definitions, shared memory, and secret policy —
-defined once, adapted into Claude Code, Codex, Kiro, pi, and Kimi Code without
-drift and without a second copy of anything. Kimi Code uses the Runtime-first
-path: one `trellis` MCP entry, with Skills and Memory consumed through
-Trellis providers.
+<p align="center"><strong>Unified Code Agent Runtime</strong></p>
 
-Trellis does not replace any of these agents' native config. It generates and
-verifies each one's native adapter from one canonical source, and refuses to let
-a plaintext secret or a duplicated skill file slip through.
+Trellis gives Claude Code, Codex, Kiro, pi, and Kimi Code one Runtime for
+Skills, MCP, Memory, and shared instructions.
+
+> 中文：Trellis 是统一的 Code Agent Runtime，为多个 Code Agent 提供一致的
+> Skill、MCP、Memory 与共享指令能力。
+
+Trellis does not replace an Agent's native runtime. It manages one canonical
+source and generates verified native or Runtime projections from it.
+
+[Read the product overview →](docs/overview.md)
+
+![Agent Trellis architecture](docs/assets/agent-trellis-poster-horizontal.png)
+
+## Install
+
+```bash
+npm install -g agent-trellis
+```
+
+## Quick start
+
+```bash
+trellis onboard --dry-run
+trellis onboard
+trellis doctor
+```
+
+Use the dry-run to review migration source, managed Agents, MCP mode, and
+Memory before applying. See [`docs/overview.md`](docs/overview.md) for the
+short product explanation and [`docs/getting-started.md`](docs/getting-started.md)
+for the complete workflow.
 
 ## Why
 
@@ -26,14 +52,6 @@ build versus what we deliberately reuse.
 Trellis aligns with the emerging [`.agents Protocol`](https://dotagentsprotocol.com)
 draft rather than inventing a sixth competing standard, and is likely its first
 working implementation.
-
-## Install
-
-```
-npm install -g agent-trellis
-```
-
-## Quick start
 
 See [`docs/getting-started.md`](docs/getting-started.md) for the detailed
 walkthrough — example output for each command, what each `migrate`/`sync`

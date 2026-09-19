@@ -1,7 +1,7 @@
 {
   "name": "agent-trellis",
   "version": "0.8.0",
-  "description": "A single source of capability for every coding agent — skills, MCP, subagents, memory, and secret policy, adapted natively into Claude Code, Codex, Kiro, and pi.",
+  "description": "A unified Code Agent Runtime for Skills, MCP, Memory, and shared instructions across Claude Code, Codex, Kiro, pi, and Kimi Code.",
   "license": "MIT",
   "author": "Paul Leo",
   "type": "module",

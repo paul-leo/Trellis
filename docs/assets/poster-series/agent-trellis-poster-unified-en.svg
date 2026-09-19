@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">
+  <rect width="1080" height="1350" fill="#ffffff"/>
+  <g stroke="#e8edf4" stroke-width="2"><line x1="-580" y1="1350" x2="-320" y2="960"/><line x1="-580" y1="1350" x2="-840" y2="960"/><line x1="-440" y1="1350" x2="-180" y2="960"/><line x1="-440" y1="1350" x2="-700" y2="960"/><line x1="-300" y1="1350" x2="-40" y2="960"/><line x1="-300" y1="1350" x2="-560" y2="960"/><line x1="-160" y1="1350" x2="100" y2="960"/><line x1="-160" y1="1350" x2="-420" y2="960"/><line x1="-20" y1="1350" x2="240" y2="960"/><line x1="-20" y1="1350" x2="-280" y2="960"/><line x1="120" y1="1350" x2="380" y2="960"/><line x1="120" y1="1350" x2="-140" y2="960"/><line x1="260" y1="1350" x2="520" y2="960"/><line x1="260" y1="1350" x2="0" y2="960"/><line x1="400" y1="1350" x2="660" y2="960"/><line x1="400" y1="1350" x2="140" y2="960"/><line x1="540" y1="1350" x2="800" y2="960"/><line x1="540" y1="1350" x2="280" y2="960"/><line x1="680" y1="1350" x2="940" y2="960"/><line x1="680" y1="1350" x2="420" y2="960"/><line x1="820" y1="1350" x2="1080" y2="960"/><line x1="820" y1="1350" x2="560" y2="960"/><line x1="960" y1="1350" x2="1220" y2="960"/><line x1="960" y1="1350" x2="700" y2="960"/><line x1="1100" y1="1350" x2="1360" y2="960"/><line x1="1100" y1="1350" x2="840" y2="960"/><line x1="1240" y1="1350" x2="1500" y2="960"/><line x1="1240" y1="1350" x2="980" y2="960"/><line x1="1380" y1="1350" x2="1640" y2="960"/><line x1="1380" y1="1350" x2="1120" y2="960"/><line x1="1520" y1="1350" x2="1780" y2="960"/><line x1="1520" y1="1350" x2="1260" y2="960"/><line x1="1660" y1="1350" x2="1920" y2="960"/><line x1="1660" y1="1350" x2="1400" y2="960"/></g>
+  
+  <g transform="translate(452 292) scale(1.8333333333333333)" fill="none">
+    <path d="M48 14v68M14 48h68M26 26l44 44M70 26 26 70" stroke="#cbd5e1" stroke-width="3" stroke-linecap="round"/>
+    <rect x="34" y="34" width="28" height="28" rx="8" transform="rotate(45 48 48)" stroke="#f59e0b" stroke-width="4"/>
+    <circle cx="48" cy="48" r="7" fill="#ffffff" stroke="#10b981" stroke-width="4"/>
+    <circle cx="14" cy="48" r="6" fill="#ffffff" stroke="#f59e0b" stroke-width="4"/>
+    <circle cx="82" cy="48" r="6" fill="#ffffff" stroke="#f59e0b" stroke-width="4"/>
+    <circle cx="48" cy="14" r="6" fill="#ffffff" stroke="#10b981" stroke-width="4"/>
+    <circle cx="48" cy="82" r="6" fill="#ffffff" stroke="#10b981" stroke-width="4"/>
+  </g>
+  <text x="540" y="650" text-anchor="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="124" font-weight="800" letter-spacing="-2" fill="#0f172a">Agent Trellis</text>
+  <rect x="452" y="690" width="176" height="10" rx="5" fill="#4f46e5"/>
+  <text x="540" y="800" text-anchor="middle" font-family="Helvetica Neue, Helvetica Neue, sans-serif" font-size="43" font-weight="600" fill="#334155">One Runtime. Every Code Agent.</text>
+  <text x="540" y="872" text-anchor="middle" font-family="Helvetica Neue, Helvetica Neue, sans-serif" font-size="29" font-weight="400" fill="#94a3b8">Skills, MCP, Memory and Instructions — one canonical source.</text>
+  <text x="540" y="1258" text-anchor="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="26" font-weight="500" fill="#94a3b8">npm install -g agent-trellis</text>
+</svg>
