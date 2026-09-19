@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1600" viewBox="0 0 1600 1600">
+  <rect width="1600" height="1600" fill="#fafaf8"/>
+  <g transform="translate(0 350)">
+    <g transform="translate(64 100) scale(0.58)" fill="none" stroke="#161c24" stroke-linecap="round">
+  <defs><clipPath id="v3-beam-64-100"><rect x="21" y="23" width="54" height="9" rx="4.5"/></clipPath></defs>
+  <rect x="16" y="18" width="64" height="18" rx="9" stroke-width="5.5"/>
+  <g stroke-width="2.6" clip-path="url(#v3-beam-64-100)"><path d="M-60 32 L-51 23"/><path d="M-60 23 L-51 32"/><path d="M-46.5 32 L-37.5 23"/><path d="M-46.5 23 L-37.5 32"/><path d="M-33 32 L-24 23"/><path d="M-33 23 L-24 32"/><path d="M-19.5 32 L-10.5 23"/><path d="M-19.5 23 L-10.5 32"/><path d="M-6 32 L3 23"/><path d="M-6 23 L3 32"/><path d="M7.5 32 L16.5 23"/><path d="M7.5 23 L16.5 32"/><path d="M21 32 L30 23"/><path d="M21 23 L30 32"/><path d="M34.5 32 L43.5 23"/><path d="M34.5 23 L43.5 32"/><path d="M48 32 L57 23"/><path d="M48 23 L57 32"/><path d="M61.5 32 L70.5 23"/><path d="M61.5 23 L70.5 32"/><path d="M75 32 L84 23"/><path d="M75 23 L84 32"/><path d="M88.5 32 L97.5 23"/><path d="M88.5 23 L97.5 32"/><path d="M102 32 L111 23"/><path d="M102 23 L111 32"/></g>
+  <path d="M48 36 V78" stroke-width="5.5"/>
+</g>
+    <text x="140" y="141" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="2.6" fill="#161c24">AGENT TRELLIS</text>
+    <text x="1536" y="140" text-anchor="end" font-family="Menlo, SFMono-Regular, monospace" font-size="15" font-weight="400" letter-spacing="1.7" fill="#69727d">OPEN SOURCE · LOCAL FIRST</text>
+    <path d="M64 192 H1536" stroke="#dfe4ea" stroke-width="1.5"/>
+    <rect x="64" y="189" width="46" height="3" fill="#3457d5"/>
+
+    <text x="108" y="262" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="17" font-weight="400" letter-spacing="2.2" fill="#3457d5">UNIFIED CODE AGENT RUNTIME</text>
+    <rect x="64" y="300" width="8" height="182" fill="#3457d5"/>
+    <text x="108" y="366" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="84" font-weight="800" letter-spacing="-2.2" fill="#161c24">One Runtime.</text><text x="108" y="464" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="84" font-weight="800" letter-spacing="-2.2" fill="#161c24">Every Code Agent.</text>
+    <text x="108" y="522" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="24" font-weight="450" letter-spacing="0" fill="#69727d">Skills, MCP, Memory and Instructions</text><text x="108" y="558" text-anchor="start" font-family="Helvetica Neue, PingFang SC, Arial, sans-serif" font-size="24" font-weight="450" letter-spacing="0" fill="#69727d">stay aligned from one canonical source.</text>
+
+    <text x="108" y="640" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="15" font-weight="400" letter-spacing="1.6" fill="#69727d">SKILLS · MCP · MEMORY · INSTRUCTIONS</text>
+    <circle cx="112" cy="700" r="5.5" fill="#3457d5"/>
+    <text x="140" y="709" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="24" font-weight="500" letter-spacing="0.2" fill="#161c24">$ npm i -g agent-trellis</text>
+
+    <g>
+  <rect x="1000" y="250" width="500" height="450" fill="none" stroke="#dfe4ea" stroke-width="1.5"/>
+  <path d="M991 250 H1009 M1000 241 V259" fill="none" stroke="#dfe4ea" stroke-width="2"/><path d="M1491 250 H1509 M1500 241 V259" fill="none" stroke="#dfe4ea" stroke-width="2"/><path d="M991 700 H1009 M1000 691 V709" fill="none" stroke="#dfe4ea" stroke-width="2"/><path d="M1491 700 H1509 M1500 691 V709" fill="none" stroke="#dfe4ea" stroke-width="2"/>
+  <rect x="1016" y="234" width="176.4" height="32" fill="#fafaf8"/>
+  <text x="1029" y="255" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="13.5" font-weight="400" letter-spacing="1.5" fill="#3457d5">FIG.00 — RUNTIME</text>
+</g>
+    <g>
+  <rect x="1039" y="319" width="22" height="22" rx="6" fill="none" stroke="#161c24" stroke-width="3"/><rect x="1039" y="464" width="22" height="22" rx="6" fill="none" stroke="#161c24" stroke-width="3"/><rect x="1039" y="609" width="22" height="22" rx="6" fill="none" stroke="#161c24" stroke-width="3"/>
+  <g fill="none">
+  <defs><clipPath id="d-horizontal"><rect x="1172" y="337" width="156" height="276" rx="12"/></clipPath></defs>
+  <rect x="1165" y="330" width="170" height="290" rx="18" stroke="#161c24" stroke-width="3.5"/>
+  <g clip-path="url(#d-horizontal)" stroke="#69727d" stroke-width="2" opacity="0.85"><path d="M710 613 L986 337"/><path d="M710 337 L986 613"/><path d="M731 613 L1007 337"/><path d="M731 337 L1007 613"/><path d="M752 613 L1028 337"/><path d="M752 337 L1028 613"/><path d="M773 613 L1049 337"/><path d="M773 337 L1049 613"/><path d="M794 613 L1070 337"/><path d="M794 337 L1070 613"/><path d="M815 613 L1091 337"/><path d="M815 337 L1091 613"/><path d="M836 613 L1112 337"/><path d="M836 337 L1112 613"/><path d="M857 613 L1133 337"/><path d="M857 337 L1133 613"/><path d="M878 613 L1154 337"/><path d="M878 337 L1154 613"/><path d="M899 613 L1175 337"/><path d="M899 337 L1175 613"/><path d="M920 613 L1196 337"/><path d="M920 337 L1196 613"/><path d="M941 613 L1217 337"/><path d="M941 337 L1217 613"/><path d="M962 613 L1238 337"/><path d="M962 337 L1238 613"/><path d="M983 613 L1259 337"/><path d="M983 337 L1259 613"/><path d="M1004 613 L1280 337"/><path d="M1004 337 L1280 613"/><path d="M1025 613 L1301 337"/><path d="M1025 337 L1301 613"/><path d="M1046 613 L1322 337"/><path d="M1046 337 L1322 613"/><path d="M1067 613 L1343 337"/><path d="M1067 337 L1343 613"/><path d="M1088 613 L1364 337"/><path d="M1088 337 L1364 613"/><path d="M1109 613 L1385 337"/><path d="M1109 337 L1385 613"/><path d="M1130 613 L1406 337"/><path d="M1130 337 L1406 613"/><path d="M1151 613 L1427 337"/><path d="M1151 337 L1427 613"/><path d="M1172 613 L1448 337"/><path d="M1172 337 L1448 613"/><path d="M1193 613 L1469 337"/><path d="M1193 337 L1469 613"/><path d="M1214 613 L1490 337"/><path d="M1214 337 L1490 613"/><path d="M1235 613 L1511 337"/><path d="M1235 337 L1511 613"/><path d="M1256 613 L1532 337"/><path d="M1256 337 L1532 613"/><path d="M1277 613 L1553 337"/><path d="M1277 337 L1553 613"/><path d="M1298 613 L1574 337"/><path d="M1298 337 L1574 613"/><path d="M1319 613 L1595 337"/><path d="M1319 337 L1595 613"/><path d="M1340 613 L1616 337"/><path d="M1340 337 L1616 613"/><path d="M1361 613 L1637 337"/><path d="M1361 337 L1637 613"/><path d="M1382 613 L1658 337"/><path d="M1382 337 L1658 613"/><path d="M1403 613 L1679 337"/><path d="M1403 337 L1679 613"/><path d="M1424 613 L1700 337"/><path d="M1424 337 L1700 613"/><path d="M1445 613 L1721 337"/><path d="M1445 337 L1721 613"/><path d="M1466 613 L1742 337"/><path d="M1466 337 L1742 613"/><path d="M1487 613 L1763 337"/><path d="M1487 337 L1763 613"/><path d="M1508 613 L1784 337"/><path d="M1508 337 L1784 613"/><path d="M1529 613 L1805 337"/><path d="M1529 337 L1805 613"/><path d="M1550 613 L1826 337"/><path d="M1550 337 L1826 613"/><path d="M1571 613 L1847 337"/><path d="M1571 337 L1847 613"/><path d="M1592 613 L1868 337"/><path d="M1592 337 L1868 613"/><path d="M1613 613 L1889 337"/><path d="M1613 337 L1889 613"/><path d="M1634 613 L1910 337"/><path d="M1634 337 L1910 613"/></g>
+</g>
+  <g fill="none" stroke="#161c24" stroke-width="3">
+    <path d="M1062 330 C 1120 330 1128 400 1165 400"/>
+    <path d="M1062 475 H1165"/>
+    <path d="M1062 620 C 1120 620 1128 550 1165 550"/>
+    <path d="M1335 400 H1450 M1335 475 H1450 M1335 550 H1450"/>
+  </g>
+  <g fill="#3457d5"><circle cx="1456" cy="400" r="6.5"/><circle cx="1456" cy="475" r="6.5"/><circle cx="1456" cy="550" r="6.5"/></g>
+</g>
+    <text x="1250" y="745" text-anchor="middle" font-family="Menlo, SFMono-Regular, monospace" font-size="14" font-weight="400" letter-spacing="2" fill="#3457d5">ONE RUNTIME · MANY AGENTS</text>
+
+    <path d="M64 784 H1536" stroke="#dfe4ea" stroke-width="1.5"/>
+    <text x="64" y="822" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="13.5" font-weight="400" letter-spacing="1.5" fill="#69727d">AGENT TRELLIS — UNIFIED CODE AGENT RUNTIME</text>
+    <text x="1536" y="822" text-anchor="end" font-family="Menlo, SFMono-Regular, monospace" font-size="13.5" font-weight="400" letter-spacing="1.5" fill="#69727d">agent-trellis.dev</text>
+  </g>
+</svg>
