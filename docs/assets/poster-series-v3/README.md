@@ -1,16 +1,10 @@
-# Agent Trellis poster series v3
+# Agent Trellis poster series
 
-A parallel redesign of the brand mark and social posters. Nothing from the
-earlier iterations was overwritten — all three generations coexist for
-comparison:
+The canonical brand mark and social poster series. The earlier v1 and v2
+iterations were retired and removed; they remain in git history (`f4e5136`,
+`1045bb6`).
 
-| Iteration | Location | Direction |
-|---|---|---|
-| v1 | [../poster-series/](../poster-series/) | White editorial layout, single blue accent, logo mark scaled up in the hero zone. (The committed baseline is `f4e5136`; the directory currently also carries uncommitted local edits from an abandoned iteration.) |
-| v2 | [../poster-series/v2/](../poster-series/v2/) | Same blue "rail" mark, refined spacing, boxed hero zone. |
-| **v3 (this directory)** | here | New single-ink mark candidates, per-theme accent colors, and a real per-theme diagram in the hero zone. |
-
-What v3 changes versus v1/v2:
+Design notes:
 
 - The hero zone of each poster is a purpose-built diagram (agent paths,
   migration flow, shared memory rail, context handoff) instead of the logo

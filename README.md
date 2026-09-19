@@ -1,7 +1,7 @@
 # Trellis
 
 <p align="center">
-  <img src="docs/assets/trellis-mark.svg" width="88" alt="Trellis logo" />
+  <img src="docs/assets/brand-v3/trellis-mark-v3-a.svg" width="88" alt="Trellis logo" />
 </p>
 
 <p align="center"><strong>Unified Code Agent Runtime</strong></p>
@@ -17,7 +17,7 @@ source and generates verified native or Runtime projections from it.
 
 [Read the product overview →](docs/overview.md)
 
-![Agent Trellis architecture](docs/assets/agent-trellis-poster-horizontal.png)
+![Agent Trellis — One Runtime. Every Code Agent.](docs/assets/poster-series-v3/agent-trellis-poster-v3-horizontal-en.png)
 
 ## Install
 

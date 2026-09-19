@@ -52,11 +52,11 @@ The importer de-duplicates existing servers, extracts environment credentials in
 
 ## Architecture
 
-![Agent Trellis architecture](assets/agent-trellis-poster-horizontal.png)
+![Agent Trellis — One Runtime. Every Code Agent.](assets/poster-series-v3/agent-trellis-poster-v3-horizontal-en.png)
 
 The overview shows the product boundary: Trellis is the control plane in the center; Skills, MCP, Memory, and Instructions are managed capability sources; Agents consume the resulting native or Runtime views.
 
-Brand and social assets, including the minimal poster series, live in [`docs/assets/poster-series/`](assets/poster-series/README.md).
+Brand and social assets, including the poster series, live in [`docs/assets/poster-series-v3/`](assets/poster-series-v3/README.md).
 
 ```mermaid
 flowchart LR

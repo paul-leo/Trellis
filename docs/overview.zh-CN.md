@@ -48,7 +48,7 @@ trellis mcp import ~/Desktop/mcp-servers.json
 
 ## 架构
 
-![Agent Trellis 架构](assets/agent-trellis-poster-vertical.png)
+![Agent Trellis — 一个 Runtime，统一所有 Code Agent。](assets/poster-series-v3/agent-trellis-poster-v3-horizontal-zh.png)
 
 Trellis 以 `~/.trellis/` 为 canonical source，在中心统一管理四类能力：
 
@@ -59,7 +59,7 @@ Trellis 以 `~/.trellis/` 为 canonical source，在中心统一管理四类能�
 
 这些能力通过 native adapter 或 Runtime/Gateway 投递给不同的 Code Agent。
 
-品牌与社媒海报资源见 [`docs/assets/poster-series/`](assets/poster-series/README.md)，包含极简竖版海报系列的中英文版本。
+品牌与社媒海报资源见 [`docs/assets/poster-series-v3/`](assets/poster-series-v3/README.md)，包含竖版（手机端）与横版（桌面端）海报的中英文版本。
 
 ```text
 ~/.trellis/ canonical source
