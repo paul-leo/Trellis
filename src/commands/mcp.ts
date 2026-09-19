@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { loadCanonicalSource, upsertServerYaml, removeServerYaml, type ServersYamlWriteResult } from "../core/canonical.js";
 import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
 import { ALL_AGENTS, resolveScope } from "../core/types.js";
-import type { AgentId, McpConfig, McpServerDef, Transport } from "../core/types.js";
+import type { AgentId, McpAuthMode, McpConfig, McpServerDef, Transport } from "../core/types.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
@@ -153,6 +153,7 @@ function serversYamlPath(homeDir: string): string {
 export interface McpListEntry {
   name: string;
   transport: Transport;
+  auth?: McpAuthMode;
   enabled: boolean;
   agents: readonly AgentId[];
   command?: string;
@@ -174,6 +175,7 @@ export function collectMcpListPlan(homeDir: string = homedir()): McpListEntry[] 
   return Object.entries(canonical.mcp.servers).map(([name, def]) => ({
     name,
     transport: def.transport,
+    auth: def.auth,
     enabled: def.enabled ?? true,
     agents: resolveScope(def.agents, canonical.managedAgents),
     command: def.command,
@@ -202,7 +204,7 @@ export function runMcpList(opts: { homeDir?: string; json?: boolean } = {}): { e
   } else {
     for (const e of entries) {
       const scope = e.agents.length > 0 ? e.agents.join(", ") : "(no managed agent reaches it)";
-      console.log(`${e.name} (${e.transport})${e.enabled ? "" : " [disabled]"} — ${scope}`);
+      console.log(`${e.name} (${e.transport}${e.auth === "oauth" ? ", oauth" : ""})${e.enabled ? "" : " [disabled]"} — ${scope}`);
       if (e.env && e.env.length > 0) console.log(`   env: ${e.env.join(", ")} (values never read/printed)`);
       if (e.staticEnv) console.log(`   static_env: ${Object.entries(e.staticEnv).map(([k, v]) => `${k}=${v}`).join(", ")}`);
     }
@@ -216,6 +218,7 @@ export function runMcpList(opts: { homeDir?: string; json?: boolean } = {}): { e
  * command's own inline flag parsing in src/cli.ts. */
 export interface McpAddRawArgs {
   transport?: string;
+  auth?: string;
   command?: string;
   /** Comma-separated. */
   args?: string;
@@ -239,6 +242,7 @@ export function parseMcpAddArgs(argv: readonly string[]): McpAddRawArgs {
   };
   return {
     transport: flag("--transport"),
+    auth: flag("--auth"),
     command: flag("--command"),
     args: flag("--args"),
     url: flag("--url"),
@@ -301,6 +305,12 @@ export function collectMcpAddPlan(name: string | undefined, raw: McpAddRawArgs, 
   if ((transport === "http" || transport === "sse") && !raw.url) {
     return { name, action: "invalid-input", detail: `--transport ${transport} requires --url` };
   }
+  if (raw.auth !== undefined && raw.auth !== "oauth") {
+    return { name, action: "invalid-input", detail: `--auth must be "oauth" when provided (got ${raw.auth})` };
+  }
+  if (raw.auth === "oauth" && transport === "stdio") {
+    return { name, action: "invalid-input", detail: "--auth oauth requires an http or sse MCP server" };
+  }
 
   const agentsList = parseCsv(raw.agents);
   if (agentsList) {
@@ -316,6 +326,7 @@ export function collectMcpAddPlan(name: string | undefined, raw: McpAddRawArgs, 
 
   const def: McpServerDef = {
     transport,
+    ...(raw.auth === "oauth" ? { auth: "oauth" as const } : {}),
     ...(raw.command ? { command: raw.command } : {}),
     ...(parseCsv(raw.args) ? { args: parseCsv(raw.args) } : {}),
     ...(raw.url ? { url: raw.url } : {}),
@@ -336,6 +347,58 @@ export function collectMcpAddPlan(name: string | undefined, raw: McpAddRawArgs, 
   }
 
   return { name, action: "create", detail: "will add to servers.yaml", def };
+}
+
+export type McpSetAuthAction = "updated" | "already-set" | "not-found" | "invalid-input";
+
+export interface McpSetAuthPlan {
+  name: string;
+  auth: "oauth" | "none";
+  action: McpSetAuthAction;
+  detail: string;
+  def?: McpServerDef;
+}
+
+export function collectMcpSetAuthPlan(name: string | undefined, auth: string | undefined, homeDir: string = homedir()): McpSetAuthPlan {
+  const mode = auth === "oauth" || auth === "none" ? auth : undefined;
+  if (!name) return { name: "(none)", auth: (mode ?? "none"), action: "invalid-input", detail: "usage: trellis mcp set <name> --auth oauth|none" };
+  if (!mode) return { name, auth: "none", action: "invalid-input", detail: `--auth must be "oauth" or "none" (got ${auth ?? "(missing)"})` };
+  const canonical = loadCanonicalSource(homeDir);
+  const current = canonical.mcp.servers[name];
+  if (!current) return { name, auth: mode, action: "not-found", detail: `no canonical MCP server named "${name}"` };
+  if (mode === "oauth" && !current.url) {
+    return { name, auth: mode, action: "invalid-input", detail: "auth: oauth requires an http or sse MCP server" };
+  }
+  const next = mode === "oauth" ? { ...current, auth: "oauth" as const } : (() => {
+    const { auth: _auth, ...withoutAuth } = current;
+    return withoutAuth;
+  })();
+  if (JSON.stringify(current) === JSON.stringify(next)) return { name, auth: mode, action: "already-set", detail: `auth is already ${mode}`, def: next };
+  return { name, auth: mode, action: "updated", detail: `set auth to ${mode}`, def: next };
+}
+
+export function runMcpSetAuth(name: string | undefined, auth: string | undefined, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
+  const homeDir = opts.homeDir ?? homedir();
+  let plan: McpSetAuthPlan;
+  try {
+    plan = collectMcpSetAuthPlan(name, auth, homeDir);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return { exitCode: 1 };
+  }
+  let writeError: string | undefined;
+  if (!opts.dryRun && plan.action === "updated" && plan.def) {
+    const result = upsertServerYaml(serversYamlPath(homeDir), plan.name, plan.def);
+    if (!result.ok) writeError = result.error;
+  }
+  if (opts.json) {
+    console.log(JSON.stringify(writeError ? { ...plan, writeError } : plan, null, 2));
+  } else {
+    console.log(`${opts.dryRun ? "[dry run] " : ""}mcp set ${plan.name}`);
+    console.log(`  [${plan.action}] ${plan.detail}`);
+    if (writeError) console.error(`  write failed: ${writeError}`);
+  }
+  return { exitCode: ["invalid-input", "not-found"].includes(plan.action) || Boolean(writeError) ? 1 : 0 };
 }
 
 export function applyMcpAddPlan(plan: McpAddPlan, homeDir: string = homedir()): ServersYamlWriteResult {

@@ -44,11 +44,10 @@ tests of the pieces — see docs/architecture.md's testing philosophy.
 
 **P2 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-mcp-sync-p2/`;
 living spec at `openspec/specs/mcp-server-sync/`). `trellis mcp sync`
-covers create/repair only — automatic removal is deliberately deferred: a
-symlink's realpath proves Trellis ownership for skills, but a bare TOML/
-JSON key has no equivalent marker, so "gone from canonical" and "the user
-configured this directly" are indistinguishable without a `trellis.lock.json`
-ownership-tracking mechanism that doesn't exist yet. Two write mechanisms
+covers create/repair and, after the ownership-ledger parity follow-up,
+ownership-safe removal: a bare TOML/JSON key is removable only when the
+ledger proves Trellis still owns the exact rendered entry. A hand-edited entry
+is preserved. Two write mechanisms
 were chosen only after empirically ruling out the obvious ones first: both
 `@iarna/toml` and `smol-toml` silently drop comments and reformat arrays on
 a bare parse→stringify round-trip (so Codex's `config.toml` is patched by a
@@ -959,7 +958,7 @@ tests passing.
 | P25 | ✅ Onboard prompt TUI: replaces Trellis's hand-written raw-mode picker and ANSI redraw logic with `@clack/prompts`, preserving non-TTY fallbacks, `--json`, stream-injected tests, stderr-only interactive chrome, and compact agent summaries that show counts instead of enumerating skills. Full-screen TUI runtimes remain out of scope; onboarding stays visible in terminal scrollback | P22 |
 | P26 | ✅ Fine-grained capability selection: item-level skill/MCP/memory selection from a serializable selection file or searchable TUI, per-agent MCP route overrides with direct/gateway/hub precedence, selected-memory sync without implicit native-memory import, and explicit unsupported-reader diagnostics | P17, P21, P22, P25 |
 | P27 | 🚧 Trellis MCP Runtime phase 1 ✅: one provider registry and agent-facing MCP edge; SkillProvider and the read-only CanonicalMemoryProvider expose scoped progressive-disclosure tools/resources, runtime delivery supports native/mcp/both per agent, selected upstream tools mount through the existing GatewayBackend, and doctor checks runtime drift. Remaining: upstream resource/prompt backend, real pi/Kiro model smoke, and real Claude model smoke (Claude remains intentionally deferred) | P21, P25, P26 |
-| P28 | 🚧 Kimi Code Runtime-first adapter: Kimi is recognized as a managed Agent, receives one deferred `trellis-runtime` entry in `~/.kimi-code/mcp.json`, and `trellis kimi` isolates native Skill discovery for Runtime-only delivery. Remaining: real Kimi model-session smoke and upstream resource/prompt consumption | P27 |
+| P28 | 🚧 Kimi Code Runtime-first adapter: Kimi is recognized as a managed Agent, receives one deferred `trellis` Runtime entry in `~/.kimi-code/mcp.json`, and `trellis kimi` isolates native Skill discovery for Runtime-only delivery. The Runtime Skill is available through SkillProvider; remaining: real Kimi model-session smoke and upstream resource/prompt consumption | P27 |
 
 **Cross-machine / cloud sharing — confirmed future direction, not yet
 scoped as a phase.** Surveyed 2026-09-15 (`docs/research.md`'s "Cross-

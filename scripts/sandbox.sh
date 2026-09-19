@@ -24,6 +24,8 @@
 #   scripts/sandbox.sh --management      # steady-state unified
 #                                         # management/idempotency lab
 #   scripts/sandbox.sh --failure         # hanging upstream isolation lab
+#   scripts/sandbox.sh --memory          # Kimi/pi shared-memory takeover lab
+#   scripts/sandbox.sh --memory-migration # source-memory migration choice lab
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -59,6 +61,22 @@ if [ "${1:-}" = "--failure" ]; then
   MOUNT_SRC="$(pwd)/test/fixtures/failure-home"
   if [ "$#" -eq 0 ]; then
     set -- node scripts/failure-lab.mjs
+  fi
+fi
+
+if [ "${1:-}" = "--memory" ]; then
+  shift
+  MOUNT_SRC="$(pwd)/test/fixtures/memory-home"
+  if [ "$#" -eq 0 ]; then
+    set -- node scripts/memory-lab.mjs
+  fi
+fi
+
+if [ "${1:-}" = "--memory-migration" ]; then
+  shift
+  MOUNT_SRC="$(pwd)/test/fixtures/memory-migration-home"
+  if [ "$#" -eq 0 ]; then
+    set -- node scripts/memory-migration-lab.mjs
   fi
 fi
 

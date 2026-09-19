@@ -24,11 +24,12 @@ test("a fresh machine with no canonical source gets a working one", async () => 
   const home = scratchHome();
   const report = await collectInitReport(home);
 
-  assert.equal(report.files.filter((f) => f.action === "create").length, 4);
+  assert.equal(report.files.filter((f) => f.action === "create").length, 5);
   assert.ok(existsSync(join(home, ".trellis", "agents.md")));
   assert.ok(existsSync(join(home, ".trellis", "mcp", "servers.yaml")));
   assert.ok(existsSync(join(home, ".trellis", "secrets.policy.yaml")));
   assert.ok(existsSync(join(home, ".trellis", "managed.yaml")));
+  assert.ok(existsSync(join(home, ".trellis", "skills", "trellis-runtime", "SKILL.md")));
 
   // loadCanonicalSource no longer refuses.
   const canonical = loadCanonicalSource(home);

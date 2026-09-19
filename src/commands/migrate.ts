@@ -7,7 +7,7 @@
 
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
@@ -23,6 +23,7 @@ import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsert
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpServerDef, SecretsPolicy } from "../core/types.js";
 import type { BackupSession } from "../lib/backup.js";
+import { discoverNativeMemory, MAX_NATIVE_MEMORY_BYTES, renderNativeMemory, type NativeMemoryCandidate, type NativeMemoryDiscovery } from "../lib/nativeMemory.js";
 
 /** Where a `staticEnv` literal secret's real value goes when
  * `secrets.policy.yaml` doesn't already have its own `env_file`
@@ -74,7 +75,7 @@ export type MigrateAction = "create" | "skip-symlink" | "skip-case-broken" | "sk
  * flag value is the plural `"skills"`, mapped to this singular `"skill"`
  * in `runMigrate`, not renamed here to avoid touching every existing
  * `MigratePlanItem.kind` comparison for no functional reason. */
-export type MigrateKind = "skill" | "instructions" | "mcp";
+export type MigrateKind = "skill" | "instructions" | "mcp" | "memory";
 
 export interface MigratePlanItem {
   kind: MigrateKind;
@@ -109,12 +110,18 @@ export interface MigratePlanItem {
    * already-migrated server extracted before this naming scheme existed,
    * which never reaches this action at all (already-migrated instead). */
   extractSourceKey?: string;
+  /** Memory migration only: source is re-read at apply time and the target
+   * path is canonical, so the plan never serializes the real body. */
+  memorySourcePath?: string;
+  memorySourceId?: string;
+  memoryTargetPath?: string;
 }
 
 export interface MigratePlan {
   agent: AgentId;
   present: boolean;
   items: MigratePlanItem[];
+  memoryDiscovery?: Omit<NativeMemoryDiscovery, "candidates"> & { candidates: Array<Omit<NativeMemoryCandidate, "content">> };
 }
 
 function planSkill(name: string, sourceDir: string, isSymlink: boolean, caseCorrect: boolean, canonicalDir: string): MigratePlanItem {
@@ -174,6 +181,33 @@ function planInstructions(snapshot: AgentSnapshot, canonicalAgentsMd: string): M
     action: "conflict",
     detail: "canonical agents.md already has different real content — resolve by hand",
     remediation: `compare \`~/.trellis/agents.md\` against ${snapshot.instructionsFile.path} and either merge by hand or delete whichever copy you don't want to keep`,
+  };
+}
+
+function planNativeMemoryCandidate(candidate: import("../lib/nativeMemory.js").NativeMemoryCandidate, homeDir: string): MigratePlanItem {
+  const targetPath = join(homeDir, ".trellis", "memories", `${candidate.targetName}.md`);
+  const rendered = renderNativeMemory(candidate);
+  if (!existsSync(targetPath)) {
+    return {
+      kind: "memory",
+      name: candidate.targetName,
+      action: "create",
+      detail: `will import ${candidate.displayName} from ${candidate.sourceAgent} native memory`,
+      memorySourcePath: candidate.sourcePath,
+      memorySourceId: candidate.sourceId,
+      memoryTargetPath: targetPath,
+    };
+  }
+  const current = readFileSync(targetPath, "utf8");
+  if (current === rendered) {
+    return { kind: "memory", name: candidate.targetName, action: "already-migrated", detail: "canonical memory is byte-identical" };
+  }
+  return {
+    kind: "memory",
+    name: candidate.targetName,
+    action: "conflict",
+    detail: `canonical memories/${candidate.targetName}.md already has different content — resolve by hand`,
+    remediation: `compare the canonical file with ${candidate.sourcePath} and decide which memory to keep before re-running migration`,
   };
 }
 
@@ -343,7 +377,7 @@ function planMcpServer(name: string, def: McpServerDef, existing: McpServerDef |
  * conflict. Omitting `only` (or passing both kinds) is exactly today's
  * behavior.
  */
-export async function collectMigratePlan(agent: AgentId, homeDir: string = homedir(), only?: readonly MigrateKind[]): Promise<MigratePlan> {
+export async function collectMigratePlan(agent: AgentId, homeDir: string = homedir(), only?: readonly MigrateKind[], workspaceDir: string = process.cwd()): Promise<MigratePlan> {
   const snapshot = await PROBES[agent](homeDir);
   if (!snapshot.present) {
     return { agent, present: false, items: [] };
@@ -351,6 +385,7 @@ export async function collectMigratePlan(agent: AgentId, homeDir: string = homed
 
   const canonicalRoot = join(homeDir, ".trellis");
   const items: MigratePlanItem[] = [];
+  let memoryDiscovery: MigratePlan["memoryDiscovery"];
   const wants = (kind: MigrateKind) => !only || only.includes(kind);
 
   if (wants("skill")) {
@@ -380,7 +415,15 @@ export async function collectMigratePlan(agent: AgentId, homeDir: string = homed
     }
   }
 
-  return { agent, present: true, items };
+  if (wants("memory")) {
+    const discovery = discoverNativeMemory(agent, homeDir, workspaceDir);
+    memoryDiscovery = { ...discovery, candidates: discovery.candidates.map(({ content: _content, ...safe }) => safe) };
+    for (const candidate of discovery.candidates) {
+      items.push(planNativeMemoryCandidate(candidate, homeDir));
+    }
+  }
+
+  return { agent, present: true, items, ...(memoryDiscovery ? { memoryDiscovery } : {}) };
 }
 
 /**
@@ -437,6 +480,13 @@ export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir(),
       if (item.action === "extract-secret" && item.extractVarName && item.extractTargetPath && item.extractSourceKey) {
         applyStaticEnvExtraction(plan.agent, item.name, item.extractSourceKey, item.extractVarName, item.extractTargetPath, homeDir, backup);
       }
+    } else if (item.kind === "memory" && item.memorySourcePath && item.memorySourceId && item.memoryTargetPath) {
+      if (statSync(item.memorySourcePath).size > MAX_NATIVE_MEMORY_BYTES) throw new Error(`native memory source exceeds the ${MAX_NATIVE_MEMORY_BYTES}-byte limit: ${item.memorySourcePath}`);
+      const content = readFileSync(item.memorySourcePath, "utf8");
+      const imported = renderNativeMemory({ sourceAgent: plan.agent, sourceId: item.memorySourceId, content });
+      mkdirSync(dirname(item.memoryTargetPath), { recursive: true });
+      if (backup) backup.writeFile(item.memoryTargetPath, imported);
+      else writeFileSync(item.memoryTargetPath, imported);
     }
   }
   // Runs every real (non-dry-run) migrate invocation, not just the one that
@@ -450,11 +500,12 @@ export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir(),
 }
 
 /** CLI-facing spelling: `"skills"` (plural — a run usually touches more
- * than one), `"instructions"` (already singular-shaped), or `"mcp"`
+ * than one), `"instructions"` (already singular-shaped), `"mcp"`, or
+ * `"memory"`
  * (already the CLI's own convention, matching `trellis mcp`'s own
  * command name). Mapped to `MigrateKind` in `runMigrate`, the one place
  * this translation lives. */
-export type MigrateOnlyValue = "skills" | "instructions" | "mcp";
+export type MigrateOnlyValue = "skills" | "instructions" | "mcp" | "memory";
 
 export interface RunMigrateOptions {
   from?: string;
@@ -468,7 +519,7 @@ export interface RunMigrateOptions {
   homeDir?: string;
 }
 
-const ONLY_VALUES: readonly MigrateOnlyValue[] = ["skills", "instructions", "mcp"];
+const ONLY_VALUES: readonly MigrateOnlyValue[] = ["skills", "instructions", "mcp", "memory"];
 
 function isMigrateOnlyValue(value: string): value is MigrateOnlyValue {
   return (ONLY_VALUES as readonly string[]).includes(value);
@@ -477,6 +528,7 @@ function isMigrateOnlyValue(value: string): value is MigrateOnlyValue {
 function toMigrateKinds(only: MigrateOnlyValue): readonly MigrateKind[] {
   if (only === "skills") return ["skill"];
   if (only === "instructions") return ["instructions"];
+  if (only === "memory") return ["memory"];
   return ["mcp"];
 }
 
@@ -520,12 +572,15 @@ export async function runMigrate(opts: RunMigrateOptions = {}): Promise<{ exitCo
  * this formatting (including the empty-plan "nothing to migrate" case). */
 export function printPlan(plan: MigratePlan, dryRun: boolean): void {
   console.log(`${dryRun ? "[dry run] " : ""}migrate --from ${plan.agent}`);
+  if (plan.memoryDiscovery && plan.memoryDiscovery.status !== "supported") {
+    console.log(`  memory source — [${plan.memoryDiscovery.status}] ${plan.memoryDiscovery.detail}`);
+  }
   if (plan.items.length === 0) {
     console.log("  nothing to migrate");
     return;
   }
   for (const item of plan.items) {
-    const label = item.kind === "skill" ? `skill "${item.name}"` : item.kind === "mcp" ? `mcp server "${item.name}"` : "instructions";
+      const label = item.kind === "skill" ? `skill "${item.name}"` : item.kind === "mcp" ? `mcp server "${item.name}"` : item.kind === "memory" ? `memory "${item.name}"` : "instructions";
     console.log(`  [${item.action}] ${label} — ${item.detail}`);
   }
 }

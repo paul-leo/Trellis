@@ -34,42 +34,81 @@ producing that agent's plan items.
   server, exactly as `mcp-server-sync` already does today
 
 ### Requirement: The gateway subcommand aggregates in-scope upstream servers behind a standard MCP Server
-The system SHALL, on startup, resolve the same in-scope server set an
-agent's direct-mode plan would have used (respecting each server's
-inline `agents:` field, `enabled: false`, and the managed-agents list),
-connect to each one, and expose the aggregate result through a standard
-MCP `Server` using `ListToolsRequestSchema`/`CallToolRequestSchema`
-handlers over `StdioServerTransport` — not a hand-rolled protocol
-implementation.
+
+The system SHALL, on startup, resolve the same in-scope server set an agent's
+ordinary direct-mode plan would have used, excluding every canonical server
+marked `auth: oauth`, connect to each remaining one, and expose the aggregate
+through a standard MCP Server. An OAuth-classified server SHALL NOT be
+connected by the gateway.
 
 #### Scenario: The gateway only aggregates servers in scope for the requesting agent
+
 - **WHEN** `trellis mcp-gateway` is spawned by claude-code, and one
-  canonical server is scoped to `agents: [codex]` only
+  canonical ordinary server is scoped to `agents: [codex]` only
 - **THEN** that codex-only server is not connected to and its tools do
   not appear in the gateway's `tools/list` response to claude-code
 
 #### Scenario: A disabled server is never connected to by the gateway
+
 - **WHEN** a canonical server has `enabled: false`
 - **THEN** the gateway subcommand does not attempt to connect to it,
   regardless of agent scope
 
+#### Scenario: An OAuth server is excluded from gateway upstreams
+
+- **WHEN** `figma` is marked `auth: oauth` and Claude Code uses gateway mode
+- **THEN** the gateway does not connect to Figma and Figma's tools do not
+  appear in the gateway's tools list
+
 ### Requirement: Tools are aggregated with a server-name prefix and routed back to the correct upstream
-The system SHALL expose every upstream tool under the name
-`<server>__<tool>` in the gateway's `tools/list` response, and SHALL
-route a `tools/call` request for `<server>__<tool>` to that exact
-upstream connection's `<tool>` call, never to a different server's
-same-named tool.
+
+The system SHALL expose every upstream tool under a deterministic Agent-safe
+name matching `^[a-zA-Z0-9_-]+$` and no longer than 64 characters. An original
+tool name MAY be exposed without a server prefix when it is unambiguous and
+already safe; otherwise the exposed name SHALL include enough normalized source
+identity to remain distinct. The gateway SHALL route the exposed name to the
+exact upstream connection and its original tool name, never to a different
+server's same-named tool.
+
+#### Scenario: A unique valid tool keeps its short original name
+
+- **WHEN** only server `github` exposes `search_repositories`
+- **THEN** the Gateway lists `search_repositories` and routes calls to the
+  `github` upstream
 
 #### Scenario: Two upstream servers with same-named tools remain distinguishable
+
 - **WHEN** two upstream servers, `alpha` and `beta`, each expose a tool
   named `search`
-- **THEN** the gateway's `tools/list` response contains both
-  `alpha__search` and `beta__search` as distinct entries
+- **THEN** the Gateway lists two distinct safe names containing the normalized
+  server and tool identity, and both calls route to their respective upstreams
 
 #### Scenario: A tool call is routed to its own upstream, not a same-named one elsewhere
-- **WHEN** the gateway receives a `tools/call` request for `beta__search`
+
+- **WHEN** the Gateway receives the exposed name allocated for `beta`'s
+  `search` tool
 - **THEN** the call is forwarded to the `beta` upstream connection only,
   never to `alpha`
+
+#### Scenario: Dotted built-in or upstream names are normalized
+
+- **WHEN** an upstream exposes `trellis.skills.search` or `foo.bar`
+- **THEN** the Gateway lists a name containing only letters, digits, `_`, or
+  `-`, and calling that name reaches the original dotted tool name
+
+#### Scenario: Long tools do not gain an unnecessary prefix
+
+- **WHEN** one upstream exposes a unique tool whose original name is longer
+  than the Agent-safe budget
+- **THEN** the Gateway exposes a bounded deterministic form of the tool name
+  without adding the server prefix, and routes it to the original long name
+
+#### Scenario: Distinct long names remain distinct
+
+- **WHEN** two different upstream tool identities normalize to the same
+  bounded visible name
+- **THEN** the Gateway assigns deterministic hash/suffix disambiguators, lists
+  both tools, and routes each call correctly
 
 ### Requirement: One upstream's connection failure does not affect any other upstream
 The system SHALL log and skip an upstream server that fails to connect or
@@ -278,3 +317,25 @@ leave one party holding a credential that is already dead.
 - **WHEN** one server's refresh is in progress and holding its lock
 - **THEN** connecting to and refreshing any other server proceeds
   without waiting on that lock
+
+### Requirement: Gateway-mode native plans support direct OAuth entries
+
+When a managed Agent uses gateway mode, its native MCP plan SHALL contain one
+gateway/runtime entry for ordinary MCP and one direct MCP entry per eligible
+`auth: oauth` server. If the Agent's route contains an explicit server list,
+the OAuth entries SHALL be limited to that list. The gateway/runtime entry
+SHALL remain available for Trellis-owned Runtime providers even when every
+upstream server is OAuth-classified.
+
+#### Scenario: Mixed gateway plan
+
+- **WHEN** `tanka` is ordinary and `figma` is `auth: oauth` under a gateway
+  route
+- **THEN** native config contains one Trellis gateway/runtime entry plus a
+  direct Figma entry, and the gateway's upstream set contains only Tanka
+
+#### Scenario: OAuth-only gateway plan
+
+- **WHEN** every eligible server is `auth: oauth`
+- **THEN** native config contains direct OAuth entries and the Trellis
+  gateway/runtime entry, while the gateway connects to no OAuth server

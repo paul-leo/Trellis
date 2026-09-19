@@ -127,28 +127,36 @@ export const INSTALL_HINTS: Record<AgentId, string> = {
   "kimi-code": "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
 };
 
-function ensureFile(path: string, template: string): InitFileResult {
+function ensureFile(path: string, template: string, write = true): InitFileResult {
   if (existsSync(path)) {
     return { path, action: "already-present" };
   }
-  writeFileSync(path, template);
+  if (write) writeFileSync(path, template);
   return { path, action: "create" };
 }
 
-export async function collectInitReport(homeDir: string = homedir()): Promise<InitReport> {
+export async function collectInitReport(homeDir: string = homedir(), options: { write?: boolean } = {}): Promise<InitReport> {
+  const write = options.write !== false;
   const root = join(homeDir, ".trellis");
-  mkdirSync(root, { recursive: true });
-  mkdirSync(join(root, "mcp"), { recursive: true });
-  mkdirSync(join(root, "skills"), { recursive: true });
-  mkdirSync(join(root, "agents"), { recursive: true });
-  mkdirSync(join(root, "memories"), { recursive: true });
+  if (write) {
+    mkdirSync(root, { recursive: true });
+    mkdirSync(join(root, "mcp"), { recursive: true });
+    mkdirSync(join(root, "skills"), { recursive: true });
+    mkdirSync(join(root, "agents"), { recursive: true });
+    mkdirSync(join(root, "memories"), { recursive: true });
+  }
 
   const files: InitFileResult[] = [
-    ensureFile(join(root, "agents.md"), AGENTS_MD_TEMPLATE),
-    ensureFile(join(root, "mcp", "servers.yaml"), serversYamlTemplate()),
-    ensureFile(join(root, "secrets.policy.yaml"), secretsPolicyYamlTemplate()),
-    ensureFile(join(root, "managed.yaml"), managedYamlTemplate()),
+    ensureFile(join(root, "agents.md"), AGENTS_MD_TEMPLATE, write),
+    ensureFile(join(root, "mcp", "servers.yaml"), serversYamlTemplate(), write),
+    ensureFile(join(root, "secrets.policy.yaml"), secretsPolicyYamlTemplate(), write),
+    ensureFile(join(root, "managed.yaml"), managedYamlTemplate(), write),
   ];
+  const here = dirname(fileURLToPath(import.meta.url));
+  const builtinSkillPath = join(root, "skills", "trellis-runtime", "SKILL.md");
+  const builtinSkillTemplate = readFileSync(join(here, "..", "..", "schema", "builtin-skills", "trellis-runtime", "SKILL.md"), "utf8");
+  if (write) mkdirSync(dirname(builtinSkillPath), { recursive: true });
+  files.push(ensureFile(builtinSkillPath, builtinSkillTemplate, write));
 
   const probes: { agent: AgentId; run: () => Promise<{ present: boolean }> }[] = [
     { agent: "claude-code", run: () => claudeCodeProbe.probe(homeDir) },

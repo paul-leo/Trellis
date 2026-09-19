@@ -145,7 +145,41 @@ test("BuiltinRegistry: provider failures are isolated and names stay unique", as
   const broken = { id: "broken", listTools: () => { throw new Error("broken provider"); }, callTool: async () => ({ content: [] }) };
   const registry = new BuiltinRegistry([broken, provider], () => {});
   const tools = await registry.listTools(context(fixtureHome(), "codex"));
-  assert.ok(tools.some((tool) => tool.name === "trellis.skills.search"));
+  assert.ok(tools.some((tool) => tool.name === "skills_search"));
+});
+
+test("BuiltinRegistry: compact built-in names retain logical metadata and dispatch", async () => {
+  const provider = new SkillProvider();
+  const registry = new BuiltinRegistry([provider], () => {});
+  const runtimeContext = context(fixtureHome(), "codex");
+  const tools = await registry.listTools(runtimeContext);
+  const search = tools.find((tool) => tool.name === "skills_search");
+  assert.ok(search);
+  assert.equal(search.title, "skills / trellis.skills.search");
+  const result = await registry.callTool("skills_search", { query: "" }, runtimeContext);
+  assert.equal(result.isError, undefined);
+  // Logical names remain valid for providers/Skills that describe the stable
+  // capability id instead of one client's presentation name.
+  const logical = await registry.callTool("trellis.skills.search", { query: "" }, runtimeContext);
+  assert.equal(logical.isError, undefined);
+});
+
+test("BuiltinRegistry: normalized exposed names route with the original provider name", async () => {
+  let calledWith = "";
+  const provider = {
+    id: "mcp.router",
+    listTools: () => [{ name: "foo.bar", description: "fixture" }],
+    callTool: async (name: string) => {
+      calledWith = name;
+      return { content: [{ type: "text" as const, text: "ok" }] };
+    },
+  };
+  const registry = new BuiltinRegistry([provider], () => {});
+  const tools = await registry.listTools(context(fixtureHome(), "codex"));
+  assert.equal(tools[0]?.name, "router__foo_bar");
+  assert.equal(tools[0]?.title, "mcp.router / foo.bar");
+  await registry.callTool("router__foo_bar", {}, context(fixtureHome(), "codex"));
+  assert.equal(calledWith, "foo.bar");
 });
 
 test("BuiltinRegistry: resources and prompts are independently registered and routed", async () => {

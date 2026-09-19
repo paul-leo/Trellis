@@ -1,7 +1,10 @@
 # mcp-server-sync Specification
 
 ## Purpose
-TBD - created by archiving change trellis-mcp-sync-p2. Update Purpose after archive.
+
+Synchronize canonical MCP definitions into each managed Agent's native
+configuration while preserving comments, user-owned entries, secret
+boundaries, and ownership-safe removal semantics.
 ## Requirements
 ### Requirement: TOML section patching never touches bytes outside the target section
 The system SHALL locate and modify only the exact line span of a single
@@ -26,7 +29,7 @@ byte-for-byte unchanged.
   immediately preceding blank line, if any) is deleted; nothing else in
   the file changes
 
-### Requirement: MCP server sync supports create and repair, not automatic removal
+### Requirement: MCP server sync supports ownership-safe create, repair, and removal
 The system SHALL create a server definition that doesn't exist on an
 in-scope agent and repair one whose current value differs from canonical.
 The system SHALL remove an MCP server entry from an agent's native config
@@ -325,4 +328,3 @@ never a second, different delivery mechanism.
 - **THEN** Codex's `config.toml` gains
   `OPENAPI_MCP_HEADERS = "${NOTION_OPENAPI_MCP_HEADERS}"` in that
   server's `[mcp_servers.<name>.env]` table
-

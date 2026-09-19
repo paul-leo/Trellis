@@ -59,12 +59,8 @@ export function toPiContent(items: McpContentItem[]): PiContent[] {
   });
 }
 
-/** `${serverName}__${toolName}` — deterministic, collision-free across
- * servers sharing pi.registerTool()'s single flat namespace (design.md D5).
- *
- * Now one implementation shared with the gateway's own aggregation rather
- * than two identical ones: the naming convention is the contract between
- * a prefixed name and the server it routes to, and two copies of it could
- * drift into routing tools to the wrong upstream
- * (trellis-mcp-gateway-hosting design.md D3). */
+/** Legacy direct prefix helper kept for callers/tests that need to render a
+ * source-qualified name. The live bridge uses `McpToolRegistry` so it can
+ * allocate short names across all connected servers, normalize invalid
+ * characters, and retain the raw name for routing. */
 export { prefixedToolName as bridgedToolName } from "../lib/mcpToolRegistry.js";

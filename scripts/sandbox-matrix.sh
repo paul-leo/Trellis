@@ -16,6 +16,8 @@ run_success runtime
 run_success migration
 run_success management
 run_success failure
+run_success memory
+run_success memory-migration
 
 printf '\n=== sandbox scenario: expected collision failure ===\n'
 result_dir="$(mktemp -d)"
@@ -25,7 +27,11 @@ scripts/sandbox.sh trellis mcp sync --json >"$result_dir/stdout" 2>"$result_dir/
 status=$?
 set -e
 test "$status" -eq 1
-rg -q "sentry" "$result_dir/stdout" "$result_dir/stderr"
+if command -v rg >/dev/null 2>&1; then
+  rg -q "sentry" "$result_dir/stdout" "$result_dir/stderr"
+else
+  grep -q "sentry" "$result_dir/stdout" "$result_dir/stderr"
+fi
 printf 'expected collision was reported with exit code 1\n'
 
 printf '\nPASS: sandbox scenario matrix\n'

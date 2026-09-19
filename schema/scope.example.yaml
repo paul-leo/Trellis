@@ -1,5 +1,5 @@
 # .trellis/scope.yaml — exceptions only. Anything NOT listed here is
-# shared with all four agents — that's the default Trellis exists for.
+# shared with all managed agents — that's the default Trellis exists for.
 # Only write an entry when a capability should NOT go everywhere.
 #
 # Why this lives in its own file instead of inside each SKILL.md/agent.md:

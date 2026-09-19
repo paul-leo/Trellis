@@ -78,6 +78,7 @@ test("LocalBackend: aggregates two real upstreams under server-prefixed names", 
 
     assert.deepEqual(names, ["alpha__echo", "alpha__env", "beta__echo", "beta__env"]);
     assert.deepEqual(warnings, [], "a clean run must warn about nothing");
+    assert.deepEqual(backend.listStatus()?.map((status) => status.status), ["ready", "ready"]);
     await backend.close();
   } finally {
     killFixtureChildren(a);
@@ -120,11 +121,14 @@ test("LocalBackend: a broken upstream is isolated — the others still serve", a
     assert.deepEqual(names, ["alpha__echo", "alpha__env"], "the healthy upstream's tools are served regardless");
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /failed to connect to MCP server "broken"/);
+    assert.equal(backend.listStatus()?.find((status) => status.name === "broken")?.status, "unavailable");
+    assert.equal(backend.listStatus()?.find((status) => status.name === "alpha")?.status, "ready");
     await backend.close();
   } finally {
     killFixtureChildren(good);
   }
 });
+
 
 test("LocalBackend: warnings go to the injected sink, never to stdout (stdout is the MCP protocol)", async () => {
   const warnings: string[] = [];

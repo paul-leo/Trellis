@@ -18,8 +18,10 @@ import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { connectServer, withTimeout, DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
+import { McpToolRegistry, type AggregatedTool } from "../lib/mcpToolRegistry.js";
+import { withOAuthHeader } from "../lib/gatewayBackend.js";
 import { ALL_AGENTS } from "../core/types.js";
-import { bridgedToolName, toParametersSchema, toPiContent, type McpContentItem } from "./schemaTranslate.js";
+import { toParametersSchema, toPiContent, type McpContentItem } from "./schemaTranslate.js";
 
 /** Re-exported so `trellis-mcp-connect-timeout`'s existing test keeps
  * importing it from the module it was written against — proving the
@@ -46,22 +48,8 @@ interface PiExtensionAPI {
 
 const CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-bridge", version: "0.0.0" };
 
-function registerServerTools(pi: PiExtensionAPI, serverName: string, client: Client, timeoutMs: number): Promise<void> {
-  return withTimeout(client.listTools(), timeoutMs, `listTools timed out after ${timeoutMs}ms`).then((result) => {
-    for (const tool of result.tools) {
-      pi.registerTool({
-        name: bridgedToolName(serverName, tool.name),
-        label: tool.name,
-        description: tool.description ?? `MCP tool "${tool.name}" from server "${serverName}"`,
-        parameters: toParametersSchema(tool.inputSchema),
-        async execute(_toolCallId, params) {
-          const result = await client.callTool({ name: tool.name, arguments: params });
-          const content = Array.isArray(result.content) ? (result.content as McpContentItem[]) : [];
-          return { content: toPiContent(content), details: result };
-        },
-      });
-    }
-  });
+function listServerTools(client: Client, timeoutMs: number): Promise<readonly AggregatedTool[]> {
+  return withTimeout(client.listTools(), timeoutMs, `listTools timed out after ${timeoutMs}ms`).then((result) => result.tools);
 }
 
 /**
@@ -86,6 +74,7 @@ export default async function trellisMcpBridge(
   // is pi reading canonical directly at its own runtime, P4's own concern.
   const { desired } = resolveMcpPlan("pi", canonical.mcp, ALL_AGENTS, canonical.secretsPolicy);
   const clients = new Set<Client>();
+  const registry = new McpToolRegistry();
 
   const closeClient = async (client: Client): Promise<void> => {
     if (!clients.delete(client)) return;
@@ -115,25 +104,57 @@ export default async function trellisMcpBridge(
   // hook optional so the bridge remains loadable in older compatible hosts.
   pi.on?.("session_shutdown", closeAllClients);
 
-  await Promise.all(
+  const discovered = await Promise.all(
     desired.map(async ({ name, def }) => {
       let client: Client;
       try {
-        client = await connectServer(def, canonical.secretsPolicy, connectTimeoutMs, CLIENT_INFO);
+        const effectiveDef = def.auth === "oauth" && def.url
+          ? await withOAuthHeader(name, def, homeDir)
+          : def;
+        client = await connectServer(effectiveDef, canonical.secretsPolicy, connectTimeoutMs, CLIENT_INFO);
       } catch (err) {
         // One unreachable/misconfigured (including permanently hanging —
         // trellis-mcp-connect-timeout) server must never prevent every
         // other server's tools from registering (tasks.md 3.2).
         console.error(`trellis-mcp-bridge: failed to connect to MCP server "${name}": ${err instanceof Error ? err.message : String(err)}`);
-        return;
+        return undefined;
       }
       clients.add(client);
       try {
-        await registerServerTools(pi, name, client, connectTimeoutMs);
+        const tools = await listServerTools(client, connectTimeoutMs);
+        return { name, client, tools };
       } catch (err) {
         console.error(`trellis-mcp-bridge: failed to list tools for MCP server "${name}": ${err instanceof Error ? err.message : String(err)}`);
         await closeClient(client);
+        return undefined;
       }
     }),
   );
+
+  // Add in canonical plan order, not completion order, so allocation remains
+  // stable when multiple upstreams answer concurrently.
+  for (const result of discovered) {
+    if (!result) continue;
+    registry.add(result.name, result.client, result.tools);
+  }
+
+  for (const tool of registry.listTools()) {
+    const target = registry.resolve(tool.name);
+    if (!target) continue;
+    const originalName = target.toolName;
+    const serverName = target.serverName;
+    pi.registerTool({
+      name: tool.name,
+      label: originalName,
+      description: tool.description ?? `MCP tool "${originalName}" from server "${serverName}"`,
+      parameters: toParametersSchema(tool.inputSchema),
+      async execute(_toolCallId, params) {
+        const result = await registry.callTool(tool.name, params);
+        const content = Array.isArray((result as { content?: unknown }).content)
+          ? (result as { content: McpContentItem[] }).content
+          : [];
+        return { content: toPiContent(content), details: result };
+      },
+    });
+  }
 }

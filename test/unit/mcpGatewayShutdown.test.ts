@@ -87,7 +87,11 @@ test("runtime edge: the first-class mcp-runtime entry exposes the same providers
   try {
     const { client, transport } = await connectToGateway(gatewayHome(upstreamMarker), "mcp-runtime");
     const { tools } = await client.listTools();
-    assert.ok(tools.some((tool) => tool.name === "trellis.skills.search"));
+    assert.ok(tools.some((tool) => tool.name === "skills_search"));
+    assert.ok(tools.some((tool) => tool.name === "mcp_status"));
+    assert.ok(tools.some((tool) => tool.name === "runtime_status"));
+    assert.ok(tools.some((tool) => tool.name === "runtime__agents_list"));
+    assert.ok(tools.some((tool) => tool.name === "instructions_read"));
     assert.ok(tools.some((tool) => tool.name === "fixture__echo"));
     await client.close();
     await transport.close();
@@ -103,8 +107,10 @@ test("gateway end to end: an agent spawning it gets every in-scope server's tool
 
     const { tools } = await client.listTools();
     const toolNames = tools.map((tool) => tool.name).sort();
-    assert.deepEqual(toolNames.filter((name) => name.startsWith("fixture__")), ["fixture__echo", "fixture__env"]);
-    assert.ok(toolNames.includes("trellis.skills.search"), "the runtime exposes the built-in skill provider");
+    assert.deepEqual(toolNames.filter((name) => ["fixture__echo", "fixture__env"].includes(name)), ["fixture__echo", "fixture__env"]);
+    assert.ok(toolNames.includes("skills_search"), "the runtime exposes the built-in skill provider");
+    assert.ok(toolNames.includes("mcp_status"), "the runtime exposes MCP remediation status");
+    assert.ok(toolNames.includes("runtime_status"));
 
     const result = (await client.callTool({ name: "fixture__echo", arguments: { message: "through the gateway" } })) as {
       content: Array<{ type: string; text: string }>;
@@ -151,8 +157,8 @@ test("gateway end to end: closing the agent's pipe leaves neither the gateway no
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
     const listed = (await replies.next()).value as unknown as { result: { tools: Array<{ name: string }> } };
     const toolNames = listed.result.tools.map((tool) => tool.name).sort();
-    assert.deepEqual(toolNames.filter((name) => name.startsWith("fixture__")), ["fixture__echo", "fixture__env"]);
-    assert.ok(toolNames.includes("trellis.skills.search"));
+    assert.deepEqual(toolNames.filter((name) => ["fixture__echo", "fixture__env"].includes(name)), ["fixture__echo", "fixture__env"]);
+    assert.ok(toolNames.includes("skills_search"));
     assert.notEqual(processesMatching(upstreamMarker), "", "precondition: the upstream is actually running");
 
     const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));

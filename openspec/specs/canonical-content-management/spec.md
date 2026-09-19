@@ -21,7 +21,7 @@ against `managedAgents`), never a raw, unresolved `scope.yaml` entry.
 - **WHEN** `trellis skill list` runs and a skill has no `scope.yaml`
   entry
 - **THEN** its listed scope is exactly the current managed set, not
-  "all four agents" unconditionally
+  "all managed agents" unconditionally
 
 #### Scenario: A skill scoped to agents outside the managed set resolves to the intersection
 - **WHEN** a skill's `scope.yaml` entry names an agent not currently in

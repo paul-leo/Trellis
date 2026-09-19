@@ -10,12 +10,13 @@ import { runInit } from "./commands/init.js";
 import { runMigrate } from "./commands/migrate.js";
 import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
-import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, parseMcpAddArgs } from "./commands/mcp.js";
+import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, runMcpSetAuth, parseMcpAddArgs } from "./commands/mcp.js";
+import { runMcpImport } from "./commands/mcpImport.js";
 import { parseMcpGatewayArgs, runMcpGateway, runMcpRuntime } from "./commands/mcpGateway.js";
 import { runMcpAuth } from "./commands/mcpAuth.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
-import { runSkillList, runSkillAdd, runSkillRemove } from "./commands/skill.js";
+import { runSkillList, runSkillAdd, runSkillRemove, runSkillUpdateBuiltin } from "./commands/skill.js";
 import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseManageArgs, runManage } from "./commands/manage.js";
 import { runKimi } from "./commands/kimi.js";
@@ -62,6 +63,9 @@ Commands:
                                     omit for every managed agent
               --memory <on|off>     enable/disable the shared memory MCP
                                     server; omit to leave it untouched
+              --memory-migrate <on|off>
+                                    import supported native Agent memory into
+                                    canonical; omit to leave it untouched
               --selection <file>   item-level YAML/JSON selection for skills,
                                     MCP servers, memories, and per-agent routes
               --dry-run             preview the whole flow, write nothing
@@ -71,12 +75,13 @@ Commands:
               missing) and prints which agents are present
               --json    machine-readable output, no report text
   migrate --from <agent>
-            Import an existing agent's real skills/instructions/MCP
+            Import an existing agent's real skills/instructions/MCP/memory
             servers into canonical source (claude-code | codex | kiro |
             pi — pi has no static MCP config, mcp migrate-in is a no-op
             for it). Never overwrites differing content — reports a
             conflict instead.
-              --only skills|instructions|mcp   restrict to one category
+            --only skills|instructions|mcp|memory
+                                    restrict to one category
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   doctor    Scan Claude Code / Codex / Kiro / pi for drift
@@ -99,12 +104,22 @@ Commands:
               --json    machine-readable output, no report text
   mcp add <name> --transport stdio|http|sse ...
             Add a canonical MCP server (refuses on an existing name,
-              no overwrite): --command <cmd> [--args a,b] (stdio) or
-              --url <url> (http/sse); [--headers k=v,...]
-              [--env NAME,...] [--static-env k=v,...] [--agents id,...]
-              [--enabled true|false]
-              --dry-run    preview the plan, write nothing
-              --json       machine-readable output, no report text
+            no overwrite): --command <cmd> [--args a,b] (stdio) or
+            --url <url> (http/sse); [--headers k=v,...]
+            [--auth oauth] [--env NAME,...] [--static-env k=v,...] [--agents id,...]
+            [--enabled true|false]
+            --dry-run    preview the plan, write nothing
+            --json       machine-readable output, no report text
+  mcp import <json-file>
+            Import a standard mcpServers JSON export without changing the
+            source; extracts credential env values into the ignored local
+            secret file, de-duplicates, and reports conflicts
+            --dry-run    preview without writing
+            --json       machine-readable output, no report text
+  mcp set <name> --auth oauth|none
+            Set or clear explicit OAuth classification; canonical only
+            --dry-run    preview the plan, write nothing
+            --json       machine-readable output, no report text
   mcp auth <server-name>
             Authorize a remote (http/sse) MCP server that uses OAuth —
               opens a browser once, stores the result 0600 under
@@ -131,6 +146,11 @@ Commands:
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill remove <name>
+  skill update-builtin
+            Refresh the package-owned trellis-runtime Skill in canonical
+            source; existing native symlinks see the update
+            --dry-run    preview without writing
+            --json       machine-readable output, no report text
             Remove a canonical skill (the next sync auto-removes the
               now-stale symlink on every managed agent)
               --dry-run    preview the plan, write nothing
@@ -235,6 +255,8 @@ async function main(argv: string[]): Promise<void> {
     const gatewayAgents = gatewayAgentsIndex >= 0 ? rest[gatewayAgentsIndex + 1] : undefined;
     const memoryIndex = rest.indexOf("--memory");
     const memory = memoryIndex >= 0 ? rest[memoryIndex + 1] : undefined;
+    const memoryMigrateIndex = rest.indexOf("--memory-migrate");
+    const memoryMigrate = memoryMigrateIndex >= 0 ? rest[memoryMigrateIndex + 1] : undefined;
     const selectionIndex = rest.indexOf("--selection");
     const selectionFile = selectionIndex >= 0 ? rest[selectionIndex + 1] : undefined;
     const { exitCode } = await runOnboard({
@@ -244,6 +266,7 @@ async function main(argv: string[]): Promise<void> {
       hubUrl,
       gatewayAgents,
       memory,
+      memoryMigrate,
       selectionFile,
       dryRun: rest.includes("--dry-run"),
       json: rest.includes("--json"),
@@ -323,6 +346,18 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = runMcpAdd(name, parseMcpAddArgs(mcpRest), { json, dryRun }).exitCode;
       return;
     }
+    if (subcommand === "import") {
+      const [file] = mcpRest;
+      process.exitCode = runMcpImport(file, { json, dryRun }).exitCode;
+      return;
+    }
+    if (subcommand === "set") {
+      const [name] = mcpRest;
+      const authIndex = mcpRest.indexOf("--auth");
+      const auth = authIndex >= 0 ? mcpRest[authIndex + 1] : undefined;
+      process.exitCode = runMcpSetAuth(name, auth, { json, dryRun }).exitCode;
+      return;
+    }
     if (subcommand === "remove") {
       const [name] = mcpRest;
       if (!name) {
@@ -346,7 +381,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
 
-    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|remove <name>|auth <name>\n`);
+    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|set <name>|remove <name>|auth <name>\n`);
     process.exitCode = 1;
     return;
   }
@@ -382,7 +417,11 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = runSkillRemove(name, { json, dryRun }).exitCode;
       return;
     }
-    console.error(`Unknown skill subcommand: ${subcommand ?? "(none)"}\nUsage: trellis skill list|add <name> --from <path>|remove <name>\n`);
+    if (subcommand === "update-builtin") {
+      process.exitCode = runSkillUpdateBuiltin({ json, dryRun }).exitCode;
+      return;
+    }
+    console.error(`Unknown skill subcommand: ${subcommand ?? "(none)"}\nUsage: trellis skill list|add <name> --from <path>|remove <name>|update-builtin\n`);
     process.exitCode = 1;
     return;
   }

@@ -30,6 +30,7 @@ export interface McpClientInfo {
 }
 
 export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+const FAILED_TRANSPORT_CLEANUP_TIMEOUT_MS = 1_000;
 
 /**
  * A hanging server (process alive, protocol response never sent) leaves
@@ -70,7 +71,14 @@ export async function connectWithCleanup(client: Client, transport: Transport, t
     return client;
   } catch (err) {
     try {
-      await transport.close();
+      // A failed HTTP transport can itself hang while closing. Cleanup is
+      // best-effort and must not turn one bad upstream into a Gateway-wide
+      // startup timeout; preserve the original connect error below.
+      await withTimeout(
+        Promise.resolve().then(() => transport.close()),
+        FAILED_TRANSPORT_CLEANUP_TIMEOUT_MS,
+        "transport cleanup timed out",
+      );
     } catch {
       // best-effort; the original connect failure is what matters
     }

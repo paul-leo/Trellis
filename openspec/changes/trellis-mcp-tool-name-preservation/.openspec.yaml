@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Reduce Agent-facing tool name length without losing routing correctness or
+  duplicate safety

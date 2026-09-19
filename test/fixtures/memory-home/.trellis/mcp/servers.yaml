@@ -1,0 +1,13 @@
+servers:
+  fixture-tools:
+    transport: stdio
+    command: node
+    args: ["/fixtures/sample-mcp-server.js"]
+known_host_injected: []
+routes:
+  pi:
+    mode: gateway
+    servers: [fixture-tools]
+  kimi-code:
+    mode: gateway
+    servers: [fixture-tools]

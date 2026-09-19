@@ -284,6 +284,30 @@ test("resolveMcpPlan: gateway mode collapses every server to one entry regardles
   assert.deepEqual(result.conflicts, []);
 });
 
+test("resolveMcpPlan: gateway keeps OAuth servers as direct entries", () => {
+  const config = mcp({
+    servers: {
+      ordinary: { transport: "stdio", command: "ordinary" },
+      figma: { transport: "http", url: "https://mcp.figma.com/mcp", auth: "oauth" },
+    },
+    gateway: { enabled: true },
+  });
+  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired.map((entry) => entry.name), [GATEWAY_ENTRY_NAME, "figma"]);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test("resolveMcpPlan: OAuth direct entries still receive direct validation", () => {
+  const config = mcp({
+    servers: {
+      figma: { transport: "http", url: "https://mcp.figma.com/mcp", auth: "oauth", agents: ["codex"] },
+    },
+    gateway: { enabled: true },
+  });
+  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired.map((entry) => entry.name), [GATEWAY_ENTRY_NAME, "figma"]);
+});
+
 test("resolveMcpPlan: the gateway entry is an ordinary stdio command carrying the resolving agent's own id", () => {
   const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true } });
 

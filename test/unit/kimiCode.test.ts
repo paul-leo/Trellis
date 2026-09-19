@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -41,7 +41,7 @@ test("KimiCodeAdapter: Runtime-only delivery writes one deferred Runtime entry a
   const adapter = new KimiCodeAdapter(value);
   const canonical = loadCanonicalSource(value);
   const plan = await adapter.plan(canonical);
-  const runtime = plan.find((item) => item.mcpWrite?.name === "trellis-runtime");
+  const runtime = plan.find((item) => item.mcpWrite?.name === "trellis");
   assert.equal(runtime?.action, "create");
   assert.equal(plan.some((item) => item.kind === "skill" || item.kind === "instructions"), false);
 
@@ -50,7 +50,7 @@ test("KimiCodeAdapter: Runtime-only delivery writes one deferred Runtime entry a
   backup.finalize();
   const config = JSON.parse(readFileSync(join(value, ".kimi-code", "mcp.json"), "utf8"));
   assert.deepEqual(config.mcpServers["user-owned"], { command: "user-tool" });
-  assert.deepEqual(config.mcpServers["trellis-runtime"], {
+  assert.deepEqual(config.mcpServers.trellis, {
     command: "trellis",
     args: ["mcp-runtime", "--agent", "kimi-code"],
     deferred: true,
@@ -58,6 +58,28 @@ test("KimiCodeAdapter: Runtime-only delivery writes one deferred Runtime entry a
   });
   const secondPlan = await adapter.plan(loadCanonicalSource(value));
   assert.deepEqual(secondPlan, []);
+});
+
+test("KimiCodeAdapter: Runtime-only delivery removes stale Trellis links but preserves user content", async () => {
+  const value = await canonicalHome();
+  const canonical = loadCanonicalSource(value);
+  mkdirSync(join(value, ".kimi-code", "skills"), { recursive: true });
+  symlinkSync(join(value, ".trellis", "skills", "shared"), join(value, ".kimi-code", "skills", "shared"));
+  symlinkSync(join(value, ".trellis", "agents.md"), join(value, ".kimi-code", "AGENTS.md"));
+  writeFileSync(join(value, ".kimi-code", "skills", "user-only"), "user content\n");
+
+  const adapter = new KimiCodeAdapter(value);
+  const plan = await adapter.plan(canonical);
+  assert.equal(plan.some((item) => item.action === "remove" && item.kind === "skill" && item.target.endsWith(".kimi-code/skills/shared")), true);
+  assert.equal(plan.some((item) => item.action === "remove" && item.kind === "instructions" && item.target.endsWith(".kimi-code/AGENTS.md")), true);
+  assert.equal(plan.some((item) => item.target.endsWith(".kimi-code/skills/user-only")), false);
+
+  const backup = openBackupSession(value, "test-kimi-runtime-cleanup");
+  await adapter.apply(plan, backup);
+  backup.finalize();
+  assert.equal(existsSync(join(value, ".kimi-code", "skills", "shared")), false);
+  assert.equal(existsSync(join(value, ".kimi-code", "AGENTS.md")), false);
+  assert.equal(readFileSync(join(value, ".kimi-code", "skills", "user-only"), "utf8"), "user content\n");
 });
 
 test("KimiCodeAdapter: native delivery projects Kimi-specific Skills only", async () => {

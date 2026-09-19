@@ -5,7 +5,7 @@
 Skills, MCP servers, subagent definitions, shared memory, and secret policy —
 defined once, adapted into Claude Code, Codex, Kiro, pi, and Kimi Code without
 drift and without a second copy of anything. Kimi Code uses the Runtime-first
-path: one `trellis-runtime` MCP entry, with Skills and Memory consumed through
+path: one `trellis` MCP entry, with Skills and Memory consumed through
 Trellis providers.
 
 Trellis does not replace any of these agents' native config. It generates and
@@ -72,15 +72,54 @@ dry-runnable and backed by `trellis rollback`.
 trellis onboard --agent claude-code --manage pi
 ```
 
+## Trellis itself as a Skill
+
+Trellis ships one package-owned Skill, `trellis-runtime`, with two layers:
+
+| Layer | Who uses it | What it covers |
+| --- | --- | --- |
+| Takeover and migration | the operator, with Agent assistance | inspect, dry-run, choose a migration source, choose the managed boundary, select Skills/MCP/Memory, authorize OAuth, sync, audit, verify, and rollback |
+| Runtime consumption | every managed Agent | discover and read canonical Skills, inspect shared Memory and global instructions, diagnose MCP, see managed Agents, and inspect or explicitly confirm task handoffs |
+
+`trellis init` bootstraps this Skill into
+`~/.trellis/skills/trellis-runtime/SKILL.md`. After an Agent is managed,
+`trellis sync` delivers it in the Agent's native Skill location for native or
+`both` delivery. For Runtime-only delivery, `SkillProvider` exposes the same
+canonical Skill through the `trellis` MCP Runtime; Kimi Code uses
+`trellis kimi` to prevent a second native Skill discovery path. This is one
+canonical Skill, not a copied per-Agent variant.
+
+Before takeover, the Skill cannot be consumed from an Agent that has not been
+connected to Trellis yet; use the CLI and
+[`docs/getting-started.md`](docs/getting-started.md#trellis-runtime-skill)
+for the first-run path. After takeover, the Skill is the Agent's operating
+guide for Trellis-managed capabilities. The MCP client may display names such
+as `mcp__trellis__skills_search`; `mcp__` is client-generated, while Trellis's
+portable names are `skills_search`, `memory_search`, `runtime_status`, and so
+on.
+
 **Or step by step** (what `onboard` is actually doing under the hood, if you
 want to run any one stage on its own):
+
+For standard MCP Router/client exports, use `trellis mcp import <json-file>`.
+It reads `mcpServers` without changing the source, de-duplicates existing
+servers, extracts credential-like environment values into the ignored local
+secret file, converts supported `mcp-remote` Basic Auth entries to native HTTP,
+and reports unsupported inline credentials or unavailable paths.
+Always run it with `--dry-run` first; see the detailed importer rules in
+[`docs/getting-started.md`](docs/getting-started.md).
+
+After upgrading Trellis, refresh the package-owned Runtime Skill with
+`trellis skill update-builtin --dry-run` followed by
+`trellis skill update-builtin`; the operation is backed up and does not require
+editing Agent-native files.
 
 **Already using Claude Code, Codex, Kiro, or pi and want to migrate what you
 already have?**
 
 1. `trellis init` — creates `~/.trellis/` with a minimal skeleton (only what's
    missing; never overwrites a file you already have) and tells you which of
-   the four agents it found on this machine.
+   the five supported agents it found on this machine.
 2. `trellis migrate --from <agent>` — once per agent you already use. Copies
    that agent's real skills and instructions into canonical source. Never
    overwrites: an already-identical skill is reported and skipped, a genuine
@@ -92,8 +131,7 @@ already have?**
    but not managed is never touched. Add `--dry-run` to preview first.
 4. `trellis mcp sync` — distributes `~/.trellis/mcp/servers.yaml` (see
    [`schema/servers.example.yaml`](schema/servers.example.yaml)) to every
-   managed agent's native MCP config (create/repair only — see Known
-   limitations).
+   managed agent's native MCP config, including ownership-safe removal.
 5. `trellis secrets audit` — fails non-zero if any managed agent's real
    config holds a literal credential or an unexpected env var name.
 6. `trellis doctor` — read-only scan of every present agent's current state
@@ -147,11 +185,8 @@ into one result is named future work, not built yet.
   Codex, Claude Code, Kiro CLI, and pi installs — not against a developer's
   actual daily-use agent directories. If you hit something a clean-room
   sandbox wouldn't have caught, please open an issue.
-- Automatic removal of an MCP server is deliberately unsupported (create/
-  repair only) until an ownership-tracking mechanism exists — see
-  `docs/roadmap.md`'s P2 note.
 - `~/.trellis/backups/` has no automatic pruning yet — every `sync`/
-  `mcp sync`/`onboard` run that performs a real write adds one more run
+  `mcp sync`/`onboard`/`mcp import` run that performs a real write adds one more run
   directory, with no cap. Delete old ones by hand for now.
 
 A canonical MCP server can also declare `enabled: false` (kept defined,

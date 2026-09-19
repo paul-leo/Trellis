@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadCanonicalSource } from "../core/canonical.js";
-import type { McpServerDef } from "../core/types.js";
+import type { McpConfig, McpServerDef } from "../core/types.js";
 import type { BackupSession } from "../lib/backup.js";
 import { parseMemoryGraph, planMemoryExtraction, planMemorySync, renderMemoryGraph, type MemoryExtractionPlan, type MemorySyncPlan } from "../lib/memoryGraph.js";
 
@@ -67,9 +67,9 @@ type MemoryServerLookup = { configured: true; graphPath: string } | { configured
  * about which graph file they're reading/writing
  * (trellis-memory-extraction).
  */
-function resolveMemoryServerGraphPath(homeDir: string): MemoryServerLookup {
+function resolveMemoryServerGraphPath(homeDir: string, mcpOverride?: McpConfig): MemoryServerLookup {
   const canonical = loadCanonicalSource(homeDir);
-  const server = canonical.mcp.servers[MEMORY_SERVER_NAME];
+  const server = (mcpOverride ?? canonical.mcp).servers[MEMORY_SERVER_NAME];
   const rawPath = server?.staticEnv?.MEMORY_FILE_PATH;
   if (!server || !rawPath) {
     return {
@@ -80,8 +80,8 @@ function resolveMemoryServerGraphPath(homeDir: string): MemoryServerLookup {
   return { configured: true, graphPath: rawPath.replace(/^~(?=$|\/)/, homeDir) };
 }
 
-export function collectMemorySyncResult(homeDir: string = homedir(), selectedMemoryNames?: readonly string[]): MemorySyncResult {
-  const lookup = resolveMemoryServerGraphPath(homeDir);
+export function collectMemorySyncResult(homeDir: string = homedir(), selectedMemoryNames?: readonly string[], mcpOverride?: McpConfig): MemorySyncResult {
+  const lookup = resolveMemoryServerGraphPath(homeDir, mcpOverride);
   if (!lookup.configured) return lookup;
 
   const canonical = loadCanonicalSource(homeDir);

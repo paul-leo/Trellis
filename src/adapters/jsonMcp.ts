@@ -11,7 +11,7 @@ import type { AgentId, McpConfig, McpServerDef, SecretsPolicy } from "../core/ty
 import type { AdapterPlanItem } from "../core/adapter.js";
 import { deepEqual } from "../lib/deepEqual.js";
 import { resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
-import { resolveMcpPlan } from "./mcpPlan.js";
+import { LEGACY_GATEWAY_ENTRY_NAME, LEGACY_RUNTIME_ENTRY_NAME, resolveMcpPlan } from "./mcpPlan.js";
 
 /** Renders the native JSON shape Claude Code/Kiro's `mcpServers` map
  * expects — `env` names render as `${VAR}` references, `staticEnv`
@@ -80,6 +80,19 @@ export function planJsonMcp(opts: {
   const desiredNames = new Set(desired.map((d) => d.name));
   for (const [name, expected] of Object.entries(ownership ?? {})) {
     if (desiredNames.has(name)) continue; // still wanted — not a removal candidate at all
+    if ((name === LEGACY_GATEWAY_ENTRY_NAME || name === LEGACY_RUNTIME_ENTRY_NAME) && desiredNames.has("trellis")) {
+      const current = existingServers[name];
+      if (current !== undefined && deepEqual(current, expected)) {
+        items.push({
+          action: "remove",
+          kind: "mcp",
+          target: configPath,
+          mcpRemove: { name },
+          description: `legacy MCP server "${name}" removed from ${configPath} after Trellis Runtime key migration`,
+        });
+      }
+      continue;
+    }
     const current = existingServers[name];
     if (current === undefined) continue; // already gone — nothing to remove, ledger is pruned separately
     if (!deepEqual(current, expected)) continue; // hand-edited since Trellis wrote it — no longer ours to touch

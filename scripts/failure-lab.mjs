@@ -20,10 +20,10 @@ try {
   await client.connect(transport);
   const listed = await client.listTools();
   const names = new Set(listed.tools.map((tool) => tool.name));
-  assert.ok(names.has("healthy-tool__echo"), "healthy upstream must survive a hanging upstream");
+  assert.ok(names.has("echo"), "healthy upstream must survive a hanging upstream");
   assert.ok(names.has("trellis.skills.search"));
   assert.ok(!names.has("hanging-tool__echo"));
-  const result = await client.callTool({ name: "healthy-tool__echo", arguments: { message: "healthy" } });
+  const result = await client.callTool({ name: "echo", arguments: { message: "healthy" } });
   assert.equal(result.content[0].text, "echo: healthy");
 } finally {
   await client.close();

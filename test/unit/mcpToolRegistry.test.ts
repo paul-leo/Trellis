@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { McpToolRegistry, prefixedToolName, type AggregatedTool, type ToolUpstream } from "../../src/lib/mcpToolRegistry.js";
+import { allocateExposedToolNames, EXPOSED_TOOL_NAME_PATTERN, MAX_EXPOSED_TOOL_NAME_LENGTH, McpToolRegistry, prefixedToolName, type AggregatedTool, type ToolUpstream } from "../../src/lib/mcpToolRegistry.js";
 
 interface FakeUpstream extends ToolUpstream {
   calls: Array<{ name: string; arguments?: Record<string, unknown> }>;
@@ -31,6 +31,62 @@ function fakeUpstream(id: string, tools: AggregatedTool[]): FakeUpstream {
 
 test("prefixedToolName: produces `${server}__${tool}`", () => {
   assert.equal(prefixedToolName("alpha", "search"), "alpha__search");
+});
+
+test("allocator: normalizes characters while retaining a short unique tool name", () => {
+  const [name] = allocateExposedToolNames([{ serverName: "mcp.router", toolName: "trellis.skills.search" }]);
+  assert.equal(name, "trellis_skills_search");
+  assert.match(name, EXPOSED_TOOL_NAME_PATTERN);
+});
+
+test("allocator: short generic names carry compact source context", () => {
+  assert.deepEqual(
+    allocateExposedToolNames([{ serverName: "github", toolName: "search" }]),
+    ["github__search"],
+  );
+});
+
+test("allocator: a source-qualified short name is not repeated", () => {
+  assert.deepEqual(
+    allocateExposedToolNames([{ serverName: "tanka", toolName: "tanka_memo_search" }]),
+    ["tanka_memo_search"],
+  );
+});
+
+test("allocator: artificial mcp source labels are compacted", () => {
+  assert.deepEqual(
+    allocateExposedToolNames([{ serverName: "mcp-router", toolName: "search" }]),
+    ["router__search"],
+  );
+});
+
+test("allocator: a long unique tool is bounded without an unnecessary server prefix", () => {
+  const tool = "this-is-a-very-long-tool-name-that-would-be-worse-with-a-server-prefix-1234567890";
+  const [name] = allocateExposedToolNames([{ serverName: "mcp-router", toolName: tool }]);
+  assert.ok(name.length <= MAX_EXPOSED_TOOL_NAME_LENGTH);
+  assert.match(name, EXPOSED_TOOL_NAME_PATTERN);
+  assert.match(name, /__[a-f0-9]{8}$/);
+});
+
+test("allocator: normalized names collide deterministically instead of dropping a tool", () => {
+  const names = allocateExposedToolNames([
+    { serverName: "alpha", toolName: "foo.bar" },
+    { serverName: "beta", toolName: "foo_bar" },
+  ]);
+  assert.deepEqual(names, ["alpha__foo_bar", "beta__foo_bar"]);
+});
+
+test("allocator: duplicate long tools retain source identity within the length budget", () => {
+  const tool = "tool-name-that-is-long-enough-to-force-a-bounded-server-prefix-1234567890";
+  const names = allocateExposedToolNames([
+    { serverName: "alpha", toolName: tool },
+    { serverName: "beta", toolName: tool },
+  ]);
+  assert.notEqual(names[0], names[1]);
+  for (const name of names) {
+    assert.ok(name.length <= MAX_EXPOSED_TOOL_NAME_LENGTH);
+    assert.match(name, EXPOSED_TOOL_NAME_PATTERN);
+  }
 });
 
 test("registry: same-named tools on two upstreams stay distinguishable", async () => {
@@ -78,7 +134,7 @@ test("registry: one upstream contributing nothing doesn't block the others' aggr
   assert.deepEqual(registry.servers(), ["alpha", "gamma"]);
 });
 
-test("registry: a tool's description and inputSchema pass through untouched; only the name is prefixed", async () => {
+test("registry: a unique tool keeps its original name and metadata", async () => {
   const schema = { type: "object", properties: { q: { type: "string" } } };
   const registry = new McpToolRegistry();
   registry.add("alpha", fakeUpstream("alpha", []), [{ name: "search", description: "Find things", inputSchema: schema, annotations: { readOnly: true } }]);
@@ -92,20 +148,26 @@ test("registry: a tool's description and inputSchema pass through untouched; onl
   assert.deepEqual(tool.annotations, { readOnly: true });
 });
 
-test("registry: a prefixed-name collision keeps the first registration and reports the second", async () => {
+test("registry: a prefixed-name collision gets deterministic suffixes and keeps both tools", async () => {
   // Reachable when a server name itself contains the separator: server
   // "a"'s tool "b__c" and server "a__b"'s tool "c" both want "a__b__c".
   const first = fakeUpstream("first", []);
   const second = fakeUpstream("second", []);
   const registry = new McpToolRegistry();
   registry.add("a", first, [{ name: "b__c" }]);
-  const result = registry.add("a__b", second, [{ name: "c" }]);
+  registry.add("x", second, [{ name: "b__c" }]);
+  const third = fakeUpstream("third", []);
+  const fourth = fakeUpstream("fourth", []);
+  const result = registry.add("a__b", third, [{ name: "c" }]);
+  registry.add("y", fourth, [{ name: "c" }]);
 
-  assert.deepEqual(result.added, []);
-  assert.deepEqual(result.skipped, ["a__b__c"]);
-  assert.equal(registry.size, 1);
+  assert.deepEqual(result.skipped, []);
+  assert.equal(registry.size, 4);
 
+  const names = (await registry.listTools()).map((tool) => tool.name);
+  assert.deepEqual(names, ["a__b__c", "a__b__c__2", "x__b__c", "y__c"]);
   await registry.callTool("a__b__c");
-  assert.equal(first.calls.length, 1, "the first registration keeps the name");
-  assert.equal(second.calls.length, 0, "the colliding registration must not silently steal it");
+  await registry.callTool("a__b__c__2");
+  assert.equal(first.calls.length, 1);
+  assert.equal(third.calls.length, 1);
 });

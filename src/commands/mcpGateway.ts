@@ -18,10 +18,13 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
-import { isGatewayAgent, resolveMcpPlan } from "../adapters/mcpPlan.js";
+import { isGatewayAgent, isOAuthMcpServer, resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { LocalBackend, type GatewayBackend, type UpstreamSpec } from "../lib/gatewayBackend.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
 import { BuiltinRegistry, createRuntimeServer, UpstreamProvider } from "../lib/mcpRuntime.js";
+import { McpStatusProvider } from "../lib/mcpStatusProvider.js";
+import { RuntimeControlProvider } from "../lib/runtimeControlProvider.js";
+import { TaskProvider } from "../lib/taskProvider.js";
 import { RuntimeMemoryProvider } from "../lib/memoryProvider.js";
 import { SkillProvider } from "../lib/skillProvider.js";
 import { ALL_AGENTS } from "../core/types.js";
@@ -79,7 +82,8 @@ export function resolveGatewayUpstreams(
   const directRoutes = canonical.mcp.routes && route
     ? { ...canonical.mcp.routes, [agentId]: { mode: "direct" as const, ...(route.servers ? { servers: route.servers } : {}) } }
     : canonical.mcp.routes;
-  const direct = { ...canonical.mcp, gateway: undefined, hub: undefined, routes: directRoutes, runtime: undefined };
+  const ordinaryServers = Object.fromEntries(Object.entries(canonical.mcp.servers).filter(([, def]) => !isOAuthMcpServer(def)));
+  const direct = { ...canonical.mcp, servers: ordinaryServers, gateway: undefined, hub: undefined, routes: directRoutes, runtime: undefined };
   // The managed set is passed through unchanged, so an unmanaged agent
   // reaches nothing. Being spawned is NOT treated as consent here, which
   // is a deliberate divergence from `src/pi-bridge/index.ts` (which passes
@@ -145,7 +149,7 @@ async function runMcpEdge(
         homeDir,
       });
 
-  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new UpstreamProvider(backend)]);
+  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend), new TaskProvider(), new UpstreamProvider(backend)]);
   const server = createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry);
 
   const transport = new StdioServerTransport();

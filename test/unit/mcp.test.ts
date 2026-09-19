@@ -17,6 +17,7 @@ import {
   applyMcpRemovePlan,
   parseMcpAddArgs,
   runMcpAdd,
+  runMcpSetAuth,
   runMcpRemove,
 } from "../../src/commands/mcp.js";
 import { backupsRoot } from "../../src/lib/backup.js";
@@ -163,6 +164,20 @@ test("mcp sync: hub mode collapses every server into a single trellis-hub entry"
   assert.deepEqual(claudeConfig.mcpServers["trellis-hub"], { type: "http", url: "https://hub.example/mcp" });
 });
 
+test("mcp sync: an owned legacy trellis-gateway entry migrates to the compact trellis key", async () => {
+  const home = scratchHome();
+  initCanonical(home, "servers: {}\ngateway:\n  enabled: true\n", ["claude-code"]);
+  const legacy = { type: "stdio", command: "trellis", args: ["mcp-gateway", "--agent", "claude-code"] };
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { "trellis-gateway": legacy } }, null, 2));
+  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "mcp", "ownership.json"), JSON.stringify({ "claude-code": { "trellis-gateway": legacy } }, null, 2));
+
+  await collectMcpSyncReport({ homeDir: home });
+  const config = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
+  assert.equal(config.mcpServers["trellis-gateway"], undefined);
+  assert.deepEqual(config.mcpServers.trellis, legacy);
+});
+
 test("mcp sync: deleting a server from canonical removes it from a native config, but only because the ownership ledger proves Trellis wrote it unchanged (trellis-mcp-lifecycle-parity)", async () => {
   const home = scratchHome();
   initCanonical(home, "servers:\n  sample:\n    transport: stdio\n    command: node\n");
@@ -294,6 +309,7 @@ test("mcp add: parseMcpAddArgs reads --flag value pairs and comma-separated list
   ]);
   assert.deepEqual(raw, {
     transport: "http",
+    auth: undefined,
     command: undefined,
     args: undefined,
     url: "https://example/mcp",
@@ -303,6 +319,26 @@ test("mcp add: parseMcpAddArgs reads --flag value pairs and comma-separated list
     agents: "codex,pi",
     enabled: "false",
   });
+});
+
+test("mcp add: --auth oauth is accepted only for remote transports", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers: {}\n");
+  const plan = collectMcpAddPlan("figma", { transport: "http", url: "https://mcp.figma.com/mcp", auth: "oauth" }, home);
+  assert.equal(plan.action, "create");
+  assert.equal(plan.def?.auth, "oauth");
+  assert.equal(collectMcpAddPlan("bad", { transport: "stdio", command: "node", auth: "oauth" }, home).action, "invalid-input");
+});
+
+test("mcp set auth: updates and clears an explicit OAuth classification", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+  const set = runMcpSetAuth("figma", "oauth", { homeDir: home });
+  assert.equal(set.exitCode, 0);
+  assert.match(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /auth: oauth/);
+  const clear = runMcpSetAuth("figma", "none", { homeDir: home });
+  assert.equal(clear.exitCode, 0);
+  assert.doesNotMatch(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /auth:/);
 });
 
 test("mcp add: a new stdio server is added, leaving the rest of a hand-authored servers.yaml byte-for-byte unchanged elsewhere (D3)", () => {

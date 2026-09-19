@@ -7,7 +7,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -18,6 +18,7 @@ import {
   migrationSourceScore,
   recommendedMigrationSource,
   runOnboard,
+  mergeMemoryIntoExplicitRoutes,
 } from "../../src/commands/onboard.js";
 
 /** Captures every `console.log` line for the duration of `fn`, restoring
@@ -143,7 +144,7 @@ test("zero agents present: install hints for all supported agents, exit 0, no wr
   assert.equal(exitCode, 0);
 
   // init's own bootstrap already happened; nothing beyond it changed.
-  assert.deepEqual(readdirSync(join(home, ".trellis", "skills")), []);
+  assert.deepEqual(readdirSync(join(home, ".trellis", "skills")), ["trellis-runtime"]);
   assert.match(readManaged(home), /agents: \[\]/);
 });
 
@@ -420,6 +421,18 @@ test("--dry-run: migrate/sync/mcp-sync plans are computed, zero writes anywhere,
 
   assert.deepEqual(readdirSync(join(home, ".trellis", "skills")), beforeSkills);
   assert.equal(readManaged(home), beforeManaged, "managed.yaml itself must be untouched under --dry-run");
+});
+
+test("--dry-run: missing package-owned Runtime Skill is not bootstrapped into the real home", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const builtin = join(home, ".trellis", "skills", "trellis-runtime", "SKILL.md");
+  unlinkSync(builtin);
+
+  const result = await collectOnboardPlan({ homeDir: home, agent: "claude-code", manage: "none", dryRun: true });
+  assert.equal(result.refusal, undefined);
+  assert.equal(existsSync(builtin), false);
 });
 
 test("sync --dry-run (standalone, not via onboard): plan computed, zero writes", async () => {
@@ -1367,6 +1380,142 @@ test("memory toggle: --memory on writes the default server definition", async ()
   assert.deepEqual(result.memory, { current: "on", previous: "off", changed: true });
   assert.match(readServersYaml(home), /memory:\s*\n\s*transport: stdio/);
   assert.match(readServersYaml(home), /MEMORY_FILE_PATH/);
+});
+
+test("memory route merge: explicit Gateway/direct lists add memory, hub lists stay opaque", () => {
+  const mcp = {
+    servers: {
+      memory: { transport: "stdio" as const, command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"] },
+      tools: { transport: "stdio" as const, command: "tools" },
+    },
+    knownHostInjected: [],
+    routes: {
+      "kimi-code": { mode: "gateway" as const, servers: ["tools"] },
+      pi: { mode: "direct" as const, servers: ["tools", "memory"] },
+      codex: { mode: "hub" as const, servers: ["tools"] },
+    },
+  };
+  const enabled = mergeMemoryIntoExplicitRoutes(mcp, ["kimi-code", "pi", "codex"], true);
+  assert.deepEqual(enabled.mcp.routes?.["kimi-code"]?.servers, ["tools", "memory"]);
+  assert.deepEqual(enabled.mcp.routes?.pi?.servers, ["tools", "memory"]);
+  assert.deepEqual(enabled.mcp.routes?.codex?.servers, ["tools"]);
+  const disabled = mergeMemoryIntoExplicitRoutes(enabled.mcp, ["kimi-code", "pi", "codex"], false);
+  assert.deepEqual(disabled.mcp.routes?.["kimi-code"]?.servers, ["tools"]);
+  assert.deepEqual(disabled.mcp.routes?.pi?.servers, ["tools"]);
+  assert.deepEqual(disabled.mcp.routes?.codex?.servers, ["tools"]);
+});
+
+test("memory toggle: interactive onboarding can explicitly enable the shared backend", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    manage: "none",
+    isTTY: true,
+    promptForMemory: async (current) => {
+      assert.equal(current, "off");
+      return "on";
+    },
+  });
+
+  assert.deepEqual(result.memory, { current: "on", previous: "off", changed: true });
+  assert.match(readServersYaml(home), /memory:\s*\n\s*transport: stdio/);
+});
+
+test("memory migration: onboard imports a supported Claude project-memory file independently from backend enablement", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const sourceRoot = join(home, ".claude", "projects", "-workspace-project", "memory");
+  mkdirSync(sourceRoot, { recursive: true });
+  writeFileSync(join(sourceRoot, "MEMORY.md"), "# durable Claude note\n");
+
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    workspaceDir: "/workspace/project",
+    agent: "claude-code",
+    manage: "none",
+    memoryMigrate: "on",
+    memory: "off",
+  });
+
+  assert.equal(result.refusal, undefined);
+  assert.equal(result.migratePlan?.memoryDiscovery?.status, "supported");
+  assert.equal(result.migratePlan?.items.some((item) => item.kind === "memory" && item.action === "create"), true);
+  const canonical = join(home, ".trellis", "memories", "claude-workspace-project-memory.md");
+  assert.ok(existsSync(canonical));
+  assert.match(readFileSync(canonical, "utf8"), /durable Claude note/);
+  assert.doesNotMatch(readServersYaml(home), /memory:\s*\n/);
+});
+
+test("memory migration: interactive choice is independent from shared backend choice", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const sourceRoot = join(home, ".claude", "projects", "-workspace-project", "memory");
+  mkdirSync(sourceRoot, { recursive: true });
+  writeFileSync(join(sourceRoot, "MEMORY.md"), "# interactive memory\n");
+
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    workspaceDir: "/workspace/project",
+    agent: "claude-code",
+    manage: "none",
+    memory: "off",
+    isTTY: true,
+    promptForMemoryMigration: async (agent, count) => {
+      assert.equal(agent, "claude-code");
+      assert.equal(count, 1);
+      return "on";
+    },
+  });
+
+  assert.equal(result.migratePlan?.items.some((item) => item.kind === "memory" && item.action === "create"), true);
+  assert.doesNotMatch(readServersYaml(home), /memory:\s*\n/);
+});
+
+test("memory migration: a later sync conflict rolls back the imported canonical memory", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectInitReport(home);
+  const sourceRoot = join(home, ".claude", "projects", "-workspace-project", "memory");
+  mkdirSync(sourceRoot, { recursive: true });
+  writeFileSync(join(sourceRoot, "MEMORY.md"), "# rollback memory\n");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", "CLAUDE.md"), "# user-owned instructions\n");
+
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    workspaceDir: "/workspace/project",
+    agent: "claude-code",
+    manage: "claude-code",
+    memoryMigrate: "on",
+    memory: "off",
+  });
+
+  assert.ok(result.rollback, "a later sync conflict must roll back the memory import");
+  assert.equal(existsSync(join(home, ".trellis", "memories", "claude-workspace-project-memory.md")), false);
+});
+
+test("memory toggle: interactive keep preserves the current backend without writing", async () => {
+  const home = scratchHome();
+  markClaudeCodePresent(home);
+  await collectOnboardPlan({ homeDir: home, manage: "none", memory: "on" });
+  const before = readServersYaml(home);
+
+  const result = await collectOnboardPlan({
+    homeDir: home,
+    manage: "none",
+    isTTY: true,
+    promptForMemory: async (current) => {
+      assert.equal(current, "on");
+      return "keep";
+    },
+  });
+
+  assert.deepEqual(result.memory, { current: "on", previous: "on", changed: false });
+  assert.equal(readServersYaml(home), before);
 });
 
 test("memory toggle: --memory on reaches every managed agent in the same run (mcp sync)", async () => {

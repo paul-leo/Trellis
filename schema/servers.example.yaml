@@ -115,6 +115,9 @@ servers:
   figma:
     transport: http
     url: "https://mcp.figma.com/mcp"
+    # Explicit OAuth classification keeps this server direct when an Agent
+    # uses gateway mode. Trellis never infers OAuth from a URL or 401.
+    # auth: oauth
 
   # Example of a private/agent-specific server: only Claude Code has a use
   # for this one, so the other three agents never see it defined at all.
@@ -133,7 +136,7 @@ known_host_injected:
   - memory
   - mirasim
 
-# How the servers above reach the four agents. Omit BOTH blocks below for
+# How the servers above reach the five supported agents. Omit BOTH blocks below for
 # direct mode (today's default: every agent gets all N server definitions
 # written straight into its native config).
 #
@@ -165,7 +168,7 @@ hub:
 #
 # Trellis capability delivery is optional and defaults to native. `mcp`
 # removes the native skill projection for that agent and writes one owned
-# `trellis-runtime` MCP entry. `both` keeps the native projection and also
+# `trellis` MCP entry. `both` keeps the native projection and also
 # writes the runtime entry. The runtime resolves the same scoped upstream
 # route, so direct/gateway upstreams are not duplicated.
 #

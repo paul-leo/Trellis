@@ -96,7 +96,7 @@ async function probeRuntime(agent, expectedTools, forbiddenTools) {
 console.log("[runtime-lab] verify agent-specific runtime views");
 await probeRuntime("claude-code", ["shared-tools__echo", "claude-private-tool__echo"], ["codex-private-tool__echo"]);
 await probeRuntime("codex", ["shared-tools__echo", "codex-private-tool__echo"], ["claude-private-tool__echo"]);
-await probeRuntime("pi", ["shared-tools__echo"], ["claude-private-tool__echo", "codex-private-tool__echo"]);
-await probeRuntime("kimi-code", ["shared-tools__echo"], ["claude-private-tool__echo", "codex-private-tool__echo", "kiro-private-tool__echo"]);
+await probeRuntime("pi", ["echo"], ["claude-private-tool__echo", "codex-private-tool__echo"]);
+await probeRuntime("kimi-code", ["echo"], ["claude-private-tool__echo", "codex-private-tool__echo", "kiro-private-tool__echo"]);
 
 console.log("[runtime-lab] PASS: isolated Linux multi-agent runtime scenario");

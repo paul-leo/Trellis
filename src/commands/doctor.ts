@@ -1,6 +1,6 @@
 /**
  * `trellis doctor` — read-only cross-agent scan. No `.trellis/` canonical
- * source required (docs/roadmap.md): this compares the four agents' own
+ * source required (docs/roadmap.md): this compares the five agents' own
  * current state against each other, the same manual process used
  * throughout docs/research.md's investigation, now formalized.
  */
@@ -12,7 +12,7 @@ import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
 import { loadCanonicalSource } from "../core/canonical.js";
-import { resolveMcpPlan } from "../adapters/mcpPlan.js";
+import { GATEWAY_ENTRY_NAME, RUNTIME_ENTRY_NAME, resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot } from "../core/types.js";
 
@@ -332,7 +332,7 @@ export function detectRuntimeDrift(
     if (!snap.present || !canonical.managedAgents.includes(snap.agent) || snap.agent === "pi") continue;
     const expected = resolveMcpPlan(snap.agent, canonical.mcp, canonical.managedAgents, canonical.secretsPolicy).desired
       .map((entry) => entry.name)
-      .filter((name) => name === "trellis-runtime" || name === "trellis-gateway");
+      .filter((name) => name === RUNTIME_ENTRY_NAME || name === GATEWAY_ENTRY_NAME);
     const actual = new Set(snap.mcpServers.map((server) => server.name));
     for (const name of expected) {
       if (!actual.has(name)) {

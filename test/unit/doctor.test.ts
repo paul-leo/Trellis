@@ -93,9 +93,9 @@ test("runtime drift: missing canonical runtime entry is reported, present entry 
   };
   const missing = detectRuntimeDrift([snapshot("codex")], canonical);
   assert.equal(missing.length, 1);
-  assert.match(missing[0].message, /trellis-runtime/);
+  assert.match(missing[0].message, /trellis/);
 
-  const present = detectRuntimeDrift([snapshot("codex", { mcpServers: [{ name: "trellis-runtime", transport: "stdio" }] })], canonical);
+  const present = detectRuntimeDrift([snapshot("codex", { mcpServers: [{ name: "trellis", transport: "stdio" }] })], canonical);
   assert.deepEqual(present, []);
 });
 

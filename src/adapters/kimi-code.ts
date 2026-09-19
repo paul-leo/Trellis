@@ -47,24 +47,24 @@ export class KimiCodeAdapter implements TrellisAdapter {
   async plan(canonical: CanonicalSource): Promise<AdapterPlanItem[]> {
     const native = usesNativeCapabilityDelivery(this.id, canonical.mcp);
     const items: AdapterPlanItem[] = [];
-    if (native) {
-      const root = join(this.homeDir, ".kimi-code");
-      const canonicalRoot = dirname(canonical.instructionsFile);
-      items.push(...planSymlinks({
-        rootDir: join(root, "skills"),
-        desired: canonical.skills
+    const root = join(this.homeDir, ".kimi-code");
+    const canonicalRoot = dirname(canonical.instructionsFile);
+    items.push(...planSymlinks({
+      rootDir: join(root, "skills"),
+      desired: native
+        ? canonical.skills
           .filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents))
-          .map((skill) => ({ name: skill.name, target: skill.dir })),
-        canonicalRoot: join(canonicalRoot, "skills"),
-        kind: "skill",
-      }));
-      items.push(...planSymlinks({
-        rootDir: root,
-        desired: [{ name: "AGENTS.md", target: canonical.instructionsFile }],
-        canonicalRoot,
-        kind: "instructions",
-      }));
-    }
+          .map((skill) => ({ name: skill.name, target: skill.dir }))
+        : [],
+      canonicalRoot: join(canonicalRoot, "skills"),
+      kind: "skill",
+    }));
+    items.push(...planSymlinks({
+      rootDir: root,
+      desired: native ? [{ name: "AGENTS.md", target: canonical.instructionsFile }] : [],
+      canonicalRoot,
+      kind: "instructions",
+    }));
 
     const configPath = join(this.homeDir, ".kimi-code", "mcp.json");
     const parsed = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown> : undefined;

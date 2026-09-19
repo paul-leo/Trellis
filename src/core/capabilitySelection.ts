@@ -9,6 +9,7 @@ export interface CapabilitySelection {
   skills: NameSelection;
   mcpServers: NameSelection;
   memories: NameSelection;
+  memoryMigration: "all" | "none";
   mcpRoutes: Partial<Record<AgentId, { mode: McpRouteMode; servers?: string[] }>>;
   runtimeDelivery: Partial<Record<AgentId, CapabilityDelivery>>;
 }
@@ -37,6 +38,7 @@ type RawSelection = {
   skills?: unknown;
   mcp_servers?: unknown;
   memories?: unknown;
+  memory_migration?: unknown;
   mcp_routes?: unknown;
   runtime_delivery?: unknown;
 };
@@ -47,6 +49,7 @@ const ALL_SELECTION: CapabilitySelection = {
   skills: "all",
   mcpServers: "all",
   memories: "all",
+  memoryMigration: "all",
   mcpRoutes: {},
   runtimeDelivery: {},
 };
@@ -116,6 +119,7 @@ export function parseCapabilitySelectionFile(path: string): SelectionFileResult 
         skills: parseNameSelection(parsed.skills, "skills"),
         mcpServers: parseNameSelection(parsed.mcp_servers, "mcp_servers"),
         memories: parseNameSelection(parsed.memories, "memories"),
+        memoryMigration: parsed.memory_migration === undefined || parsed.memory_migration === "all" ? "all" : parsed.memory_migration === "none" ? "none" : (() => { throw new Error('memory_migration must be "all" or "none"'); })(),
         mcpRoutes: parseRoutes(parsed.mcp_routes),
         runtimeDelivery: parseRuntimeDelivery(parsed.runtime_delivery),
       },

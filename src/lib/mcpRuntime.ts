@@ -3,6 +3,11 @@ import { CallToolRequestSchema, GetPromptRequestSchema, ListPromptsRequestSchema
 import type { CallToolResult, GetPromptResult, Implementation, Prompt, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentId } from "../core/types.js";
 import type { GatewayBackend } from "./gatewayBackend.js";
+import { allocateExposedToolNames } from "./mcpToolRegistry.js";
+
+function compactBuiltinToolName(name: string): string {
+  return name.startsWith("trellis.") ? name.slice("trellis.".length).replaceAll(".", "_") : name;
+}
 
 export interface RuntimeContext {
   agentId: AgentId;
@@ -26,41 +31,58 @@ function providerError(provider: string, error: unknown): string {
 
 export class BuiltinRegistry {
   private readonly toolOwners = new Map<string, TrellisProvider>();
+  private readonly originalToolOwners = new Map<string, TrellisProvider>();
+  private readonly exposedToOriginal = new Map<string, string>();
   private readonly resourceOwners = new Map<string, TrellisProvider>();
   private readonly promptOwners = new Map<string, TrellisProvider>();
 
   constructor(private readonly providers: readonly TrellisProvider[], private readonly warn: (message: string) => void = console.error) {}
 
   async listTools(context: RuntimeContext): Promise<Tool[]> {
-    const tools: Tool[] = [];
+    const candidates: Array<{ provider: TrellisProvider; tool: Tool }> = [];
     this.toolOwners.clear();
+    this.originalToolOwners.clear();
+    this.exposedToOriginal.clear();
     for (const provider of this.providers) {
       if (!provider.listTools) continue;
       try {
         for (const tool of await provider.listTools(context)) {
-          if (this.toolOwners.has(tool.name)) {
-            this.warn(`trellis-mcp-runtime: duplicate tool "${tool.name}" from provider "${provider.id}"`);
-            continue;
-          }
-          this.toolOwners.set(tool.name, provider);
-          tools.push(tool);
+          candidates.push({ provider, tool });
         }
       } catch (err) {
         this.warn(providerError(provider.id, err));
       }
     }
-    return tools;
+    const exposedNames = allocateExposedToolNames(candidates.map(({ provider, tool }) => ({
+      serverName: provider.id,
+      toolName: provider.id === "upstream" ? tool.name : compactBuiltinToolName(tool.name),
+    })));
+    return candidates.map(({ provider, tool }, index) => {
+      const exposedName = exposedNames[index]!;
+      this.toolOwners.set(exposedName, provider);
+      this.exposedToOriginal.set(exposedName, tool.name);
+      if (!this.originalToolOwners.has(tool.name)) this.originalToolOwners.set(tool.name, provider);
+      const title = exposedName === tool.name || tool.title !== undefined
+        ? tool.title
+        : `${provider.id} / ${tool.name}`;
+      return { ...tool, name: exposedName, ...(title === undefined ? {} : { title }) };
+    });
   }
 
   async callTool(name: string, args: unknown, context: RuntimeContext): Promise<CallToolResult> {
     let provider = this.toolOwners.get(name);
+    let originalName = this.exposedToOriginal.get(name) ?? name;
     if (!provider) {
       await this.listTools(context);
       provider = this.toolOwners.get(name);
+      originalName = this.exposedToOriginal.get(name) ?? name;
+      // Keep direct programmatic calls using the logical pre-normalization
+      // name working, while never advertising an invalid alias to an Agent.
+      if (!provider) provider = this.originalToolOwners.get(name);
     }
     if (!provider) return { content: [{ type: "text", text: `unknown Trellis tool "${name}"` }], isError: true };
     try {
-      return await provider.callTool(name, args, context);
+      return await provider.callTool(originalName, args, context);
     } catch (err) {
       return { content: [{ type: "text", text: providerError(provider.id, err) }], isError: true };
     }

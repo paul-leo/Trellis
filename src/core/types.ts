@@ -6,6 +6,7 @@
  */
 
 export type Transport = "stdio" | "http" | "sse";
+export type McpAuthMode = "oauth";
 
 export type AgentId = "claude-code" | "codex" | "kiro" | "pi" | "kimi-code";
 
@@ -19,7 +20,7 @@ export const ALL_AGENTS: readonly AgentId[] = [
 
 /**
  * Every scopable item (skill, subagent, memory entry, MCP server) defaults
- * to "all four agents" when `scope` is omitted — sharing everywhere is the
+ * to all managed agents when `scope` is omitted — sharing everywhere is the
  * common case Trellis exists for; restricting to specific agents is the
  * exception and must be declared explicitly. See docs/architecture.md
  * "Private / agent-specific capabilities".
@@ -41,6 +42,9 @@ export function resolveScope(scope: Scope, managedAgents: readonly AgentId[]): r
 
 export interface McpServerDef {
   transport: Transport;
+  /** Explicit authorization classification. Absence means ordinary MCP;
+   * Trellis never infers OAuth from a URL or a transient 401. */
+  auth?: McpAuthMode;
   /** stdio only */
   command?: string;
   args?: string[];

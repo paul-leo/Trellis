@@ -118,6 +118,22 @@ test("connectWithCleanup: a cleanup failure does not mask the original connect f
   await assert.rejects(() => connectWithCleanup(client, transport, 1000, "should not fire"), /the failure the caller needs to see/);
 });
 
+test("connectWithCleanup: a cleanup that never settles is bounded and preserves the original failure", async () => {
+  const transport = {
+    async start() {},
+    async send() {},
+    async close() {
+      return new Promise<void>(() => {});
+    },
+  } as unknown as Transport;
+  const client = fakeClient(async () => {
+    throw new Error("remote upstream failed");
+  });
+  const started = Date.now();
+  await assert.rejects(() => connectWithCleanup(client, transport, 1000, "should not fire"), /remote upstream failed/);
+  assert.ok(Date.now() - started < 2500, "failed transport cleanup must not block Gateway startup indefinitely");
+});
+
 test("connectWithCleanup: a successful connect returns the client and leaves the transport open", async () => {
   const transport = hangingTransport();
   const client = fakeClient(async () => {});

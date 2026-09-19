@@ -8,7 +8,7 @@ TBD - created by archiving change trellis-cli-onboard. Update Purpose after arch
 ### Requirement: `trellis onboard` chains init, agent detection, migrate, and sync into one guided flow
 
 The system SHALL run `trellis init`'s own idempotent bootstrap first, then
-probe all four agents directly for their real skill names/count,
+probe all five agents directly for their real skill names/count,
 instructions presence, and real MCP server count, then resolve three
 independent things — a migration **source** (at most one, read-only, may
 be none), which migrate **categories** to bring in from that source
@@ -98,11 +98,11 @@ source existed.
 ### Requirement: Zero present agents surfaces install guidance, never an installer
 
 The system SHALL, when no agent is detected present, print each of the
-four supported agents' real install command or download URL and stop,
+five supported agents' real install command or download URL and stop,
 without spawning any install process itself.
 
 #### Scenario: No agent detected
-- **WHEN** `trellis onboard` runs and none of the four agents are
+- **WHEN** `trellis onboard` runs and none of the five agents are
   detected present
 - **THEN** the output names each agent's real install command/URL, no
   process is spawned to install anything, and the command exits
@@ -117,7 +117,7 @@ that agent to the managed set — source and managed-set resolution are
 independent, per the new managed-set requirement below.
 
 #### Scenario: Exactly one agent present resolves the source, not the managed set
-- **WHEN** `trellis onboard` runs and exactly one of the four agents is
+- **WHEN** `trellis onboard` runs and exactly one of the five agents is
   detected present with real content
 - **THEN** that agent is used as `migrate --from`'s target with no
   prompt, the output states it was auto-selected, and the managed-set
@@ -191,7 +191,7 @@ read-only regardless of `--dry-run` and its output is included either way.
 
 The system SHALL prompt for which agents to manage as a distinct step
 from source resolution — an interactive checkbox picker on a real
-terminal capable of raw mode, listing all four agents, present or not,
+terminal capable of raw mode, listing all five agents, present or not,
 with whatever's already in `~/.trellis/managed.yaml` pre-checked; a
 terminal that cannot support raw mode SHALL fall back to a numbered
 multi-select (comma-separated indices) instead of failing to prompt at
@@ -219,7 +219,7 @@ candidate and SHALL start unchecked unless it was already in
 #### Scenario: Interactive checkbox picker resolves the managed set on a capable terminal
 - **WHEN** no `--manage` was given and stdin/stdout are a real terminal
   capable of raw mode
-- **THEN** the command renders a checkbox-style list of all four agents
+- **THEN** the command renders a checkbox-style list of all five agents
   (pre-checked per `managed.yaml`), lets the user move the highlight
   with arrow keys and toggle a row with Space, and resolves to the set
   of checked agents when the user presses Enter — with no digit typing
@@ -531,7 +531,7 @@ SHALL return the same domain values as the existing orchestration contracts.
 #### Scenario: Managed selection uses a colored multiselect prompt
 
 - **WHEN** the managed set is not supplied by `--manage` on a capable TTY
-- **THEN** onboarding shows all four supported agents with aggregate status and
+- **THEN** onboarding shows all five supported agents with aggregate status and
   returns the checked agent ids after confirmation
 
 #### Scenario: Category selection only shows real categories

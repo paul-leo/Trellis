@@ -71,7 +71,11 @@ that.
    is the only supported way to turn gateway or hub mode on or off; there's
    no reason to hand-edit `~/.trellis/mcp/servers.yaml`'s `hub`/`gateway`
    keys directly.
-4. **The shared memory server** — off by default. Pass `--memory on` to add
+4. **Existing memory migration** — independent from the shared backend. Pass
+   `--memory-migrate on` to import supported native Markdown memory, or
+   `--memory-migrate off` to skip it. Unsupported Kimi/pi session stores are
+   reported and left untouched.
+5. **The shared memory server** — off by default. Pass `--memory on` to add
    the default `@modelcontextprotocol/server-memory` definition (refused if
    a host on this machine already injects a connector named `memory` — see
    [`trellis memory sync`](#trellis-memory-sync) below) or
@@ -249,7 +253,7 @@ trellis mcp sync --dry-run
 trellis kimi -p "search the Trellis skills for the onboarding workflow"
 ```
 
-Runtime-only Kimi receives one `trellis-runtime` entry in
+Runtime-only Kimi receives one `trellis` entry in
 `~/.kimi-code/mcp.json`. `trellis kimi` passes an empty `--skills-dir` for
 that mode, so Kimi does not also discover the shared `~/.agents/skills`
 directory. The canonical SkillProvider and RuntimeMemoryProvider remain the
@@ -261,6 +265,63 @@ initial tool-list context when Kimi's experimental tool-select capability is
 enabled. Runtime correctness does not depend on that optimization. Native
 Kimi delivery remains available with `native` or `both`; those modes do not
 use the empty Skill-root launcher.
+
+## Trellis Runtime Skill
+
+`trellis-runtime` is the built-in operating guide that Trellis installs into
+the canonical source. It deliberately has two phases:
+
+### Phase 1: before takeover
+
+Use it as a checklist for the operator-assisted migration flow:
+
+1. Run `trellis doctor` and `trellis onboard --dry-run` to inspect the current
+   machine without changing Agent files.
+2. Choose one migration source with `--agent` and an explicit managed boundary
+   with `--manage`. Migrating from an Agent does not automatically authorize
+   Trellis to write back to that Agent.
+3. Review the selected Skills, MCP servers, Memory, per-Agent routes, and
+   delivery mode. Use `--selection` when the choice must be repeatable.
+4. Apply only after reviewing the dry-run. `onboard` performs migration,
+   native/runtime sync, Memory sync, secrets audit, and health verification in
+   one transaction.
+5. Resolve OAuth interactively with `trellis mcp auth <server>`. Never place a
+   token in this Skill, `servers.yaml`, tests, or demonstration configuration.
+6. If the verdict blocks, follow its remediation. Do not delete an unknown
+   file or bypass ownership protection; every real write has a backup and can
+   be inspected with `trellis rollback --list`.
+
+### Phase 2: after takeover
+
+The Agent consumes the same Skill regardless of its native adapter:
+
+| Delivery | How the Skill is consumed |
+| --- | --- |
+| `native` | A Trellis-owned symlink points the Agent's native Skill root at the canonical Skill. |
+| `mcp` | `SkillProvider` exposes the canonical Skill through the `trellis` Runtime; Kimi is launched with `trellis kimi` so its native Skill root does not duplicate the Runtime. |
+| `both` | Native discovery and the Runtime are both available when a deliberate compatibility transition requires it. |
+
+Once the Agent is running, start with the current Runtime status, then use
+progressive disclosure:
+
+1. `runtime_status` — Agent identity, delivery mode, provider readiness, and
+   counts.
+2. `skills_search` → `skills_read` — locate and read only the Skill needed for
+   the current task.
+3. `memory_search` → `memory_read` — consume shared canonical Memory.
+4. `instructions_read` — inspect canonical global instructions when context is
+   needed.
+5. `mcp_status` — diagnose missing, unauthorized, or unavailable MCP servers
+   and show the user the supported remediation.
+6. `agents_list` and `tasks_list`/`tasks_read` — inspect the managed boundary
+   and handoff work. Mutating tasks requires explicit confirmation.
+
+These are Trellis's portable names. A client may add a namespace such as
+`mcp__trellis__skills_search`; never hardcode that client-generated prefix in a
+Skill. The Runtime's built-in Skill and Memory providers are read-only. Shared
+Memory writes come from the configured Memory MCP backend, and importing graph
+content back into canonical Markdown remains an explicit
+`trellis memory extract` operation.
 
 ## Two starting points
 
@@ -292,7 +353,7 @@ Creates `~/.trellis/` with:
 `~/.trellis/` that already exists just fills in whatever's still missing —
 safe to run again any time, including after you've hand-edited things.
 
-It then prints which of the four supported agents it found on this machine.
+It then prints which of the five supported agents it found on this machine.
 For each one **not** found, it prints that agent's real install command or
 download link — `trellis init` never runs an installer itself; a global
 package install or an IDE download is your call to make, not a silent side
@@ -322,7 +383,7 @@ Add `--dry-run` to see the plan without writing anything:
 $ trellis migrate --from codex --dry-run
 ```
 
-Add `--only skills`, `--only instructions`, or `--only mcp` to migrate
+Add `--only skills`, `--only instructions`, `--only mcp`, or `--only memory` to migrate
 just one category — useful when you only want part of it brought in
 right now. Omit it to migrate all three, exactly as above:
 
@@ -339,13 +400,38 @@ $ trellis migrate --from codex --only instructions
 | `conflict` | Canonical already has *different* real content — **left untouched**, resolve by hand. |
 | `skip-symlink` | That agent's own copy is itself a symlink (already shared in from elsewhere) — nothing of that agent's own to import. |
 | `skip-case-broken` | Found as `skill.md` instead of `SKILL.md` — fix the case on the source agent first. |
-| `skip-unsupported` | MCP servers only — that agent's real definition can't be safely represented (see below); nothing was written for it. |
+| `skip-unsupported` | The source capability can't be safely represented (including native memory without a supported adapter); nothing was written for it. |
 
 Migrate never overwrites a genuine conflict, and never scopes a migrated
 skill (or MCP server) to just the source agent — once in canonical, it's
 visible to every agent by default (see `sync`, below). If migrate reports
 a `conflict`, open the two files/entries it names and decide by hand
 which content should actually be canonical, then re-run.
+
+Memory migration is deliberately separate from enabling the shared Memory
+MCP:
+
+```text
+trellis onboard --memory-migrate on --memory off
+```
+
+The initial native-memory adapter supports Claude Code's exact current-
+workspace Markdown memory directory. Kimi Code and pi session logs are
+reported as unsupported and are not inspected. Imported files receive
+deterministic names and provenance headers under `~/.trellis/memories/`; a
+conflict is left untouched and the onboarding transaction can roll back the
+import.
+
+Codex is also supported when its documented local Memory directory contains
+Markdown files:
+
+```text
+trellis migrate --from codex --only memory --dry-run
+```
+
+Trellis resolves `CODEX_HOME` when set, otherwise `~/.codex`, and reads only
+the Memory directory. `AGENTS.md`, `session_index.jsonl`, sessions,
+credentials, and plugin state are never treated as memory.
 
 **MCP servers** (claude-code, kiro, codex — not pi, which has no static
 MCP config to read at all) migrate the same way, into
@@ -490,6 +576,16 @@ then auto-removes the now-stale symlink on every agent that had it (skills
 carry their own ownership marker — the symlink itself — so this
 propagates automatically, unlike MCP servers below).
 
+The package-owned Runtime Skill is refreshed explicitly with:
+
+```
+trellis skill update-builtin --dry-run
+trellis skill update-builtin
+```
+
+The update is backed up and updates the canonical file in place; native Agent
+symlinks and Runtime providers then consume the same refreshed content.
+
 ```
 $ trellis mcp list
 tanka (http) — codex, pi
@@ -505,16 +601,46 @@ removed MCP server "local-server" from canonical source.
 
 `mcp add` takes `--transport stdio|http|sse`; stdio requires `--command`
 (plus optional `--args a,b`, `--env NAME,...`, `--static-env k=v,...`),
-http/sse require `--url` (plus optional `--headers k=v,...`, values
+http/sse require `--url` (plus optional `--auth oauth`, `--headers k=v,...`, values
 expected as `${VAR}` references, never literal secrets). Both accept
 `--agents id,...` (scope) and `--enabled true|false`. Same no-overwrite
 conflict posture as `skill add` — there is no `--force`.
 
-`mcp remove` is **canonical-only** — it does not remove the server from
-any agent that already has it from an earlier `mcp sync` (the same
-no-automatic-removal gap `mcp sync` itself has — see
-[README's Known limitations](../README.md#status)); remove it by hand on
-each agent in the meantime.
+For a standard JSON export with a top-level `mcpServers` object, use the
+credential-aware importer instead of repeating `mcp add` by hand:
+
+```
+trellis mcp import ~/Desktop/mcp-servers.json --dry-run
+trellis mcp import ~/Desktop/mcp-servers.json
+```
+
+The source file is read-only. The importer de-duplicates semantically
+identical servers, preserves existing canonical definitions, reports same-name
+conflicts, and skips unavailable absolute paths. A recognized `mcp-remote`
+Basic Authorization export is converted to native HTTP MCP; other credentials
+embedded in command arguments, URLs, or headers are rejected. Credential-like values in an exported
+`env` map are moved to the ignored local file
+`~/.trellis/mcp/servers.local.env`; canonical stores only a prefixed variable
+reference through `env_aliases`:
+
+```yaml
+env_aliases:
+  SUPABASE_ACCESS_TOKEN: TRELLIS_SUPABASE_DB_SUPABASE_ACCESS_TOKEN
+```
+
+The actual value is never printed in the plan, JSON report, canonical YAML, or
+shell arguments. Re-importing is idempotent; an existing local secret with a
+different value is a conflict and is never overwritten. OAuth sessions are not
+imported — authorize the resulting remote MCP explicitly with
+`trellis mcp auth <name>`.
+
+Use `trellis mcp set <name> --auth oauth` to keep a known OAuth MCP direct
+when its Agent uses gateway mode; use `--auth none` to clear the marker.
+Trellis does not infer OAuth from a URL or an authentication failure.
+
+`mcp remove` changes canonical state only. The next `trellis mcp sync` removes
+the old native entry when the ownership ledger proves Trellis still owns it;
+hand-edited native entries are preserved and reported as conflicts.
 
 `mcp list` never resolves or prints a secret value: `env` names are shown
 as bare names (the actual value is never read from your shell), and
@@ -573,10 +699,9 @@ known-host-injected collision avoidance, hub mode, and gateway mode
 $ trellis mcp sync
 ```
 
-Create/repair only — if you remove a server from `servers.yaml`, `mcp sync`
-does not remove it from any agent's native config yet (see
-[README's Known limitations](../README.md#status)). Remove it by hand on
-each agent in the meantime.
+`mcp sync` also removes an entry deleted from canonical when the ownership
+ledger proves the current native definition is exactly what Trellis last
+wrote. Hand-edited entries are left untouched and reported as conflicts.
 
 Every native-config file this rewrites in place is snapshotted first,
 automatically — see
@@ -635,8 +760,14 @@ agent spawns it like any other stdio MCP server; it connects out to your
 servers, and exits when the session ends. There is nothing to start,
 stop, or monitor.
 
-Your servers' tools appear to the agent as `<server>__<tool>` — the
-`gitlab` server's `search` becomes `gitlab__search`.
+Long unambiguous upstream tools stay compact. Generic short names such as
+`search` receive source context even when unique; if both GitHub and GitLab
+expose `search`, they become `github__search` and `gitlab__search`. A tool that
+already contains its source prefix is not repeated. Agent-facing names are
+normalized to `[A-Za-z0-9_-]` and
+bounded to 64 characters; long names receive a deterministic hash suffix.
+Extremely rare normalized-name collisions receive a deterministic suffix
+rather than being dropped, while calls still route to the original MCP name.
 
 Add `agents: [claude-code, codex]` under `gateway:` to narrow it, leaving
 the rest in direct mode. Gateway mode and `hub` are independent; both can
@@ -645,12 +776,14 @@ be set, and gateway wins for any agent it covers.
 Two things stop being problems in gateway mode. Codex can normally only
 express a single `Authorization: Bearer ${VAR}` header, so a server
 needing more than one was refused for Codex — in gateway mode Codex never
-sees any server's headers, so it just works. And remote servers requiring
-real OAuth become reachable from every agent, including pi.
+sees any ordinary server's headers, so it just works. OAuth-marked servers
+stay direct while ordinary remote servers remain shared through the gateway.
 
 ### `trellis mcp auth <server-name>`
 
-For a remote (`http`/`sse`) server that uses OAuth, authorize it once:
+For a remote (`http`/`sse`) server marked `auth: oauth`, native Agents should
+use their own login command. Pi's direct bridge path can be authorized once
+through Trellis:
 
 ```
 $ trellis mcp auth notion-remote
@@ -662,15 +795,22 @@ This opens your browser, completes the flow, and stores the result 0600
 under `~/.trellis/mcp/oauth/` — never in `servers.yaml`, so canonical
 stays safe to read, diff, and commit.
 
-Run it once per server. After that the gateway refreshes the token
-silently whenever it expires; it never opens a browser and never prompts,
-because it is spawned by an agent with no terminal attached. Re-running
+Run it once per server when Pi's direct bridge owns the OAuth connection.
+After that the bridge refreshes the token silently whenever it expires; it
+never opens a browser and never prompts, because it is spawned by an agent
+with no terminal attached. Re-running
 this command when the stored token is still valid does nothing (`--force`
 overrides); when it has expired but is renewable, it refreshes without a
 browser.
 
-If a server has no stored credential, the gateway skips that one server
-and keeps serving every other — it does not fail to start.
+If a Pi direct OAuth server has no stored credential, the bridge skips that
+one server and keeps serving every other — it does not fail to start. Native
+Agents report the same direct entry as requiring their own authorization.
+
+An Agent can call the read-only `trellis.mcp.status` Runtime tool to explain
+this partial state to the user. It reports unavailable or authorization-
+required servers and gives the next safe action, such as `trellis mcp auth
+figma`, without exposing tokens or opening a browser from the Agent process.
 
 This command only applies to `http`/`sse` servers. stdio servers get
 their credentials from `env`/`env_aliases` as described above; running
@@ -750,6 +890,24 @@ entities' names would slug to the same filename. Not wired into
 deliberate, occasional action you run, the same posture `migrate` already
 has.
 
+For a shared Kimi Code + pi setup, enable the backend through onboarding
+instead of editing either Agent's config by hand:
+
+```text
+trellis onboard --memory on --mcp-mode gateway --manage pi,kimi-code
+```
+
+This writes one canonical `memory` server, syncs the Gateway route to both
+Agents, and runs `memory sync` in the same transaction. Runtime status reports
+`backendConfigured`, `graphReady`, `canonicalCount`, write authority, and the
+managed Agents receiving the shared route. It distinguishes an unconfigured
+backend from an empty but writable graph.
+
+Agent-created graph content is external Memory context. It is not imported
+back into canonical automatically; run `trellis memory extract` explicitly
+when you want durable, reviewable Markdown. Native/private Agent memory
+stores are not scraped or guessed.
+
 **Note:** this is unrelated to any project-level "auto memory" feature an
 agent may have of its own (e.g. Claude Code's own per-project memory
 files) — those are a different, agent-specific mechanism entirely, not
@@ -781,7 +939,7 @@ periodically regardless.
 $ trellis doctor
 ```
 
-Read-only. Scans all four agents' current state and reports drift —
+Read-only. Scans all five agents' current state and reports drift —
 mismatched skill content across agents, wrong-case skill files, and (with
 `--probe-mcp`) whether each configured MCP server actually handshakes.
 Safe to run any time; nothing here writes anything.
@@ -802,7 +960,7 @@ scripts/agent-sandbox.sh
 ```
 
 未登录时，Codex 和 Claude Code 可以验证自己是否识别 Trellis 写入的
-`trellis-runtime` MCP entry；Kiro CLI 会在 `mcp list` 前要求登录，这
+`trellis` MCP entry；Kiro CLI 会在 `mcp list` 前要求登录，这
 是 Kiro 的真实授权边界。
 
 如需实际授权，使用单独的 Docker volume 保存 sandbox 登录态：

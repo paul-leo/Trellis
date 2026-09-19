@@ -18,6 +18,8 @@ import {
   applySkillRemovePlan,
   runSkillAdd,
   runSkillRemove,
+  applyBuiltinSkillUpdatePlan,
+  collectBuiltinSkillUpdatePlan,
 } from "../../src/commands/skill.js";
 
 function scratchHome(): string {
@@ -142,6 +144,19 @@ test("skill remove: --dry-run computes the plan but writes nothing", () => {
   const { exitCode } = runSkillRemove("demo", { homeDir: home, dryRun: true });
   assert.equal(exitCode, 0);
   assert.ok(existsSync(join(home, ".trellis", "skills", "demo")), "dry-run must not delete");
+});
+
+test("skill update-builtin: refreshes an existing package-owned Runtime Skill through a backup", async () => {
+  const home = scratchHome();
+  await collectInitReport(home);
+  const path = join(home, ".trellis", "skills", "trellis-runtime", "SKILL.md");
+  writeFileSync(path, "---\nname: trellis-runtime\n---\nold\n");
+  const plan = collectBuiltinSkillUpdatePlan(home);
+  assert.equal(plan.action, "update");
+  const backup = (await import("../../src/lib/backup.js")).openBackupSession(home, "test-skill-update");
+  applyBuiltinSkillUpdatePlan(plan, backup);
+  backup.finalize();
+  assert.match(readFileSync(path, "utf8"), /Before takeover: onboard and migrate/);
 });
 
 test("skill remove: a subsequent sync removes the now-stale symlink on a previously-synced agent (end-to-end)", async () => {

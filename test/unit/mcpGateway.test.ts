@@ -86,6 +86,22 @@ test("gateway upstreams: the gateway never resolves itself as one of its own ups
   assert.deepEqual(names, ["shared"]);
 });
 
+test("gateway upstreams: OAuth-classified servers stay outside the gateway", () => {
+  const canonical = loadCanonicalSource(scratchHome(`
+servers:
+  ordinary:
+    transport: stdio
+    command: node
+  figma:
+    transport: http
+    url: https://mcp.figma.com/mcp
+    auth: oauth
+gateway:
+  enabled: true
+`));
+  assert.deepEqual(resolveGatewayUpstreams("claude-code", canonical).upstreams.map((u) => u.name), ["ordinary"]);
+});
+
 test("gateway upstreams: an unresolvable env name is reported and its server dropped, not connected with an empty value", () => {
   const canonical = loadCanonicalSource(
     scratchHome(`

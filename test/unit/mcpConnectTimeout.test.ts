@@ -144,7 +144,7 @@ test("one hanging server does not prevent a second, normal server's tools from r
       pi.tools.some((t) => t.name === "normal__echo"),
       "the normal server's tools must still register despite the other server hanging",
     );
-    assert.equal(pi.tools.filter((t) => t.name.startsWith("hanging__")).length, 0);
+    assert.equal(pi.tools.filter((t) => t.name.startsWith("hanging")).length, 0);
   } finally {
     killFixtureChildren(home);
   }

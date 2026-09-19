@@ -57,7 +57,7 @@ Aligned to the `.agents Protocol` draft, extended where the draft is silent:
 ## Global vs. workspace scope
 
 **Global only, for now.** Trellis manages `~/.trellis` — one canonical
-source per machine, applied to that machine's four agents. It does not yet
+source per machine, applied to that machine's five supported agents. It does not yet
 read or merge a project-local `.trellis/` in a specific repo.
 
 The `.agents Protocol` draft (see `research.md`) describes a two-layer
@@ -72,11 +72,11 @@ that's scope creep against this section, not a natural extension.
 
 ## Private / agent-specific capabilities
 
-Not everything belongs to all four agents. A skill built around Claude
+Not everything belongs to all five agents. A skill built around Claude
 Code's Task-based subagent delegation has no equivalent to delegate to on
 Codex; an MCP server might only make sense for one agent's workflow. Every
 scopable item — skill, subagent profile, memory entry, MCP server —
-defaults to "shared with all four," and can be restricted with an explicit
+defaults to "shared with all managed agents," and can be restricted with an explicit
 `scope` (skills/agents/memories) or inline `agents:` (MCP servers, see
 below). Restriction is the exception you declare, not something you
 configure for the common case.
@@ -211,7 +211,7 @@ to the code writing one entry that points at it.
 - Every adapter writes ONE entry instead of N. This is most of the value:
   adding a new backend server means editing wherever the hub's own config
   lives (this project doesn't prescribe that either) and never touching
-  any of the four agents' configs or restarting them, if the hub supports
+  any of the five agents' configs or restarting them, if the hub supports
   live reload (mcp-hub does, via SSE).
 - The collision check against `known_host_injected` (docs/research.md
   §"Codex — three hard constraints") shrinks to checking one name instead
@@ -259,23 +259,29 @@ Codex's `codex mcp login`/`logout` pair, Kiro's `oauth`/`oauthScopes`
 fields — and pi, whose bridge is Trellis's own code, simply couldn't
 reach such a server at all.
 
-That changed with gateway mode (below), which made it unavoidable: in
-gateway mode the agent connects to Trellis, and Trellis connects to the
-remote server, so the agent's own OAuth flow is no longer on the path.
-Trellis now implements the client half itself — discovery (RFC 8414 /
-RFC 9728), dynamic client registration (RFC 7591), authorization code
-with PKCE S256 (RFC 7636), and the refresh grant — in `src/lib/oauth/`.
+Gateway mode does not automatically take ownership of OAuth servers. Mark a
+server explicitly with `auth: oauth` (or `trellis mcp set <name> --auth oauth`)
+and gateway planning keeps it direct. This preserves the native Agent OAuth
+flow for Claude Code/Codex/Kiro; Pi's bridge is the client for its direct OAuth
+connection and may use Trellis's own OAuth store. Trellis never infers this
+classification from a URL or a transient 401.
+
+Trellis still implements the client half itself — discovery (RFC 8414 /
+RFC 9728), dynamic client registration (RFC 7591), authorization code with
+PKCE S256 (RFC 7636), and the refresh grant — in `src/lib/oauth/`, but that
+path is currently used for Pi/direct bridge connections rather than silently
+replacing native Agent authorization.
 
 Two rules shape it, both from the constraint that the gateway is spawned
 silently by an agent with no terminal attached:
 
-- **Only `trellis mcp auth <server>` ever opens a browser.** It is run by
-  a human, once. The gateway never initiates an interactive flow under
-  any circumstance; a server with no stored credential is skipped the
-  same way an unreachable one is.
+- **Only an explicit human authorization command opens a browser.** Native
+  clients use their own login command for direct OAuth entries. Pi's direct
+  bridge uses `trellis mcp auth <server>`. The gateway never initiates an
+  interactive flow and never connects an OAuth-marked server.
 - **Refreshing is silent, and serialized by a lock.** A `refresh_token`
-  grant needs neither a browser nor a callback, so the gateway does it
-  at connect time. The lock (`~/.trellis/mcp/oauth/<name>.lock`) exists
+  grant needs neither a browser nor a callback, so the Pi direct bridge can
+  do it at connect time. The lock (`~/.trellis/mcp/oauth/<name>.lock`) exists
   because most authorization servers rotate the refresh token and
   invalidate its predecessor — two concurrent refreshes would leave one
   party holding a credential that is already dead.
@@ -286,8 +292,9 @@ mode 0600, never in `servers.yaml` and never in the OS keychain (macOS's
 non-interactive, no-GUI-session context the gateway runs in — measured,
 not assumed).
 
-In direct mode nothing here applies: each agent keeps using its own
-native OAuth flow, exactly as before.
+In direct mode nothing here changes: each agent keeps using its own native
+OAuth flow. In gateway mode, an OAuth-marked server is also kept direct; only
+ordinary MCP servers enter the gateway.
 
 ## MCP gateway mode
 
@@ -325,15 +332,25 @@ true rather than aspirational:
 would have written for that agent (same `resolveMcpPlan`, so per-server
 `agents:` scope, `enabled: false`, host-injected collisions,
 literal-secret refusals and unresolved `env` names all behave
-identically), connects each one, and exposes their tools as
-`<server>__<tool>`. Secrets resolve through `resolveSecretEnv` exactly as
+identically), connects each one, and exposes their tools through the shared
+Agent-safe name allocator. Names contain only `[A-Za-z0-9_-]` and are at most
+64 characters; unique short names stay short, while duplicate names retain a
+normalized `<server>__<tool>` identity. Secrets resolve through
+`resolveSecretEnv` exactly as
 in direct mode — the gateway introduces no second path by which a value
 could reach disk.
 
 **What it changes for the agents:** Codex's single-`bearer_token_env_var`
 limitation stops applying, because Codex no longer receives any server's
-`headers` — the gateway holds them. Remote servers needing real OAuth
-become reachable from every agent, including pi, for the same reason.
+`headers` — the gateway holds them. OAuth-marked servers are intentionally
+kept direct; ordinary remote servers remain shared through the gateway. An
+upstream tool keeps its original name when that name is unique and longer than
+the short-name threshold; generic short names receive a compact
+`<server>__<tool>` prefix even when unique. A tool already carrying its source
+prefix is not repeated. Dotted or otherwise invalid names are normalized, and long names
+receive a deterministic hash suffix within the 64-character budget. If
+normalized names still collide, Trellis adds a stable suffix instead of
+dropping a tool.
 
 **The seam.** `src/commands/mcpGateway.ts` depends on a `GatewayBackend`
 interface and nothing below it — never a connection, transport, or
@@ -381,11 +398,30 @@ SkillProvider reads canonical skills, while RuntimeMemoryProvider adapts a
 CanonicalMemoryProvider that reads canonical Markdown memories through
 `trellis.memory.search`, `trellis.memory.read`, and
 `trellis://memories/<name>.md`. Neither executes scripts or mutates canonical
-state. A future local-graph/OpenViking source can implement the same
-MemoryProvider contract. Memory writes and configuration mutation require
-separate provider designs and explicit user-control rules.
+state. When the documented `memory` MCP backend is enabled, Agent-created
+entities and observations are written through that upstream MCP server; the
+Runtime provider does not duplicate its graph protocol. `trellis memory
+extract` is the explicit, conflict-safe graph-to-canonical path. A future
+local-graph/OpenViking source can implement the same MemoryProvider contract,
+and native/private Agent stores are never scraped implicitly.
 
-Kimi Code is Runtime-first. Its adapter writes one `trellis-runtime` entry to
+`trellis.runtime.status` reports Memory readiness separately: backend
+configuration, graph existence/readiness, canonical count, write authority,
+and which managed Agents receive the shared route. This prevents an empty
+canonical directory from being mistaken for a missing or unusable backend.
+
+Onboarding keeps two Memory decisions independent:
+
+- `--memory-migrate on|off` imports supported native Markdown memory into
+  canonical `memories/*.md`.
+- `--memory on|off` enables the shared Memory MCP backend and graph.
+
+The first adapter is Claude Code's exact current-workspace project-memory
+directory. Kimi Code and pi session stores, and Kiro databases, are reported as
+unsupported until a format-specific adapter is reviewed; Trellis does not
+interpret sessions or caches as memory.
+
+Kimi Code is Runtime-first. Its adapter writes one `trellis` entry to
 `~/.kimi-code/mcp.json`; it does not copy canonical Skills into
 `~/.kimi-code/skills` when delivery is `mcp`. Use `trellis kimi` for this mode:
 the launcher passes Kimi's documented `--skills-dir` override an empty
@@ -396,6 +432,39 @@ available when delivery is `native` or `both`.
 Kimi's user MCP registry is `~/.kimi-code/mcp.json`; the adapter preserves
 unowned entries and uses the existing MCP ownership ledger for the one entry
 Trellis owns. The Kimi CLI itself remains responsible for login and OAuth.
+
+## Built-in Trellis Skill lifecycle
+
+`schema/builtin-skills/trellis-runtime/SKILL.md` is part of the Trellis
+package, not a user-specific copy. `trellis init` bootstraps it into the
+canonical source at `~/.trellis/skills/trellis-runtime/SKILL.md`; subsequent
+changes are made once there and distributed through the normal adapter path.
+
+The Skill has two contracts:
+
+- **Takeover contract:** describe the safe operator flow — inspect, dry-run,
+  choose the migration source and managed boundary, select capabilities,
+  authorize OAuth, sync, audit, verify, and rollback. This is a procedure for
+  the human or an Agent assisting the human; it is not a license for an Agent
+  to silently rewrite native configuration.
+- **Runtime contract:** describe how a managed Agent consumes
+  `SkillProvider`, `RuntimeMemoryProvider`, the instruction provider, status
+  providers, and task handoff providers through the current MCP edge.
+
+Delivery determines how the second contract reaches an Agent:
+
+| Delivery | Projection | Runtime Skill source |
+| --- | --- | --- |
+| `native` | Trellis-owned native symlink | Agent's native Skill discovery |
+| `mcp` | No native Trellis Skill projection | `SkillProvider` through `trellis mcp-runtime` |
+| `both` | Native projection plus Runtime entry | Both, intentionally during compatibility or transition |
+
+This keeps takeover instructions and post-takeover capability instructions in
+one versioned Skill while preserving the security boundary: Runtime providers
+are external context, native instructions remain authoritative at startup,
+and task mutations require explicit confirmation. The MCP client's generated
+namespace (for example `mcp__trellis__skills_search`) is not part of the
+portable Skill contract.
 
 ## What Trellis explicitly does not build
 

@@ -24,13 +24,17 @@ import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
-import { ALL_AGENTS } from "../core/types.js";
+import { ALL_AGENTS, capabilityDeliveryForAgent } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpConfig, McpRouteMode } from "../core/types.js";
 import { loadCanonicalSource, removeServerYaml, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml } from "../core/canonical.js";
 import type { McpMode } from "../core/canonical.js";
 import { buildCapabilityInventory, parseCapabilitySelectionFile, resolveSelectedNames, selectionContains, type CapabilityInventory, type CapabilitySelection } from "../core/capabilitySelection.js";
 import { INSTALL_HINTS, collectInitReport } from "./init.js";
 import { applyMigratePlan, collectMigratePlan, printPlan as printMigratePlan } from "./migrate.js";
+import { isGatewayAgent } from "../adapters/mcpPlan.js";
+import { isInScope } from "../core/adapter.js";
+import { TRELLIS_RUNTIME_SKILL_NAME } from "../lib/builtinSkills.js";
+import { discoverNativeMemory, type NativeMemoryStatus } from "../lib/nativeMemory.js";
 import type { MigrateKind, MigratePlan, MigratePlanItem } from "./migrate.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
@@ -120,32 +124,38 @@ export interface OnboardAgentSummary {
    * the same fact `migrate.ts` already establishes. */
   mcpServerCount: number;
   mcpServerNames: string[];
+  nativeMemoryStatus: NativeMemoryStatus;
+  nativeMemoryCount: number;
+  nativeMemoryNames: string[];
+  nativeMemoryDetail: string;
 }
 
-export async function collectOnboardSummary(homeDir: string = homedir()): Promise<OnboardAgentSummary[]> {
+export async function collectOnboardSummary(homeDir: string = homedir(), workspaceDir: string = process.cwd()): Promise<OnboardAgentSummary[]> {
   return Promise.all(
     ALL_AGENTS.map(async (agent) => {
       const snapshot = await PROBES[agent](homeDir);
       if (!snapshot.present) {
-        return { agent, present: false, skillCount: 0, skillNames: [], hasRealInstructions: false, mcpServerCount: 0, mcpServerNames: [] };
+        return { agent, present: false, skillCount: 0, skillNames: [], hasRealInstructions: false, mcpServerCount: 0, mcpServerNames: [], nativeMemoryStatus: "unsupported" as const, nativeMemoryCount: 0, nativeMemoryNames: [], nativeMemoryDetail: "agent is not installed" };
       }
       const skillNames = snapshot.skillRoots.flatMap((root) => root.skills.map((s) => s.name));
       const hasRealInstructions = snapshot.instructionsFile !== undefined && !snapshot.instructionsFile.isSymlink;
       const mcpPlan = await collectMigratePlan(agent, homeDir, ["mcp"]);
-      return { agent, present: true, skillCount: skillNames.length, skillNames, hasRealInstructions, mcpServerCount: mcpPlan.items.length, mcpServerNames: mcpPlan.items.map((item) => item.name) };
+      const nativeMemory = discoverNativeMemory(agent, homeDir, workspaceDir);
+      return { agent, present: true, skillCount: skillNames.length, skillNames, hasRealInstructions, mcpServerCount: mcpPlan.items.length, mcpServerNames: mcpPlan.items.map((item) => item.name), nativeMemoryStatus: nativeMemory.status, nativeMemoryCount: nativeMemory.candidates.length, nativeMemoryNames: nativeMemory.candidates.map((candidate) => candidate.displayName), nativeMemoryDetail: nativeMemory.detail };
     }),
   );
 }
 
 function hasContent(s: OnboardAgentSummary): boolean {
-  return s.skillCount > 0 || s.hasRealInstructions || s.mcpServerCount > 0;
+  return s.skillCount > 0 || s.hasRealInstructions || s.mcpServerCount > 0 || s.nativeMemoryCount > 0;
 }
 
 function hasSelectedSourceContent(s: OnboardAgentSummary, selection: CapabilitySelection | undefined): boolean {
   if (!selection) return hasContent(s);
   const hasSkills = selection.skills !== "none" && s.skillNames.some((name) => selectionContains(selection.skills, name));
   const hasMcp = selection.mcpServers !== "none" && s.mcpServerNames.some((name) => selectionContains(selection.mcpServers, name));
-  return hasSkills || hasMcp || s.hasRealInstructions;
+  const hasMemory = selection.memoryMigration !== "none" && s.nativeMemoryCount > 0;
+  return hasSkills || hasMcp || hasMemory || s.hasRealInstructions;
 }
 
 function filterMigratePlan(plan: MigratePlan, selection: CapabilitySelection | undefined): MigratePlan {
@@ -153,6 +163,7 @@ function filterMigratePlan(plan: MigratePlan, selection: CapabilitySelection | u
   const items = plan.items.filter((item: MigratePlanItem) => {
     if (item.kind === "skill") return selectionContains(selection.skills, item.name);
     if (item.kind === "mcp") return selectionContains(selection.mcpServers, item.name);
+    if (item.kind === "memory") return selection.memoryMigration !== "none";
     return true;
   });
   return { ...plan, items };
@@ -179,12 +190,19 @@ export interface RunOnboardOptions {
    * Omitted leaves whatever's already configured untouched — same
    * no-prompt posture as `mcpMode` (design.md D12). */
   memory?: string;
+  /** Non-interactive native-source memory migration toggle: `"on"` or
+   * `"off"`. Omitted preserves the current state and prompts only when
+   * supported source candidates are available in a real terminal. */
+  memoryMigrate?: string;
   /** Optional YAML/JSON item-level capability selection for automation. */
   selectionFile?: string;
   dryRun?: boolean;
   json?: boolean;
   /** Defaults to the real `~`; overridable for tests only. */
   homeDir?: string;
+  /** Defaults to the current working directory; controls project-scoped
+   * native-memory discovery and is overridable for tests. */
+  workspaceDir?: string;
   /** Test-only: overrides the real `process.stdin.isTTY` check so the
    * interactive-vs-refuse branch is exercisable without a real terminal. */
   isTTY?: boolean;
@@ -207,6 +225,11 @@ export interface RunOnboardOptions {
   promptToApply?: () => Promise<boolean>;
   /** Test-only: replaces the real mode-transition confirmation. */
   promptForModeChange?: (previous: "direct" | "hub" | "gateway", next: "direct" | "hub" | "gateway", agents: readonly AgentId[]) => Promise<boolean>;
+  /** Test-only: replaces the interactive shared-Memory choice. `keep` leaves
+   * the existing state untouched; the real picker puts that choice first. */
+  promptForMemory?: (current: "on" | "off") => Promise<"keep" | "on" | "off">;
+  /** Test-only: replaces the interactive native-memory migration choice. */
+  promptForMemoryMigration?: (source: AgentId, count: number) => Promise<"keep" | "on" | "off">;
   /** Test-only: injected into every `confirmAndInstall` call for a
    * selected, not-yet-present agent. Never a real terminal prompt or a
    * real `npm install` in a unit test. */
@@ -222,6 +245,14 @@ export interface OnboardInstallResult {
 export interface OnboardResult {
   summary: OnboardAgentSummary[];
   inventory?: CapabilityInventory;
+  capabilitySummary?: {
+    awarenessSkill: boolean;
+    globalInstructions: { available: boolean; native: boolean; runtimeReadable: boolean };
+    skills: number;
+    memories: number;
+    mcpServers: number;
+  };
+  managedAgentRuntime?: Array<{ agent: AgentId; delivery: "native" | "mcp" | "both"; route: "direct" | "gateway" | "hub" }>;
   source?: AgentId;
   sourceReason?: "auto-selected" | "flag" | "prompt";
   /** The full managed set this run acted against — the union of whatever
@@ -310,7 +341,8 @@ function logProgress(opts: RunOnboardOptions, stage: (typeof PROGRESS_STAGES)[nu
  * let you tell agents apart at a glance, not enumerate everything. */
 function agentSummaryLabel(s: OnboardAgentSummary, recommendedAgent?: AgentId): string {
   const recommendation = s.agent === recommendedAgent ? "（推荐：可迁移内容最多）" : "";
-  return `${s.agent} — ${s.skillCount} skill(s), instructions: ${s.hasRealInstructions ? "yes" : "no"}, mcp: ${s.mcpServerCount} ${recommendation}`;
+  const memory = s.nativeMemoryCount > 0 ? `Memory: ${s.nativeMemoryCount}` : `Memory: ${s.nativeMemoryStatus}`;
+  return `${s.agent} — Skills: ${s.skillCount}, global instructions: ${s.hasRealInstructions ? "yes" : "no"}, MCP: ${s.mcpServerCount}, ${memory} ${recommendation}`;
 }
 
 /** Numbered-typing fallback (trellis-onboard-interactive-picker design.md
@@ -407,7 +439,7 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
 }
 
 /**
- * Resolves which categories (skills, instructions) to migrate from a
+ * Resolves which categories (Skills, instructions, MCP, native Memory) to migrate from a
  * resolved source (trellis-migrate-category-selection, extended to a
  * third category by trellis-onboard-mcp-memory design.md D2). Unlike the
  * two pickers above, there is no numbered-text fallback to preserve
@@ -421,16 +453,28 @@ async function promptForManagedAgentsReal(candidates: OnboardAgentSummary[], alr
  */
 async function resolveMigrateCategories(source: OnboardAgentSummary, opts: RunOnboardOptions, selection?: CapabilitySelection): Promise<MigrateKind[]> {
   // Built dynamically, in skill/instructions/mcp display order — not a
-  // fixed two- or three-slot structure, so a fourth category some day
+  // fixed category structure, so future categories
   // would only need an entry here, not a rewritten branch (design.md D2).
   const candidates: { kind: MigrateKind; label: string }[] = [];
   if (source.skillCount > 0 && (!selection || selection.skills !== "none") && (!selection || source.skillNames.some((name) => selectionContains(selection.skills, name)))) {
-    candidates.push({ kind: "skill", label: "skills" });
+    candidates.push({ kind: "skill", label: "Skills" });
   }
-  if (source.hasRealInstructions) candidates.push({ kind: "instructions", label: "instructions" });
+  if (source.hasRealInstructions) candidates.push({ kind: "instructions", label: "global instructions" });
   if (source.mcpServerCount > 0 && (!selection || selection.mcpServers !== "none") && (!selection || source.mcpServerNames.some((name) => selectionContains(selection.mcpServers, name)))) {
-    candidates.push({ kind: "mcp", label: "mcp" });
+    candidates.push({ kind: "mcp", label: "MCP servers" });
   }
+
+  let migrateMemory = source.nativeMemoryCount > 0 && opts.memoryMigrate !== "off" && (!selection || selection.memoryMigration !== "none");
+  if (migrateMemory && opts.memoryMigrate === undefined && !opts.selectionFile && !opts.json && (opts.promptForMemoryMigration || canUseInteractivePicker())) {
+    const choice = opts.promptForMemoryMigration
+      ? await opts.promptForMemoryMigration(source.agent, source.nativeMemoryCount)
+      : await runSingleSelectPicker([
+          `迁移支持的记忆（推荐：${source.nativeMemoryCount} 项）`,
+          "暂不迁移记忆",
+        ], undefined, `选择是否从 ${source.agent} 迁移已有记忆`);
+    if (choice === null || choice === "off" || choice === 1) migrateMemory = false;
+  }
+  if (migrateMemory) candidates.push({ kind: "memory", label: `Memory（${source.nativeMemoryCount} 项）` });
 
   // The choice is only meaningful when two or more kinds are real — same
   // gate for the injected test seam as for the real picker, mirroring
@@ -475,7 +519,31 @@ async function resolveInteractiveCapabilitySelection(source: OnboardAgentSummary
     console.error("cancelled, no changes made");
     process.exit(1);
   }
-  return { skills: skills ?? "none", mcpServers: mcpServers ?? "none", memories: "all", mcpRoutes: {}, runtimeDelivery: {} };
+  return { skills: skills ?? "none", mcpServers: mcpServers ?? "none", memories: "all", memoryMigration: "all", mcpRoutes: {}, runtimeDelivery: {} };
+}
+
+async function resolveInteractiveMemoryChoice(homeDir: string, opts: RunOnboardOptions): Promise<"on" | "off" | undefined> {
+  if (opts.memory !== undefined || opts.selectionFile || opts.json) return undefined;
+  const current: "on" | "off" = loadCanonicalSource(homeDir).mcp.servers[MEMORY_SERVER_NAME] ? "on" : "off";
+  const canPrompt = Boolean(opts.promptForMemory) || (opts.isTTY ?? process.stdin.isTTY === true) && canUseInteractivePicker();
+  if (!canPrompt) return undefined;
+  const choice = opts.promptForMemory
+    ? await opts.promptForMemory(current)
+    : (() => {
+        const options = current === "on"
+          ? ["保持开启（推荐：继续使用共享 Memory）", "关闭共享 Memory"]
+          : ["保持关闭（推荐：不改变现有环境）", "启用共享 Memory（推荐：Kimi/Pi 共享同一 graph）"];
+        return runSingleSelectPicker(options, undefined, "选择 Trellis Memory 托管方式").then((index) => {
+          if (index === null) {
+            console.error("cancelled, no changes made");
+            process.exit(1);
+          }
+          if (index === 0) return "keep" as const;
+          return current === "on" ? "off" as const : "on" as const;
+        });
+      })();
+  if (choice === "on" || choice === "off") return choice;
+  return undefined;
 }
 
 async function resolveInteractiveMcpRoutes(agentIds: readonly AgentId[], serverNames: readonly string[], hubConfigured: boolean): Promise<CapabilitySelection["mcpRoutes"]> {
@@ -595,6 +663,12 @@ function validateMemoryOption(memory: string | undefined): { value?: "on" | "off
   return { value: memory };
 }
 
+function validateMemoryMigrationOption(memoryMigrate: string | undefined): { value?: "on" | "off" } | { error: string } {
+  if (memoryMigrate === undefined) return {};
+  if (memoryMigrate !== "on" && memoryMigrate !== "off") return { error: `--memory-migrate must be "on" or "off" (got "${memoryMigrate}")` };
+  return { value: memoryMigrate };
+}
+
 function preflightMcpMode(mode: McpMode | undefined): string | undefined {
   if (!mode) return undefined;
   if (mode.kind === "hub") {
@@ -676,6 +750,34 @@ function memoryStatusLine(memory: { current: "on" | "off"; previous: "on" | "off
   return `memory: ${memory.current} (changed from ${memory.previous})`;
 }
 
+/** Converges explicit per-Agent route lists with the shared Memory toggle.
+ * Legacy/top-level routes without a `servers` list already expose every
+ * eligible server and need no rewrite. Hub routes are intentionally opaque:
+ * the external hub owns its upstream set. */
+export function mergeMemoryIntoExplicitRoutes(
+  mcp: McpConfig,
+  managedAgents: readonly AgentId[],
+  memoryEnabled: boolean,
+): { mcp: McpConfig; changed: boolean } {
+  const routes = mcp.routes;
+  if (!routes) return { mcp, changed: false };
+  const memoryServer = mcp.servers[MEMORY_SERVER_NAME];
+  const changedRoutes = { ...routes };
+  let changed = false;
+  for (const agent of managedAgents) {
+    const route = routes[agent];
+    if (!route || route.mode === "hub" || !route.servers) continue;
+    const inScope = Boolean(memoryServer && memoryServer.enabled !== false && isInScope(agent, memoryServer.agents, managedAgents));
+    const nextServers = memoryEnabled && inScope
+      ? [...route.servers, ...(route.servers.includes(MEMORY_SERVER_NAME) ? [] : [MEMORY_SERVER_NAME])]
+      : route.servers.filter((name) => name !== MEMORY_SERVER_NAME);
+    if (nextServers.length === route.servers.length && nextServers.every((name, index) => name === route.servers![index])) continue;
+    changedRoutes[agent] = { ...route, servers: nextServers };
+    changed = true;
+  }
+  return changed ? { mcp: { ...mcp, routes: changedRoutes }, changed } : { mcp, changed: false };
+}
+
 async function confirmMcpModeChange(
   previous: "direct" | "hub" | "gateway",
   next: "direct" | "hub" | "gateway",
@@ -731,14 +833,22 @@ function writeManagedYaml(homeDir: string, agents: AgentId[], backup?: BackupSes
 
 export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<OnboardResult> {
   const homeDir = opts.homeDir ?? homedir();
+  if (opts.dryRun && !existsSync(join(homeDir, ".trellis"))) {
+    return {
+      summary: [],
+      refusal: "dry-run does not bootstrap a missing ~/.trellis — run `trellis init` first, then re-run the preview",
+      verdict: [],
+    };
+  }
   let capabilitySelection: CapabilitySelection | undefined;
   if (opts.selectionFile) {
     const parsedSelection = parseCapabilitySelectionFile(opts.selectionFile);
     if (!parsedSelection.ok) return { summary: [], refusal: parsedSelection.error, verdict: [] };
     capabilitySelection = parsedSelection.selection;
   }
-  await collectInitReport(homeDir);
-  const summary = await collectOnboardSummary(homeDir);
+  await collectInitReport(homeDir, { write: !opts.dryRun });
+  const workspaceDir = opts.workspaceDir ?? process.cwd();
+  const summary = await collectOnboardSummary(homeDir, workspaceDir);
   const present = summary.filter((s) => s.present);
 
   if (present.length === 0) {
@@ -755,9 +865,13 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   if ("error" in mcpModeValidation) {
     return { summary, refusal: mcpModeValidation.error, verdict: [] };
   }
-  const memoryValidation = validateMemoryOption(opts.memory);
-  if ("error" in memoryValidation) {
-    return { summary, refusal: memoryValidation.error, verdict: [] };
+  const explicitMemoryValidation = validateMemoryOption(opts.memory);
+  if ("error" in explicitMemoryValidation) {
+    return { summary, refusal: explicitMemoryValidation.error, verdict: [] };
+  }
+  const explicitMemoryMigrationValidation = validateMemoryMigrationOption(opts.memoryMigrate);
+  if ("error" in explicitMemoryMigrationValidation) {
+    return { summary, refusal: explicitMemoryMigrationValidation.error, verdict: [] };
   }
   const modePreflightError = preflightMcpMode(mcpModeValidation.mode);
   if (modePreflightError) {
@@ -845,14 +959,33 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // Resolve all mode/memory decisions before opening the transaction. A
   // refusal here must leave both canonical and managed state untouched.
   const canonicalForModeAndMemory = loadCanonicalSource(homeDir);
+  const interactiveMemory = await resolveInteractiveMemoryChoice(homeDir, opts);
+  const memoryValue = explicitMemoryValidation.value ?? interactiveMemory;
+  const memoryValidation = { value: memoryValue };
   const sourceSummaryForInventory = source ? summary.find((item) => item.agent === source) : undefined;
+  const nativeMemory = sourceSummaryForInventory && sourceSummaryForInventory.nativeMemoryStatus !== "supported"
+    ? [{ name: `${source}:native`, detail: sourceSummaryForInventory.nativeMemoryDetail }]
+    : [];
   const inventory = sourceSummaryForInventory
     ? buildCapabilityInventory(
         sourceSummaryForInventory,
         canonicalForModeAndMemory,
-        [{ name: `${source}:native`, detail: "native agent memory has no Trellis reader; use a provider-specific import when available" }],
+        nativeMemory,
       )
     : undefined;
+  const capabilitySummary = {
+    awarenessSkill: canonicalForModeAndMemory.skills.some((skill) => skill.name === TRELLIS_RUNTIME_SKILL_NAME),
+    globalInstructions: { available: existsSync(canonicalForModeAndMemory.instructionsFile), native: true, runtimeReadable: true },
+    skills: canonicalForModeAndMemory.skills.length,
+    memories: canonicalForModeAndMemory.memories.length,
+    mcpServers: Object.keys(canonicalForModeAndMemory.mcp.servers).length,
+  };
+  const managedAgentRuntime = managedAgents.map((agent) => ({
+    agent,
+    delivery: capabilityDeliveryForAgent(agent, canonicalForModeAndMemory.mcp),
+    route: canonicalForModeAndMemory.mcp.routes?.[agent]?.mode
+      ?? (isGatewayAgent(agent, canonicalForModeAndMemory.mcp, managedAgents) ? "gateway" : canonicalForModeAndMemory.mcp.hub ? "hub" : "direct"),
+  }));
   const mcpModeResolution = resolveMcpModeChange(mcpModeValidation.mode, mcpModeValueOf(canonicalForModeAndMemory.mcp));
   const mcpMode = { current: mcpModeResolution.current, previous: mcpModeResolution.previous, changed: mcpModeResolution.changed };
   const serversYamlPath = join(homeDir, ".trellis", "mcp", "servers.yaml");
@@ -900,7 +1033,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     const interactiveSelection = capabilitySelection ?? await resolveInteractiveCapabilitySelection(sourceSummary, opts);
     const categories = await resolveMigrateCategories(sourceSummary, opts, interactiveSelection);
     if (categories.length > 0) {
-      migratePlan = filterMigratePlan(await collectMigratePlan(source, homeDir, categories), interactiveSelection);
+      migratePlan = filterMigratePlan(await collectMigratePlan(source, homeDir, categories, workspaceDir), interactiveSelection);
       if (!opts.dryRun) {
         applyMigratePlan(migratePlan, homeDir, backupSession);
       }
@@ -948,6 +1081,26 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     }
   }
 
+  // Dry-run must plan the Memory server that this transaction would write;
+  // otherwise the following mcp-sync/memory-sync stages would inspect the
+  // pre-run canonical file and falsely report an unconfigured backend. The
+  // effective view is never persisted here — real writes above still use the
+  // normal backup transaction.
+  const effectiveMcpForRun: McpConfig = {
+    ...(mcpSyncOverride ?? currentMcpAfterMigration),
+    servers: { ...(mcpSyncOverride ?? currentMcpAfterMigration).servers },
+  };
+  if (memory.current === "on") {
+    effectiveMcpForRun.servers[MEMORY_SERVER_NAME] = effectiveMcpForRun.servers[MEMORY_SERVER_NAME] ?? DEFAULT_MEMORY_SERVER_DEF;
+  } else {
+    delete effectiveMcpForRun.servers[MEMORY_SERVER_NAME];
+  }
+  const mergedMemoryRoutes = mergeMemoryIntoExplicitRoutes(effectiveMcpForRun, managedAgents, memory.current === "on");
+  const effectiveMcpWithRoutes = mergedMemoryRoutes.mcp;
+  if (mergedMemoryRoutes.changed && !opts.dryRun && effectiveMcpWithRoutes.routes) {
+    writeMcpRoutesYaml(serversYamlPath, effectiveMcpWithRoutes.routes, backupSession);
+  }
+
   // The same session now covers canonical and native writes. Neither
   // collectSyncReport nor collectMcpSyncReport finalizes it; this caller
   // finalizes once after every verification stage has completed.
@@ -962,7 +1115,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // written, so there is nothing to verify.
   const syncVerification = opts.dryRun ? undefined : await collectSyncReport({ homeDir, dryRun: true, managedAgents });
   logProgress(opts, "mcp sync");
-  const mcpSyncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession, mcp: mcpSyncOverride });
+  const mcpSyncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession, mcp: effectiveMcpWithRoutes });
   const mcpSyncVerification = opts.dryRun ? undefined : await collectMcpSyncReport({ homeDir, dryRun: true, managedAgents });
   // Independent of `managedAgents` — the shared memory server is not
   // per-agent (design.md D4, trellis-onboard-mcp-memory), unlike
@@ -971,7 +1124,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // state (design.md D5), not gated on any prior step here.
   logProgress(opts, "memory sync");
   const selectedMemoryNames = capabilitySelection ? resolveSelectedNames(capabilitySelection.memories, loadCanonicalSource(homeDir).memories.map((memory) => memory.name)) : undefined;
-  const memorySyncResult = collectMemorySyncResult(homeDir, selectedMemoryNames);
+  const memorySyncResult = collectMemorySyncResult(homeDir, selectedMemoryNames, effectiveMcpWithRoutes);
   if (!opts.dryRun) {
     applyMemorySync(memorySyncResult, backupSession);
   }
@@ -1024,6 +1177,8 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   return {
     summary,
     inventory,
+    capabilitySummary,
+    managedAgentRuntime,
     source,
     sourceReason,
     managedAgents,
@@ -1138,6 +1293,13 @@ function printResult(result: OnboardResult, dryRun: boolean, showStatusLine: boo
     );
   }
   console.log(`Managed agents: ${result.managedAgents && result.managedAgents.length > 0 ? result.managedAgents.join(", ") : "(none)"}`);
+  if (showStatusLine && result.managedAgentRuntime?.length) {
+    console.log(`Agent delivery: ${result.managedAgentRuntime.map((item) => `${item.agent}=${item.delivery}/${item.route}`).join(", ")}`);
+  }
+  if (showStatusLine && result.capabilitySummary) {
+    const summary = result.capabilitySummary;
+    console.log(`Trellis capabilities: awareness=${summary.awarenessSkill ? "ready" : "missing"}, global instructions=${summary.globalInstructions.native ? "native" : "unavailable"} + Runtime read, Skills=${summary.skills}, Memory=${summary.memories}, MCP=${summary.mcpServers}`);
+  }
 
   // Informational only, never a prompt (design.md D6/D12,
   // trellis-onboard-mcp-mode) — this is what keeps `--mcp-mode`/

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Turn skipped unauthorized MCP servers into clear next-step instructions
+  without interactive auth inside Gateway

@@ -444,7 +444,7 @@ export function ensureShellEnvSource(rcPath: string, envFilePath: string, backup
 }
 
 /** `undefined` if the name has no entry in scope.yaml's map — "shared with
- * all four agents," the default. A recognized but empty list is left as
+ * all managed agents by default. A recognized but empty list is left as
  * authored (an explicitly agent-less scope), not coerced to "all". */
 /** Missing file and `agents: []` both resolve to `[]` — zero managed
  * agents (D1), never "everyone." An unrecognized id is dropped with a

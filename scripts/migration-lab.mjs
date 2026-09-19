@@ -71,8 +71,8 @@ try {
   const listed = await client.listTools();
   const names = new Set(listed.tools.map((tool) => tool.name));
   assert.ok(names.has("trellis.skills.search"));
-  assert.ok(names.has("migrated-tool__echo"));
-  const called = await client.callTool({ name: "migrated-tool__echo", arguments: { message: "migrated and usable" } });
+  assert.ok(names.has("echo"));
+  const called = await client.callTool({ name: "echo", arguments: { message: "migrated and usable" } });
   assert.equal(called.content[0].text, "echo: migrated and usable");
   const resource = await client.readResource({ uri: "trellis://skills/kiro-source-skill/SKILL.md" });
   assert.match(String(resource.contents[0].text), /# Kiro source skill/);

@@ -13,6 +13,7 @@ COPY src ./src
 COPY scripts ./scripts
 COPY schema ./schema
 COPY test/fixtures/sample-mcp-server.js /fixtures/sample-mcp-server.js
+COPY test/fixtures/memory-mcp-server.js /fixtures/memory-mcp-server.js
 
 # Bundles the pi bridge extension (dist/pi-bridge/bundle.js) — see
 # scripts/build-pi-bridge.mjs for why this must be a self-contained

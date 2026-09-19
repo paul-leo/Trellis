@@ -24,8 +24,10 @@ import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
 
 export const HUB_ENTRY_NAME = "trellis-hub";
-export const GATEWAY_ENTRY_NAME = "trellis-gateway";
-export const RUNTIME_ENTRY_NAME = "trellis-runtime";
+export const GATEWAY_ENTRY_NAME = "trellis";
+export const LEGACY_GATEWAY_ENTRY_NAME = "trellis-gateway";
+export const RUNTIME_ENTRY_NAME = "trellis";
+export const LEGACY_RUNTIME_ENTRY_NAME = "trellis-runtime";
 
 /** The command an agent spawns in gateway mode. Bare `trellis` rather than
  * an absolute path: the entry has to keep working across reinstalls and
@@ -33,6 +35,10 @@ export const RUNTIME_ENTRY_NAME = "trellis-runtime";
  * user installed the CLI onto. */
 export const GATEWAY_COMMAND = "trellis";
 export const RUNTIME_COMMAND = "trellis";
+
+export function isOAuthMcpServer(def: McpServerDef): boolean {
+  return def.auth === "oauth";
+}
 
 /**
  * Gateway mode applies to every managed agent when `agents` is omitted —
@@ -189,6 +195,11 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
         conflicts: [{ name: entryName, message: collisionMessage(entryName, agentId), remediation: collisionRemediation(entryName) }],
       };
     }
+    const oauth = planDirectServers(agentId, mcp, managedAgents, policy, route, isOAuthMcpServer);
+    // Every ordinary per-server check (enabled, scope, literal secrets,
+    // unresolved env names, Codex's header shape) still runs at gateway
+    // startup. OAuth servers are the deliberate exception: they are written
+    // as direct entries so the gateway never owns their client connection.
     // Every per-server check (enabled, scope, literal secrets, unresolved
     // env names, Codex's header shape) still runs — but at gateway
     // *startup*, inside the subcommand, since no adapter sees an
@@ -201,8 +212,8 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
           command: runtimeEnabled ? RUNTIME_COMMAND : GATEWAY_COMMAND,
           args: [runtimeEnabled ? "mcp-runtime" : "mcp-gateway", "--agent", agentId],
         },
-      }],
-      conflicts: [],
+      }, ...oauth.desired],
+      conflicts: oauth.conflicts,
     };
   }
 
@@ -271,6 +282,17 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
     };
   }
 
+  return planDirectServers(agentId, mcp, managedAgents, policy, route);
+}
+
+function planDirectServers(
+  agentId: AgentId,
+  mcp: McpConfig,
+  managedAgents: readonly AgentId[],
+  policy: SecretsPolicy,
+  route: McpRoute,
+  filter?: (def: McpServerDef) => boolean,
+): McpPlanResult {
   const desired: DesiredMcpEntry[] = [];
   const conflicts: McpConflict[] = [];
 
@@ -278,6 +300,8 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
     if (def.enabled === false) {
       continue;
     }
+
+    if (filter && !filter(def)) continue;
 
     if (!isInScope(agentId, def.agents, managedAgents)) {
       continue;
