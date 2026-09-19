@@ -24,8 +24,8 @@
     <g>
   <rect x="1000" y="250" width="500" height="450" fill="none" stroke="#dfe4ea" stroke-width="1.5"/>
   <path d="M991 250 H1009 M1000 241 V259" fill="none" stroke="#dfe4ea" stroke-width="2"/><path d="M1491 250 H1509 M1500 241 V259" fill="none" stroke="#dfe4ea" stroke-width="2"/><path d="M991 700 H1009 M1000 691 V709" fill="none" stroke="#dfe4ea" stroke-width="2"/><path d="M1491 700 H1509 M1500 691 V709" fill="none" stroke="#dfe4ea" stroke-width="2"/>
-  <rect x="1016" y="234" width="176.4" height="32" fill="#fafaf8"/>
-  <text x="1029" y="255" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="13.5" font-weight="400" letter-spacing="1.5" fill="#3457d5">FIG.00 — RUNTIME</text>
+  <rect x="1018" y="228" width="242" height="44" fill="#fafaf8"/>
+  <text x="1035" y="258" text-anchor="start" font-family="Menlo, SFMono-Regular, monospace" font-size="20" font-weight="400" letter-spacing="1.8" fill="#3457d5">FIG.00 — RUNTIME</text>
 </g>
     <g>
   <rect x="1039" y="319" width="22" height="22" rx="6" fill="none" stroke="#161c24" stroke-width="3"/><rect x="1039" y="464" width="22" height="22" rx="6" fill="none" stroke="#161c24" stroke-width="3"/><rect x="1039" y="609" width="22" height="22" rx="6" fill="none" stroke="#161c24" stroke-width="3"/>

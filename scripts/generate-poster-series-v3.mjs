@@ -131,65 +131,66 @@ const latticePanel = (id, x, y, w, h, rx, strokeWidth) => `<g fill="none">
 </g>`;
 
 // ---------------------------------------------------------------------------
-// Theme diagrams, drawn inside a 952 x 480 zone (x 64..1016, y 600..1080).
+// Theme diagrams, drawn inside a 952 x 480 zone (x 64..1016, y 650..1130) via
+// a translate(0 50) wrapper. Labels and strokes are sized for phone screens.
 // ---------------------------------------------------------------------------
 
 const diagramUnified = (accent) => `<g>
-  ${[700, 810, 920].map((y) => `<rect x="148" y="${y - 11}" width="22" height="22" rx="6" fill="none" stroke="${palette.ink}" stroke-width="3"/>`).join("")}
-  ${["CLAUDE", "CODEX", "KIMI"].map((name, i) => mono(name, 159, 734 + i * 110, { size: 11, fill: palette.muted, anchor: "middle", letterSpacing: 1 })).join("")}
-  ${latticePanel("d-unified", 440, 700, 200, 220, 20, 3.5)}
-  <g fill="none" stroke="${palette.ink}" stroke-width="3">
+  ${[700, 810, 920].map((y) => `<rect x="148" y="${y - 11}" width="22" height="22" rx="6" fill="none" stroke="${palette.ink}" stroke-width="3.5"/>`).join("")}
+  ${["CLAUDE", "CODEX", "KIMI"].map((name, i) => mono(name, 159, 742 + i * 110, { size: 17, fill: palette.muted, anchor: "middle", letterSpacing: 1 })).join("")}
+  ${latticePanel("d-unified", 440, 700, 200, 220, 20, 4)}
+  <g fill="none" stroke="${palette.ink}" stroke-width="3.5">
     <path d="M171 700 C 290 700 320 762 440 762"/>
     <path d="M171 810 H440"/>
     <path d="M171 920 C 290 920 320 858 440 858"/>
     <path d="M640 762 H920 M640 810 H920 M640 858 H920"/>
   </g>
-  <g fill="${accent}">${[762, 810, 858].map((y) => `<circle cx="926" cy="${y}" r="6.5"/>`).join("")}</g>
+  <g fill="${accent}">${[762, 810, 858].map((y) => `<circle cx="926" cy="${y}" r="8"/>`).join("")}</g>
 </g>`;
 
 const diagramMigrate = (accent) => `<g>
-  <rect x="140" y="730" width="180" height="160" rx="14" fill="none" stroke="${palette.muted}" stroke-width="3" stroke-dasharray="9 8"/>
+  <rect x="140" y="730" width="180" height="160" rx="14" fill="none" stroke="${palette.muted}" stroke-width="3.5" stroke-dasharray="9 8"/>
   <g stroke="${palette.muted}" stroke-width="3" stroke-linecap="round">
     ${[770, 810, 850].map((y) => `<circle cx="168" cy="${y}" r="4.5" fill="${palette.muted}" stroke="none"/><path d="M184 ${y} H 288"/>`).join("")}
   </g>
-  ${mono("EXISTING SETUP", 230, 935, { size: 12, fill: palette.muted, anchor: "middle", letterSpacing: 1.5 })}
-  <g fill="none" stroke="${palette.ink}" stroke-width="3.5">
-    <path d="M320 810 H440"/><path d="M537 810 H620"/>
+  ${mono("EXISTING SETUP", 230, 935, { size: 17, fill: palette.muted, anchor: "middle", letterSpacing: 1.5 })}
+  <g fill="none" stroke="${palette.ink}" stroke-width="4">
+    <path d="M320 810 H440"/><path d="M545 810 H620"/>
   </g>
-  <path d="M432 803 L445 810 L432 817 Z" fill="${palette.ink}"/>
-  <path d="M612 803 L625 810 L612 817 Z" fill="${palette.ink}"/>
-  <circle cx="505" cy="810" r="32" fill="none" stroke="${accent}" stroke-width="4"/>
-  <path d="M489 810 l11 12 l22 -26" fill="none" stroke="${accent}" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
-  ${mono("VERIFY", 505, 885, { size: 12, fill: accent, anchor: "middle", letterSpacing: 1.5 })}
-  ${latticePanel("d-migrate", 640, 720, 170, 180, 18, 3.5)}
-  ${mono("TRELLIS SOURCE", 725, 935, { size: 12, fill: palette.muted, anchor: "middle", letterSpacing: 1.5 })}
+  <path d="M430 802 L446 810 L430 818 Z" fill="${palette.ink}"/>
+  <path d="M610 802 L626 810 L610 818 Z" fill="${palette.ink}"/>
+  <circle cx="505" cy="810" r="36" fill="none" stroke="${accent}" stroke-width="4.5"/>
+  <path d="M486 810 l13 14 l25 -30" fill="none" stroke="${accent}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  ${mono("VERIFY", 505, 885, { size: 17, fill: accent, anchor: "middle", letterSpacing: 1.5 })}
+  ${latticePanel("d-migrate", 640, 720, 170, 180, 18, 4)}
+  ${mono("TRELLIS SOURCE", 725, 935, { size: 17, fill: palette.muted, anchor: "middle", letterSpacing: 1.5 })}
 </g>`;
 
 const diagramMemory = (accent) => `<g>
-  <rect x="259" y="689" width="22" height="22" rx="6" fill="none" stroke="${palette.ink}" stroke-width="3.5"/>
-  <rect x="799" y="689" width="22" height="22" rx="6" fill="none" stroke="${palette.ink}" stroke-width="3.5"/>
-  ${mono("AGENT A", 270, 672, { size: 11, fill: palette.muted, anchor: "middle", letterSpacing: 1 })}
-  ${mono("AGENT B", 810, 672, { size: 11, fill: palette.muted, anchor: "middle", letterSpacing: 1 })}
-  <path d="M270 711 V880 M810 711 V880" fill="none" stroke="${palette.ink}" stroke-width="3"/>
+  <rect x="259" y="689" width="22" height="22" rx="6" fill="none" stroke="${palette.ink}" stroke-width="4"/>
+  <rect x="799" y="689" width="22" height="22" rx="6" fill="none" stroke="${palette.ink}" stroke-width="4"/>
+  ${mono("AGENT A", 270, 670, { size: 16, fill: palette.muted, anchor: "middle", letterSpacing: 1 })}
+  ${mono("AGENT B", 810, 670, { size: 16, fill: palette.muted, anchor: "middle", letterSpacing: 1 })}
+  <path d="M270 711 V880 M810 711 V880" fill="none" stroke="${palette.ink}" stroke-width="3.5"/>
   <circle cx="270" cy="880" r="4.5" fill="${palette.ink}"/>
   <circle cx="810" cy="880" r="4.5" fill="${palette.ink}"/>
-  <rect x="190" y="880" width="700" height="44" rx="22" fill="none" stroke="${palette.ink}" stroke-width="3.5"/>
-  <g fill="${palette.muted}">${[300, 420, 660, 780].map((x) => `<circle cx="${x}" cy="902" r="5.5"/>`).join("")}</g>
-  <circle cx="540" cy="902" r="13" fill="none" stroke="${accent}" stroke-width="2.5"/>
-  <circle cx="540" cy="902" r="6" fill="${accent}"/>
+  <rect x="190" y="880" width="700" height="44" rx="22" fill="none" stroke="${palette.ink}" stroke-width="4"/>
+  <g fill="${palette.muted}">${[300, 420, 660, 780].map((x) => `<circle cx="${x}" cy="902" r="7"/>`).join("")}</g>
+  <circle cx="540" cy="902" r="15" fill="none" stroke="${accent}" stroke-width="3"/>
+  <circle cx="540" cy="902" r="7" fill="${accent}"/>
 </g>`;
 
 const diagramSwitch = (accent) => `<g>
-  <path d="M180 720 H460" fill="none" stroke="${palette.muted}" stroke-width="3"/>
-  <path d="M478 720 H920" fill="none" stroke="${palette.muted}" stroke-width="3" stroke-dasharray="8 8"/>
-  <path d="M180 920 H920" fill="none" stroke="${palette.muted}" stroke-width="3"/>
-  <path d="M180 712 V728 M920 712 V728 M180 912 V928 M920 912 V928" fill="none" stroke="${palette.muted}" stroke-width="2.5"/>
-  ${mono("AGENT A", 180, 694, { size: 12, fill: palette.muted, letterSpacing: 1 })}
-  ${mono("AGENT B", 920, 958, { size: 12, fill: palette.muted, anchor: "end", letterSpacing: 1 })}
-  <path d="M180 720 H420 C 540 720 520 920 640 920 H920" fill="none" stroke="${palette.ink}" stroke-width="4.5" stroke-linecap="round"/>
-  <circle cx="180" cy="720" r="6" fill="${palette.ink}"/>
-  <circle cx="920" cy="920" r="14" fill="none" stroke="${accent}" stroke-width="2.5"/>
-  <circle cx="920" cy="920" r="7.5" fill="${accent}"/>
+  <path d="M180 720 H460" fill="none" stroke="${palette.muted}" stroke-width="3.5"/>
+  <path d="M478 720 H920" fill="none" stroke="${palette.muted}" stroke-width="3.5" stroke-dasharray="8 8"/>
+  <path d="M180 920 H920" fill="none" stroke="${palette.muted}" stroke-width="3.5"/>
+  <path d="M180 712 V728 M920 712 V728 M180 912 V928 M920 912 V928" fill="none" stroke="${palette.muted}" stroke-width="3"/>
+  ${mono("AGENT A", 180, 692, { size: 16, fill: palette.muted, letterSpacing: 1 })}
+  ${mono("AGENT B", 920, 960, { size: 16, fill: palette.muted, anchor: "end", letterSpacing: 1 })}
+  <path d="M180 720 H420 C 540 720 520 920 640 920 H920" fill="none" stroke="${palette.ink}" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="180" cy="720" r="7.5" fill="${palette.ink}"/>
+  <circle cx="920" cy="920" r="16" fill="none" stroke="${accent}" stroke-width="3"/>
+  <circle cx="920" cy="920" r="8.5" fill="${accent}"/>
 </g>`;
 
 const diagrams = {
@@ -201,17 +202,18 @@ const diagrams = {
 
 // Frame around the diagram zone with a label chip cut into the top edge.
 const figureFrame = (x, y, w, h, chipText, accent) => {
-  const chipWidth = chipText.length * 9.4 + 26;
+  const chipWidth = chipText.length * 13 + 34;
   return `<g>
   <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${palette.line}" stroke-width="1.5"/>
   ${crosshair(x, y)}${crosshair(x + w, y)}${crosshair(x, y + h)}${crosshair(x + w, y + h)}
-  <rect x="${x + 16}" y="${y - 16}" width="${chipWidth}" height="32" fill="${palette.paper}"/>
-  ${mono(chipText, x + 29, y + 5, { size: 13.5, fill: accent, letterSpacing: 1.5 })}
+  <rect x="${x + 18}" y="${y - 22}" width="${chipWidth}" height="44" fill="${palette.paper}"/>
+  ${mono(chipText, x + 35, y + 8, { size: 20, fill: accent, letterSpacing: 1.8 })}
 </g>`;
 };
 
 // ---------------------------------------------------------------------------
 // Vertical poster: 1080 x 1440 (drawn in the center of a 1440 square canvas).
+// Typography is sized for phone feeds (~390 css px wide).
 // ---------------------------------------------------------------------------
 
 const V_CANVAS = 1440;
@@ -222,37 +224,37 @@ const makeVertical = (poster, locale) => {
   const title = poster.title[locale];
   const body = poster.body[locale];
   const chinese = locale === "zh";
-  const titleSize = chinese ? 76 : 88;
-  const titleLineHeight = chinese ? 94 : 100;
-  const titleBaseline = 336;
+  const titleSize = chinese ? 80 : 94;
+  const titleLineHeight = chinese ? 98 : 106;
+  const titleBaseline = 360;
   const barTop = Math.round(titleBaseline - titleSize * 0.78);
   const barBottom = Math.round(titleBaseline + titleLineHeight * (title.length - 1) + titleSize * 0.22);
-  const bodyY = titleBaseline + titleLineHeight * (title.length - 1) + 62;
+  const bodyY = titleBaseline + titleLineHeight * (title.length - 1) + 66;
   const filename = `agent-trellis-poster-v3-${poster.slug}-${locale}`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${V_CANVAS}" height="${V_CANVAS}" viewBox="0 0 ${V_CANVAS} ${V_CANVAS}">
   <rect width="${V_CANVAS}" height="${V_CANVAS}" fill="${palette.paper}"/>
   <g transform="translate(${V_OFFSET} 0)">
-    ${mark(64, 50, 0.5)}
-    ${text("AGENT TRELLIS", 126, 86, { size: 22, weight: 700, letterSpacing: 2.4 })}
-    ${mono(`${poster.label} / ${poster.number}`, 1016, 86, { size: 15, fill: palette.muted, anchor: "end", letterSpacing: 1.7 })}
-    <path d="M64 130 H1016" stroke="${palette.line}" stroke-width="1.5"/>
-    <rect x="64" y="127.5" width="46" height="3" fill="${accent}"/>
+    ${mark(64, 48, 0.56)}
+    ${text("AGENT TRELLIS", 132, 87, { size: 30, weight: 700, letterSpacing: 2.2 })}
+    ${mono(`${poster.label} / ${poster.number}`, 1016, 87, { size: 19, fill: palette.muted, anchor: "end", letterSpacing: 1.7 })}
+    <path d="M64 142 H1016" stroke="${palette.line}" stroke-width="1.5"/>
+    <rect x="64" y="138.5" width="52" height="3.5" fill="${accent}"/>
 
-    ${mono("UNIFIED CODE AGENT RUNTIME", 96, 208, { size: 16, fill: accent, letterSpacing: 2.2 })}
+    ${mono("UNIFIED CODE AGENT RUNTIME", 96, 232, { size: 22, fill: accent, letterSpacing: 2.2 })}
     <rect x="64" y="${barTop}" width="7" height="${barBottom - barTop}" fill="${accent}"/>
     ${text(title.join("\n"), 96, titleBaseline, { size: titleSize, weight: 800, lineHeight: titleLineHeight, letterSpacing: chinese ? -1 : -2.2 })}
-    ${text(body.join("\n"), 96, bodyY, { size: chinese ? 27 : 26, weight: 450, lineHeight: 38, fill: palette.muted })}
+    ${text(body.join("\n"), 96, bodyY, { size: chinese ? 35 : 34, weight: 450, lineHeight: 46, fill: palette.muted })}
 
-    ${figureFrame(64, 600, 952, 480, `FIG.${poster.number} — ${poster.fig}`, accent)}
-    ${diagrams[poster.slug](accent)}
-    ${mono(poster.signal, 540, 1038, { size: 14, fill: accent, anchor: "middle", letterSpacing: 2 })}
+    ${figureFrame(64, 650, 952, 480, `FIG.${poster.number} — ${poster.fig}`, accent)}
+    <g transform="translate(0 50)">${diagrams[poster.slug](accent)}</g>
+    ${mono(poster.signal, 540, 1088, { size: 22, fill: accent, anchor: "middle", letterSpacing: 2 })}
 
-    ${mono(poster.tags, 64, 1156, { size: 15, fill: palette.muted, letterSpacing: 1.6 })}
-    ${mono("agent-trellis.dev", 1016, 1156, { size: 15, fill: palette.muted, anchor: "end", letterSpacing: 1.6 })}
-    <path d="M64 1188 H1016" stroke="${palette.ink}" stroke-width="3"/>
-    <circle cx="74" cy="1252" r="5.5" fill="${accent}"/>
-    ${mono("$ npm i -g agent-trellis", 100, 1261, { size: 24.5, weight: 500, letterSpacing: 0.2 })}
-    ${mono("OPEN SOURCE / LOCAL FIRST", 1016, 1261, { size: 14, fill: palette.muted, anchor: "end", letterSpacing: 1.5 })}
+    ${mono(poster.tags, 64, 1198, { size: 19, fill: palette.muted, letterSpacing: 1.6 })}
+    ${mono("agent-trellis.dev", 1016, 1198, { size: 19, fill: palette.muted, anchor: "end", letterSpacing: 1.6 })}
+    <path d="M64 1232 H1016" stroke="${palette.ink}" stroke-width="3.5"/>
+    <circle cx="77" cy="1294" r="7" fill="${accent}"/>
+    ${mono("$ npm i -g agent-trellis", 108, 1304, { size: 32, weight: 500, letterSpacing: 0.2 })}
+    ${mono("OPEN SOURCE / LOCAL FIRST", 1016, 1304, { size: 18, fill: palette.muted, anchor: "end", letterSpacing: 1.5 })}
   </g>
 </svg>`;
   const svgPath = join(outputDir, `${filename}.svg`);
@@ -264,7 +266,7 @@ const makeVertical = (poster, locale) => {
 
 // ---------------------------------------------------------------------------
 // Horizontal poster: 1600 x 900 (drawn in the center of a 1600 square canvas),
-// exported at 1200 x 675.
+// exported at 1200 x 675. Desktop-first, so metrics stay compact.
 // ---------------------------------------------------------------------------
 
 const H_CANVAS = 1600;

@@ -21,6 +21,9 @@ What v3 changes versus v1/v2:
   computed from the title baseline.
 - One horizontal 1200x675 master (X/Twitter, WeChat article header) joins the
   3:4 verticals, in both English and Chinese.
+- Vertical posters are phone-first (feed width ~390 css px): body text runs at
+  34/35 px, diagram labels at 16-17 px, install line at 32 px. The horizontal
+  masters are desktop-first and keep the denser metrics.
 
 ## Mark candidates
 
