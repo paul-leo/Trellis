@@ -13,6 +13,8 @@ import { loadCanonicalSource, ensureGitignoreEntry, ensureShellEnvSource, upsert
 import type { McpServerDef, Transport } from "../core/types.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
 import { parseDotenv, writeLocalSecretValue } from "../lib/secretEnv.js";
+import { collectMcpSyncReport, printReport as printMcpSyncReport } from "./mcp.js";
+import type { McpSyncReport } from "./mcp.js";
 
 const DEFAULT_ENV_FILE_TILDE = "~/.trellis/mcp/servers.local.env";
 
@@ -353,7 +355,7 @@ export function applyMcpImportPlan(path: string, homeDir: string = homedir(), ba
   return publicPlan(plan);
 }
 
-export function runMcpImport(path: string | undefined, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
+export async function runMcpImport(path: string | undefined, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
   if (!path) {
     console.error("Usage: trellis mcp import <json-file> [--dry-run]");
@@ -363,12 +365,20 @@ export function runMcpImport(path: string | undefined, opts: { homeDir?: string;
     const internal = collectInternalPlan(path, homeDir);
     if (!opts.dryRun) applyMcpImportPlan(path, homeDir);
     const result = publicPlan(internal);
-    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    const failed = result.items.some((item) => item.action === "conflict" || item.action === "invalid-input");
+    const changed = result.items.some((item) => item.action === "create");
+    let syncReport: McpSyncReport | undefined;
+    if (!failed && changed && existsSync(join(homeDir, ".trellis"))) {
+      syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
+    }
+    if (opts.json) console.log(JSON.stringify(syncReport ? { ...result, sync: syncReport } : result, null, 2));
     else {
       console.log(`${opts.dryRun ? "[dry run] " : ""}mcp import ${path}`);
       for (const item of result.items) console.log(`  [${item.action}] ${item.name} — ${item.detail}`);
+      if (syncReport) printMcpSyncReport(syncReport, opts.dryRun ?? false);
     }
-    return { exitCode: result.items.some((item) => item.action === "conflict" || item.action === "invalid-input") ? 1 : 0 };
+    const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+    return { exitCode: failed || syncConflict ? 1 : 0 };
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return { exitCode: 1 };

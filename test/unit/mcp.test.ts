@@ -386,14 +386,14 @@ test("mcp add: writing into a fresh `trellis init`-style servers.yaml (servers: 
   assert.match(written, / {4}headers:\n {6}Authorization: Bearer \$\{HTTP_TOKEN\}/, `expected block-style headers, got:\n${written}`);
 });
 
-test("mcp add: adding over an existing name with different settings refuses, no write (no --force, D4)", () => {
+test("mcp add: adding over an existing name with different settings refuses, no write (no --force, D4)", async () => {
   const home = scratchHome();
   initCanonical(home, "servers:\n  sample:\n    transport: stdio\n    command: node\n");
 
   const before = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
   const plan = collectMcpAddPlan("sample", { transport: "stdio", command: "different-command" }, home);
   assert.equal(plan.action, "conflict");
-  const { exitCode } = runMcpAdd("sample", { transport: "stdio", command: "different-command" }, { homeDir: home });
+  const { exitCode } = await runMcpAdd("sample", { transport: "stdio", command: "different-command" }, { homeDir: home });
   assert.equal(exitCode, 1);
   assert.equal(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8"), before, "no write on conflict");
 });
@@ -427,23 +427,23 @@ test("mcp remove: an existing entry is removed from servers.yaml only, never tou
   assert.equal(claudeConfigAfter, claudeConfigBefore, "an agent's native config, already synced, must be completely untouched by canonical-side removal");
 });
 
-test("mcp remove: a non-existent name refuses cleanly", () => {
+test("mcp remove: a non-existent name refuses cleanly", async () => {
   const home = scratchHome();
   initCanonical(home, "servers: {}\n");
-  const { exitCode } = runMcpRemove("nope", { homeDir: home });
+  const { exitCode } = await runMcpRemove("nope", { homeDir: home });
   assert.equal(exitCode, 1);
 });
 
-test("mcp add/remove: --dry-run computes the plan but writes nothing", () => {
+test("mcp add/remove: --dry-run computes the plan but writes nothing", async () => {
   const home = scratchHome();
   initCanonical(home, "servers:\n  sample:\n    transport: stdio\n    command: node\n");
   const before = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
 
-  const addResult = runMcpAdd("fresh", { transport: "stdio", command: "npx" }, { homeDir: home, dryRun: true });
+  const addResult = await runMcpAdd("fresh", { transport: "stdio", command: "npx" }, { homeDir: home, dryRun: true });
   assert.equal(addResult.exitCode, 0);
   assert.equal(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8"), before, "dry-run add must not write");
 
-  const removeResult = runMcpRemove("sample", { homeDir: home, dryRun: true });
+  const removeResult = await runMcpRemove("sample", { homeDir: home, dryRun: true });
   assert.equal(removeResult.exitCode, 0);
   assert.equal(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8"), before, "dry-run remove must not write");
 });

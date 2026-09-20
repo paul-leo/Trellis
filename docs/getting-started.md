@@ -547,15 +547,18 @@ to set up before moving on to `sync`.
 The same applies to MCP servers — `~/.trellis/mcp/servers.yaml` can be
 hand-authored the same way (see
 [`schema/servers.example.yaml`](../schema/servers.example.yaml) for the
-full shape), or use `trellis mcp add` (below). Either way, move on to
-[`trellis mcp sync`](#trellis-mcp-sync) once you've added what you want.
+full shape), or use `trellis mcp add` (below) — the CLI command syncs
+for you; hand-authored edits still need a following
+[`trellis mcp sync`](#trellis-mcp-sync) of their own.
 
 ## `trellis skill` / `trellis mcp` — canonical CRUD via the CLI
 
 An alternative to hand-editing canonical files directly — useful for
 scripting, or when you'd rather not open a text editor for a one-line
-change. Both commands are canonical-side only: they never touch any
-agent's native config (that stays `sync`/`mcp sync`'s job).
+change. `add`/`remove`/`import` mutate the canonical source and then run the
+same sync `sync`/`mcp sync` performs, so one command both edits the list and
+maps it onto the managed agents; `--dry-run` previews the whole thing,
+including the sync plan, with zero writes. `list` is read-only.
 
 ```
 $ trellis skill list

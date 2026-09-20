@@ -108,11 +108,11 @@ test("skill add: re-adding with different content is a conflict, never overwritt
   assert.equal(readFileSync(join(home, ".trellis", "skills", "demo", "SKILL.md"), "utf-8"), "# v1\n", "original content must survive untouched");
 });
 
-test("skill add: --dry-run computes the plan but writes nothing", () => {
+test("skill add: --dry-run computes the plan but writes nothing", async () => {
   const home = scratchHome();
   const source = writeSourceSkill(join(home, "source-skill"));
 
-  const { exitCode } = runSkillAdd("demo", source, { homeDir: home, dryRun: true });
+  const { exitCode } = await runSkillAdd("demo", source, { homeDir: home, dryRun: true });
   assert.equal(exitCode, 0);
   assert.ok(!existsSync(join(home, ".trellis", "skills", "demo")), "dry-run must not write");
 });
@@ -128,20 +128,20 @@ test("skill remove: an existing skill's canonical directory is deleted", () => {
   assert.ok(!existsSync(join(home, ".trellis", "skills", "demo")));
 });
 
-test("skill remove: a non-existent skill refuses cleanly", () => {
+test("skill remove: a non-existent skill refuses cleanly", async () => {
   const home = scratchHome();
   const plan = collectSkillRemovePlan("nope", home);
   assert.equal(plan.action, "not-found");
-  const { exitCode } = runSkillRemove("nope", { homeDir: home });
+  const { exitCode } = await runSkillRemove("nope", { homeDir: home });
   assert.equal(exitCode, 1);
 });
 
-test("skill remove: --dry-run computes the plan but writes nothing", () => {
+test("skill remove: --dry-run computes the plan but writes nothing", async () => {
   const home = scratchHome();
   const source = writeSourceSkill(join(home, "source-skill"));
   applySkillAddPlan(collectSkillAddPlan("demo", source, home), home);
 
-  const { exitCode } = runSkillRemove("demo", { homeDir: home, dryRun: true });
+  const { exitCode } = await runSkillRemove("demo", { homeDir: home, dryRun: true });
   assert.equal(exitCode, 0);
   assert.ok(existsSync(join(home, ".trellis", "skills", "demo")), "dry-run must not delete");
 });

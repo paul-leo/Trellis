@@ -5,13 +5,16 @@
  * gated — remove), and reports what happened. Kept as a separate
  * command from bare `trellis sync` (skills/instructions) since the two
  * have different write mechanisms entirely, not because MCP removal is
- * unsafe (see `src/lib/mcpOwnership.ts`). `list`/`add`/`remove`
- * (trellis-canonical-cli-crud) are canonical-side only — an alternative
- * to hand-editing `~/.trellis/mcp/servers.yaml`, never touching any
- * agent's native config (that stays `sync`'s job).
+ * unsafe (see `src/lib/mcpOwnership.ts`). `add`/`remove` mutate the
+ * canonical source and then run the same sync `mcp sync` performs, so
+ * one command both edits the list and maps it onto the managed agents
+ * (removal propagates through the ownership ledger). `list` is
+ * read-only. All three are an alternative to hand-editing
+ * `~/.trellis/mcp/servers.yaml`.
  */
 
 import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadCanonicalSource, upsertServerYaml, removeServerYaml, type ServersYamlWriteResult } from "../core/canonical.js";
 import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
@@ -406,7 +409,7 @@ export function applyMcpAddPlan(plan: McpAddPlan, homeDir: string = homedir()): 
   return upsertServerYaml(serversYamlPath(homeDir), plan.name, plan.def);
 }
 
-export function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
+export async function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
   let plan: McpAddPlan;
   try {
@@ -422,14 +425,28 @@ export function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, opts: { 
     if (!result.ok) writeError = result.error;
   }
 
+  const planFailed = plan.action === "conflict" || plan.action === "invalid-input" || Boolean(writeError);
+  let syncReport: McpSyncReport | undefined;
+  if (!planFailed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
+    try {
+      syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return { exitCode: 1 };
+    }
+  }
+
   if (opts.json) {
-    console.log(JSON.stringify(writeError ? { ...plan, writeError } : plan, null, 2));
+    const payload = writeError ? { ...plan, writeError } : plan;
+    console.log(JSON.stringify(syncReport ? { ...payload, sync: syncReport } : payload, null, 2));
   } else {
     console.log(`${opts.dryRun ? "[dry run] " : ""}mcp add ${plan.name}`);
     console.log(`  [${plan.action}] ${plan.detail}`);
     if (writeError) console.error(`  write failed: ${writeError}`);
+    if (syncReport) printReport(syncReport, opts.dryRun ?? false);
   }
-  return { exitCode: plan.action === "conflict" || plan.action === "invalid-input" || writeError ? 1 : 0 };
+  const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+  return { exitCode: planFailed || syncConflict ? 1 : 0 };
 }
 
 export type McpRemoveAction = "removed" | "not-found";
@@ -439,10 +456,10 @@ export interface McpRemovePlan {
   action: McpRemoveAction;
 }
 
-/** Canonical-side only — never touches an agent's native config. Making
- * an already-synced agent forget it is `mcp sync`'s own removal-
- * propagation gap, tracked separately (roadmap.md P14), not this
- * command's job. */
+/** Canonical plan only — `runMcpRemove` follows a real removal with the
+ * same sync `mcp sync` performs, which propagates the deletion to every
+ * agent whose entry the ownership ledger proves Trellis wrote
+ * (trellis-mcp-lifecycle-parity, roadmap P14). */
 export function collectMcpRemovePlan(name: string, homeDir: string = homedir()): McpRemovePlan {
   const canonical = loadCanonicalSource(homeDir);
   return { name, action: canonical.mcp.servers[name] ? "removed" : "not-found" };
@@ -453,7 +470,7 @@ export function applyMcpRemovePlan(plan: McpRemovePlan, homeDir: string = homedi
   return removeServerYaml(serversYamlPath(homeDir), plan.name);
 }
 
-export function runMcpRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
+export async function runMcpRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
   let plan: McpRemovePlan;
   try {
@@ -469,14 +486,28 @@ export function runMcpRemove(name: string, opts: { homeDir?: string; json?: bool
     if (!result.ok) writeError = result.error;
   }
 
+  const planFailed = plan.action === "not-found" || Boolean(writeError);
+  let syncReport: McpSyncReport | undefined;
+  if (!planFailed && existsSync(join(homeDir, ".trellis"))) {
+    try {
+      syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return { exitCode: 1 };
+    }
+  }
+
   if (opts.json) {
-    console.log(JSON.stringify(writeError ? { ...plan, writeError } : plan, null, 2));
+    const payload = writeError ? { ...plan, writeError } : plan;
+    console.log(JSON.stringify(syncReport ? { ...payload, sync: syncReport } : payload, null, 2));
   } else if (plan.action === "not-found") {
     console.error(`"${name}" is not a canonical MCP server — nothing to remove.`);
   } else if (writeError) {
     console.error(`  write failed: ${writeError}`);
   } else {
     console.log(`${opts.dryRun ? "[dry run] " : ""}removed MCP server "${name}" from canonical source.`);
+    if (syncReport) printReport(syncReport, opts.dryRun ?? false);
   }
-  return { exitCode: plan.action === "not-found" || writeError ? 1 : 0 };
+  const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+  return { exitCode: planFailed || syncConflict ? 1 : 0 };
 }

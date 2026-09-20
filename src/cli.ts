@@ -133,8 +133,9 @@ Commands:
             upstream capabilities; existing mcp-gateway configs remain valid
             as a compatibility alias
   mcp remove <name>
-            Remove a canonical MCP server (canonical-side only — does
-              not touch any agent's already-synced native config)
+            Remove a canonical MCP server, then run the same sync as
+            mcp sync so every managed agent's Trellis-owned entry for
+            it is removed too
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill list
@@ -343,12 +344,12 @@ async function main(argv: string[]): Promise<void> {
     }
     if (subcommand === "add") {
       const [name] = mcpRest;
-      process.exitCode = runMcpAdd(name, parseMcpAddArgs(mcpRest), { json, dryRun }).exitCode;
+      process.exitCode = (await runMcpAdd(name, parseMcpAddArgs(mcpRest), { json, dryRun })).exitCode;
       return;
     }
     if (subcommand === "import") {
       const [file] = mcpRest;
-      process.exitCode = runMcpImport(file, { json, dryRun }).exitCode;
+      process.exitCode = (await runMcpImport(file, { json, dryRun })).exitCode;
       return;
     }
     if (subcommand === "set") {
@@ -365,7 +366,7 @@ async function main(argv: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      process.exitCode = runMcpRemove(name, { json, dryRun }).exitCode;
+      process.exitCode = (await runMcpRemove(name, { json, dryRun })).exitCode;
       return;
     }
 
@@ -404,7 +405,7 @@ async function main(argv: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      process.exitCode = runSkillAdd(name, from, { json, dryRun }).exitCode;
+      process.exitCode = (await runSkillAdd(name, from, { json, dryRun })).exitCode;
       return;
     }
     if (subcommand === "remove") {
@@ -414,7 +415,7 @@ async function main(argv: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      process.exitCode = runSkillRemove(name, { json, dryRun }).exitCode;
+      process.exitCode = (await runSkillRemove(name, { json, dryRun })).exitCode;
       return;
     }
     if (subcommand === "update-builtin") {

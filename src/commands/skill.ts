@@ -20,6 +20,8 @@ import { resolveScope } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 import { isBuiltinSkillName } from "../lib/builtinSkills.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
+import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
+import type { SyncReport } from "./sync.js";
 
 function builtinSkillTemplate(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -129,19 +131,26 @@ export function applySkillAddPlan(plan: SkillAddPlan, homeDir: string = homedir(
   cpSync(plan.sourceDir, dest, { recursive: true });
 }
 
-export function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
+export async function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
   const plan = collectSkillAddPlan(name, fromPath, homeDir);
   if (!opts.dryRun && plan.action === "create") {
     applySkillAddPlan(plan, homeDir);
   }
+  const failed = plan.action === "conflict" || plan.action === "invalid-source";
+  let syncReport: SyncReport | undefined;
+  if (!failed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectSyncReport({ target: "skills", homeDir, dryRun: opts.dryRun });
+  }
   if (opts.json) {
-    console.log(JSON.stringify(plan, null, 2));
+    console.log(JSON.stringify(syncReport ? { ...plan, sync: syncReport } : plan, null, 2));
   } else {
     console.log(`${opts.dryRun ? "[dry run] " : ""}skill add ${name}`);
     console.log(`  [${plan.action}] ${plan.detail}`);
+    if (syncReport) printSyncReport(syncReport, opts.dryRun ?? false);
   }
-  return { exitCode: plan.action === "conflict" || plan.action === "invalid-source" ? 1 : 0 };
+  const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+  return { exitCode: failed || syncConflict ? 1 : 0 };
 }
 
 export type SkillRemoveAction = "removed" | "not-found";
@@ -162,18 +171,25 @@ export function applySkillRemovePlan(plan: SkillRemovePlan, homeDir: string = ho
   rmSync(join(homeDir, ".trellis", "skills", plan.name), { recursive: true, force: true });
 }
 
-export function runSkillRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
+export async function runSkillRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
   const plan = collectSkillRemovePlan(name, homeDir);
   if (!opts.dryRun) {
     applySkillRemovePlan(plan, homeDir);
   }
+  const failed = plan.action === "not-found";
+  let syncReport: SyncReport | undefined;
+  if (!failed && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectSyncReport({ target: "skills", homeDir, dryRun: opts.dryRun });
+  }
   if (opts.json) {
-    console.log(JSON.stringify(plan, null, 2));
+    console.log(JSON.stringify(syncReport ? { ...plan, sync: syncReport } : plan, null, 2));
   } else if (plan.action === "not-found") {
     console.error(`"${name}" is not a canonical skill — nothing to remove.`);
   } else {
     console.log(`${opts.dryRun ? "[dry run] " : ""}removed skill "${name}" from canonical source.`);
+    if (syncReport) printSyncReport(syncReport, opts.dryRun ?? false);
   }
-  return { exitCode: plan.action === "not-found" ? 1 : 0 };
+  const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+  return { exitCode: failed || syncConflict ? 1 : 0 };
 }
