@@ -30,8 +30,8 @@ const markA = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role=
   <desc id="desc">A letter T whose beam is a trellis lattice.</desc>
   <g fill="none" stroke="${INK}" stroke-linecap="round">
     <rect x="16" y="18" width="64" height="18" rx="9" stroke-width="5.5"/>
-    <g stroke-width="2.6" clip-path="url(#a-beam)">${hatchLines(21, 23, 54, 9, 13.5)}</g>
-    <path d="M48 36 V78" stroke-width="5.5"/>
+    <g stroke-width="2.6" clip-path="url(#a-beam)">${hatchLines(25.5, 23, 54, 9, 18)}</g>
+    <path d="M48 36 V78" stroke-width="8"/>
   </g>
   <defs><clipPath id="a-beam"><rect x="21" y="23" width="54" height="9" rx="4.5"/></clipPath></defs>
 </svg>`;
