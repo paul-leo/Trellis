@@ -1038,6 +1038,18 @@ directories by hand once you're done with them.
   the same real config files/directories `init`/`migrate`/`sync` do; if an
   agent's config lives somewhere non-standard on your machine, that's worth
   filing an issue with the exact path.
-- Other known limitations are tracked honestly in
-  [README's Status section](../README.md#status) — read that before
-  assuming something is a bug rather than a documented gap.
+- Other known limitations, named honestly rather than discovered the hard way:
+  - `mcp sync`/`sync` never spawn or handshake-test MCP servers — they only
+    guarantee the *config* is written correctly. `trellis doctor --probe-mcp`
+    is the one command that actually connects, and it's opt-in.
+  - The pi bridge extension (`trellis-pi-mcp-bridge`) is verified to load and
+    register tools without erroring, not against a real LLM tool call in
+    production.
+  - Verification runs in isolated Docker containers with real agent installs,
+    not against a developer's daily-use dotfiles — if you hit something a
+    clean-room sandbox wouldn't catch, please open an issue.
+  - `onboard` picks one agent as the migration base when several are present;
+    merging differing content across multiple agents into one result is
+    future work, not built yet.
+  - `~/.trellis/backups/` has no automatic pruning — every write adds a run
+    directory; delete old ones by hand.
