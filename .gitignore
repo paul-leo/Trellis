@@ -7,3 +7,7 @@ dist/
 .env.*
 !.env.example
 HANDOFF.md
+
+# Local video production materials (never publish)
+docs/video/
+scripts/video-demo-setup.sh
