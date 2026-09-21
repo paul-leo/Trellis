@@ -28,3 +28,7 @@ src-tauri/binaries/*
 *.njsproj
 *.sln
 *.sw?
+
+# macOS signing/notarization credentials — real values live only in the
+# git-ignored .env.signing, never in .env.signing.example.
+!.env.signing.example
