@@ -22,6 +22,7 @@ import { createChatRoutes } from "./routes/chat.js";
 import { createLiveUpdates } from "./liveUpdates.js";
 import { createChatSessionStore } from "./chatSessionStore.js";
 import { PlanStore } from "./planStore.js";
+import { applyLoginShellPath } from "./shellPath.js";
 
 export async function proveInternalImportsWork(homeDir: string = homedir()): Promise<{ doctorOk: boolean; syncOk: boolean }> {
   const doctorReport = await collectDoctorReport(homeDir);
@@ -33,6 +34,13 @@ export async function proveInternalImportsWork(homeDir: string = homedir()): Pro
 }
 
 async function main(): Promise<void> {
+  // Must run before anything below: every probe in `src/probes/` spawns a
+  // bare binary name (`codex`, `kimi`, ...), and a Finder/Dock-launched GUI
+  // app only inherits launchd's minimal PATH, not the login shell's PATH
+  // those binaries actually live on (shellPath.ts's own doc comment has
+  // the full story). A failed resolution is a silent no-op, not fatal.
+  applyLoginShellPath();
+
   const homeDir = homedir();
   const planStore = new PlanStore();
   const chatSessionStore = createChatSessionStore();

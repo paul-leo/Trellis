@@ -79,7 +79,15 @@ export async function probe(homeDir: string = homedir(), opts: ProbeOptions = {}
     const raw = execFileSync("codex", ["mcp", "list", "--json"], { encoding: "utf-8", timeout: 5_000, env: codexEnv });
     mcpEntries = JSON.parse(raw) as CodexMcpEntry[];
   } catch (err) {
-    diagnostics.push(`codex mcp list --json failed: ${err instanceof Error ? err.message : String(err)}`);
+    // ENOENT means the binary itself isn't on PATH — the same benign,
+    // config-without-binary condition the `--version` check above already
+    // swallows silently, not a real failure worth alarming the user with a
+    // raw spawn error string. Anything else (malformed JSON, a non-zero
+    // exit for another reason, a timeout) is a genuine, unexpected failure
+    // and stays a diagnostic.
+    if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      diagnostics.push(`codex mcp list --json failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   const mcpServers: AgentSnapshotMcpServer[] = mcpEntries.map((entry) => ({
