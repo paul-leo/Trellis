@@ -26,6 +26,23 @@ case "${TRELLIS_HOST_AUTH_AGENT:-}" in
     cp /host-auth/auth.json "$HOME/.pi/agent/auth.json"
     chmod 600 "$HOME/.pi/agent/auth.json"
     ;;
+  kimi-code)
+    mkdir -p "$HOME/.kimi-code/credentials"
+    cp /host-auth/auth.json "$HOME/.kimi-code/credentials/kimi-code.json"
+    chmod 600 "$HOME/.kimi-code/credentials/kimi-code.json"
+    # Optional: the host's real provider/model registration. Absent when
+    # the launcher found no config.toml to bridge — not an error, since a
+    # bare OAuth credential is still meaningful for e.g. `kimi doctor`.
+    if [ -f /host-auth/config.toml ]; then
+      cp /host-auth/config.toml "$HOME/.kimi-code/config.toml"
+      chmod 600 "$HOME/.kimi-code/config.toml"
+    fi
+    ;;
+  claude-code)
+    mkdir -p "$HOME/.claude"
+    cp /host-auth/auth.json "$HOME/.claude/.credentials.json"
+    chmod 600 "$HOME/.claude/.credentials.json"
+    ;;
   "") ;;
   *)
     echo "unsupported host auth agent: $TRELLIS_HOST_AUTH_AGENT" >&2

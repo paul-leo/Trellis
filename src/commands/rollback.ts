@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { readlink, rm, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -132,6 +132,23 @@ async function planOperation(homeDir: string, runId: string, op: BackupOperation
       }
       return { action: "restore", path: op.path, description: `recreate ${op.path} -> ${op.beforeLinkTarget}` };
     }
+    // Directory conflict detection is existence-only, not a deep content
+    // hash (see BackupOperation's "dir-create"/"dir-remove" doc comment
+    // in backup.ts) — a real, documented simplification, not an
+    // oversight: something touching a file inside an otherwise-untouched
+    // directory won't be caught as a conflict.
+    case "dir-create": {
+      if (!existsSync(op.path)) {
+        return { action: "already-reverted", path: op.path, description: `${op.path} no longer exists — nothing to undo` };
+      }
+      return { action: "restore", path: op.path, description: `delete ${op.path} (created by this run)` };
+    }
+    case "dir-remove": {
+      if (existsSync(op.path)) {
+        return { action: "conflict", path: op.path, description: `${op.path} exists again since this run — left untouched` };
+      }
+      return { action: "restore", path: op.path, description: `recreate ${op.path} from its content before this run (${join(runDir, op.beforeDir)})` };
+    }
   }
 }
 
@@ -164,6 +181,12 @@ async function restoreOperation(homeDir: string, runId: string, op: BackupOperat
       return;
     case "symlink-remove":
       await symlink(op.beforeLinkTarget, op.path);
+      return;
+    case "dir-create":
+      rmSync(op.path, { recursive: true, force: true });
+      return;
+    case "dir-remove":
+      cpSync(join(runDir, op.beforeDir), op.path, { recursive: true });
       return;
   }
 }

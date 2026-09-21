@@ -1,0 +1,30 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# scripts/build-sidecar.mjs output (tasks.md 5.1) — a real, large, rebuild-
+# every-time native binary, same posture as `dist`/`target` above.
+sidecar-dist
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

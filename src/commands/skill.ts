@@ -124,24 +124,51 @@ export function collectSkillAddPlan(name: string, fromPath: string, homeDir: str
   }
 }
 
-export function applySkillAddPlan(plan: SkillAddPlan, homeDir: string = homedir()): void {
+export function applySkillAddPlan(plan: SkillAddPlan, homeDir: string = homedir(), backup?: BackupSession): void {
   if (plan.action !== "create" || !plan.sourceDir) return;
   const dest = join(homeDir, ".trellis", "skills", plan.name);
+  if (backup) {
+    backup.createDirFromSource(dest, plan.sourceDir);
+    return;
+  }
   mkdirSync(dest, { recursive: true });
   cpSync(plan.sourceDir, dest, { recursive: true });
 }
 
-export async function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+export interface SkillAddOutcome {
+  plan: SkillAddPlan;
+  sync?: SyncReport;
+}
+
+/**
+ * See `applyMcpAddWithSync`'s doc comment (mcp.ts) — same split, same
+ * reason: a non-CLI caller needs the structured result a JSON-mode CLI
+ * run prints, without scraping stdout. Also opens its own backup session
+ * around the canonical copy-in, for the same reason `applyMcpAddWithSync`
+ * does (trellis-gui tasks.md 3.5): this direct write used to be the one
+ * path in this file with no backup/rollback trace at all.
+ */
+export async function applySkillAddWithSync(plan: SkillAddPlan, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<SkillAddOutcome> {
   const homeDir = opts.homeDir ?? homedir();
-  const plan = collectSkillAddPlan(name, fromPath, homeDir);
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "create" ? openBackupSession(homeDir, "skill-add") : undefined;
+  const session = opts.backupSession ?? ownSession;
   if (!opts.dryRun && plan.action === "create") {
-    applySkillAddPlan(plan, homeDir);
+    applySkillAddPlan(plan, homeDir, session);
   }
+  ownSession?.finalize();
   const failed = plan.action === "conflict" || plan.action === "invalid-source";
   let syncReport: SyncReport | undefined;
   if (!failed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
     syncReport = await collectSyncReport({ target: "skills", homeDir, dryRun: opts.dryRun });
   }
+  return { plan, ...(syncReport ? { sync: syncReport } : {}) };
+}
+
+export async function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+  const homeDir = opts.homeDir ?? homedir();
+  const plan = collectSkillAddPlan(name, fromPath, homeDir);
+  const { sync: syncReport } = await applySkillAddWithSync(plan, { homeDir, dryRun: opts.dryRun });
+  const failed = plan.action === "conflict" || plan.action === "invalid-source";
   if (opts.json) {
     console.log(JSON.stringify(syncReport ? { ...plan, sync: syncReport } : plan, null, 2));
   } else {
@@ -166,22 +193,44 @@ export function collectSkillRemovePlan(name: string, homeDir: string = homedir()
   return { name, action: existsSync(dir) ? "removed" : "not-found" };
 }
 
-export function applySkillRemovePlan(plan: SkillRemovePlan, homeDir: string = homedir()): void {
+export function applySkillRemovePlan(plan: SkillRemovePlan, homeDir: string = homedir(), backup?: BackupSession): void {
   if (plan.action !== "removed") return;
-  rmSync(join(homeDir, ".trellis", "skills", plan.name), { recursive: true, force: true });
+  const dir = join(homeDir, ".trellis", "skills", plan.name);
+  if (backup) {
+    backup.removeDir(dir);
+    return;
+  }
+  rmSync(dir, { recursive: true, force: true });
 }
 
-export async function runSkillRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+export interface SkillRemoveOutcome {
+  plan: SkillRemovePlan;
+  sync?: SyncReport;
+}
+
+/** See `applySkillAddWithSync`'s doc comment — same split, same reason,
+ * same own-backup-session fix. */
+export async function applySkillRemoveWithSync(plan: SkillRemovePlan, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<SkillRemoveOutcome> {
   const homeDir = opts.homeDir ?? homedir();
-  const plan = collectSkillRemovePlan(name, homeDir);
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "removed" ? openBackupSession(homeDir, "skill-remove") : undefined;
+  const session = opts.backupSession ?? ownSession;
   if (!opts.dryRun) {
-    applySkillRemovePlan(plan, homeDir);
+    applySkillRemovePlan(plan, homeDir, session);
   }
+  ownSession?.finalize();
   const failed = plan.action === "not-found";
   let syncReport: SyncReport | undefined;
   if (!failed && existsSync(join(homeDir, ".trellis"))) {
     syncReport = await collectSyncReport({ target: "skills", homeDir, dryRun: opts.dryRun });
   }
+  return { plan, ...(syncReport ? { sync: syncReport } : {}) };
+}
+
+export async function runSkillRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+  const homeDir = opts.homeDir ?? homedir();
+  const plan = collectSkillRemovePlan(name, homeDir);
+  const { sync: syncReport } = await applySkillRemoveWithSync(plan, { homeDir, dryRun: opts.dryRun });
+  const failed = plan.action === "not-found";
   if (opts.json) {
     console.log(JSON.stringify(syncReport ? { ...plan, sync: syncReport } : plan, null, 2));
   } else if (plan.action === "not-found") {

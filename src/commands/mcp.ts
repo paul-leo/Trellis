@@ -404,9 +404,51 @@ export function runMcpSetAuth(name: string | undefined, auth: string | undefined
   return { exitCode: ["invalid-input", "not-found"].includes(plan.action) || Boolean(writeError) ? 1 : 0 };
 }
 
-export function applyMcpAddPlan(plan: McpAddPlan, homeDir: string = homedir()): ServersYamlWriteResult {
+export function applyMcpAddPlan(plan: McpAddPlan, homeDir: string = homedir(), backup?: BackupSession): ServersYamlWriteResult {
   if (plan.action !== "create" || !plan.def) return { ok: true };
-  return upsertServerYaml(serversYamlPath(homeDir), plan.name, plan.def);
+  return upsertServerYaml(serversYamlPath(homeDir), plan.name, plan.def, backup);
+}
+
+export interface McpAddOutcome {
+  plan: McpAddPlan;
+  writeError?: string;
+  sync?: McpSyncReport;
+}
+
+/**
+ * The apply-and-cascade-sync orchestration `runMcpAdd` used to do inline
+ * and only expose via a console.log'd payload — split out so a
+ * non-CLI caller (trellis-gui's sidecar) can get the same structured
+ * result a JSON-mode CLI run prints, without scraping stdout or
+ * re-deriving the same sequencing itself (trellis-gui design.md
+ * Decision 1). Behavior-preserving: `runMcpAdd` below is now a thin
+ * wrapper over this plus its own printing, same as every other command
+ * in this file already splits compute from CLI I/O.
+ *
+ * Opens its own backup session around the direct `servers.yaml` write
+ * when the caller doesn't already have one open — this canonical write
+ * used to be the one path in this file that bypassed backup/rollback
+ * entirely (trellis-gui tasks.md 3.5 found this empirically: a real `mcp
+ * add` left zero trace in `trellis rollback --list`). Mirrors the
+ * `ownSession` pattern `collectMcpSyncReport` below already uses for
+ * exactly the same reason.
+ */
+export async function applyMcpAddWithSync(plan: McpAddPlan, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<McpAddOutcome> {
+  const homeDir = opts.homeDir ?? homedir();
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "create" ? openBackupSession(homeDir, "mcp-add") : undefined;
+  const session = opts.backupSession ?? ownSession;
+  let writeError: string | undefined;
+  if (!opts.dryRun && plan.action === "create") {
+    const result = applyMcpAddPlan(plan, homeDir, session);
+    if (!result.ok) writeError = result.error;
+  }
+  ownSession?.finalize();
+  const planFailed = plan.action === "conflict" || plan.action === "invalid-input" || Boolean(writeError);
+  let syncReport: McpSyncReport | undefined;
+  if (!planFailed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
+  }
+  return { plan, ...(writeError ? { writeError } : {}), ...(syncReport ? { sync: syncReport } : {}) };
 }
 
 export async function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
@@ -419,22 +461,14 @@ export async function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, op
     return { exitCode: 1 };
   }
 
-  let writeError: string | undefined;
-  if (!opts.dryRun && plan.action === "create") {
-    const result = applyMcpAddPlan(plan, homeDir);
-    if (!result.ok) writeError = result.error;
+  let outcome: McpAddOutcome;
+  try {
+    outcome = await applyMcpAddWithSync(plan, { homeDir, dryRun: opts.dryRun });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return { exitCode: 1 };
   }
-
-  const planFailed = plan.action === "conflict" || plan.action === "invalid-input" || Boolean(writeError);
-  let syncReport: McpSyncReport | undefined;
-  if (!planFailed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
-    try {
-      syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      return { exitCode: 1 };
-    }
-  }
+  const { writeError, sync: syncReport } = outcome;
 
   if (opts.json) {
     const payload = writeError ? { ...plan, writeError } : plan;
@@ -445,6 +479,7 @@ export async function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, op
     if (writeError) console.error(`  write failed: ${writeError}`);
     if (syncReport) printReport(syncReport, opts.dryRun ?? false);
   }
+  const planFailed = plan.action === "conflict" || plan.action === "invalid-input" || Boolean(writeError);
   const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
   return { exitCode: planFailed || syncConflict ? 1 : 0 };
 }
@@ -465,9 +500,35 @@ export function collectMcpRemovePlan(name: string, homeDir: string = homedir()):
   return { name, action: canonical.mcp.servers[name] ? "removed" : "not-found" };
 }
 
-export function applyMcpRemovePlan(plan: McpRemovePlan, homeDir: string = homedir()): ServersYamlWriteResult {
+export function applyMcpRemovePlan(plan: McpRemovePlan, homeDir: string = homedir(), backup?: BackupSession): ServersYamlWriteResult {
   if (plan.action !== "removed") return { ok: true };
-  return removeServerYaml(serversYamlPath(homeDir), plan.name);
+  return removeServerYaml(serversYamlPath(homeDir), plan.name, backup);
+}
+
+export interface McpRemoveOutcome {
+  plan: McpRemovePlan;
+  writeError?: string;
+  sync?: McpSyncReport;
+}
+
+/** See `applyMcpAddWithSync`'s doc comment — same split, same reason, same
+ * own-backup-session fix. */
+export async function applyMcpRemoveWithSync(plan: McpRemovePlan, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<McpRemoveOutcome> {
+  const homeDir = opts.homeDir ?? homedir();
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "removed" ? openBackupSession(homeDir, "mcp-remove") : undefined;
+  const session = opts.backupSession ?? ownSession;
+  let writeError: string | undefined;
+  if (!opts.dryRun && plan.action === "removed") {
+    const result = applyMcpRemovePlan(plan, homeDir, session);
+    if (!result.ok) writeError = result.error;
+  }
+  ownSession?.finalize();
+  const planFailed = plan.action === "not-found" || Boolean(writeError);
+  let syncReport: McpSyncReport | undefined;
+  if (!planFailed && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
+  }
+  return { plan, ...(writeError ? { writeError } : {}), ...(syncReport ? { sync: syncReport } : {}) };
 }
 
 export async function runMcpRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
@@ -480,22 +541,15 @@ export async function runMcpRemove(name: string, opts: { homeDir?: string; json?
     return { exitCode: 1 };
   }
 
-  let writeError: string | undefined;
-  if (!opts.dryRun && plan.action === "removed") {
-    const result = applyMcpRemovePlan(plan, homeDir);
-    if (!result.ok) writeError = result.error;
+  let outcome: McpRemoveOutcome;
+  try {
+    outcome = await applyMcpRemoveWithSync(plan, { homeDir, dryRun: opts.dryRun });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return { exitCode: 1 };
   }
-
+  const { writeError, sync: syncReport } = outcome;
   const planFailed = plan.action === "not-found" || Boolean(writeError);
-  let syncReport: McpSyncReport | undefined;
-  if (!planFailed && existsSync(join(homeDir, ".trellis"))) {
-    try {
-      syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      return { exitCode: 1 };
-    }
-  }
 
   if (opts.json) {
     const payload = writeError ? { ...plan, writeError } : plan;

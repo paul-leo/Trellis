@@ -5,6 +5,9 @@
   "license": "MIT",
   "author": "Paul Leo",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "trellis": "./dist/cli.js"
   },

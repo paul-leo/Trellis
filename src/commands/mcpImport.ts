@@ -355,6 +355,33 @@ export function applyMcpImportPlan(path: string, homeDir: string = homedir(), ba
   return publicPlan(plan);
 }
 
+export interface McpImportOutcome {
+  plan: McpImportPlan;
+  sync?: McpSyncReport;
+}
+
+/**
+ * See `applyMcpAddWithSync`'s doc comment (mcp.ts) — same split, same
+ * reason: a non-CLI caller (trellis-gui's sidecar) gets the same
+ * structured result a JSON-mode CLI run prints, without scraping
+ * stdout or re-deriving the plan-then-apply-then-cascade-sync
+ * sequencing itself. Unlike `mcp add`/`mcp remove`, `applyMcpImportPlan`
+ * already opens its own backup session unconditionally (it always has,
+ * per design.md's original survey of `openBackupSession` call sites) —
+ * no tasks.md 3.5-style fix needed here.
+ */
+export async function applyMcpImportWithSync(path: string, opts: { homeDir?: string; dryRun?: boolean } = {}): Promise<McpImportOutcome> {
+  const homeDir = opts.homeDir ?? homedir();
+  const plan = opts.dryRun ? collectMcpImportPlan(path, homeDir) : applyMcpImportPlan(path, homeDir);
+  const failed = plan.items.some((item) => item.action === "conflict" || item.action === "invalid-input");
+  const changed = plan.items.some((item) => item.action === "create");
+  let syncReport: McpSyncReport | undefined;
+  if (!failed && changed && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
+  }
+  return { plan, ...(syncReport ? { sync: syncReport } : {}) };
+}
+
 export async function runMcpImport(path: string | undefined, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
   if (!path) {
@@ -362,15 +389,8 @@ export async function runMcpImport(path: string | undefined, opts: { homeDir?: s
     return { exitCode: 1 };
   }
   try {
-    const internal = collectInternalPlan(path, homeDir);
-    if (!opts.dryRun) applyMcpImportPlan(path, homeDir);
-    const result = publicPlan(internal);
+    const { plan: result, sync: syncReport } = await applyMcpImportWithSync(path, { homeDir, dryRun: opts.dryRun });
     const failed = result.items.some((item) => item.action === "conflict" || item.action === "invalid-input");
-    const changed = result.items.some((item) => item.action === "create");
-    let syncReport: McpSyncReport | undefined;
-    if (!failed && changed && existsSync(join(homeDir, ".trellis"))) {
-      syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
-    }
     if (opts.json) console.log(JSON.stringify(syncReport ? { ...result, sync: syncReport } : result, null, 2));
     else {
       console.log(`${opts.dryRun ? "[dry run] " : ""}mcp import ${path}`);

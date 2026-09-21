@@ -10,7 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readlink, rm, symlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 
@@ -19,7 +19,24 @@ export type BackupOperation =
   | { kind: "file-overwrite"; path: string; beforeFile: string; beforeHash: string; afterHash: string }
   | { kind: "symlink-create"; path: string; afterLinkTarget: string }
   | { kind: "symlink-repair"; path: string; beforeLinkTarget: string; afterLinkTarget: string }
-  | { kind: "symlink-remove"; path: string; beforeLinkTarget: string };
+  | { kind: "symlink-remove"; path: string; beforeLinkTarget: string }
+  /** A whole directory created where none existed — e.g. `skill add`
+   * copying a canonical skill in. Unlike `file-create`, there is no
+   * `afterHash`: hashing an arbitrary directory tree for drift detection
+   * is deliberately not attempted here (see `dir-remove`'s doc comment
+   * for why); rollback for this kind only checks existence, same
+   * simplification both directions. */
+  | { kind: "dir-create"; path: string }
+  /** A whole directory removed — e.g. `skill remove`. `beforeDir` is a
+   * full recursive copy of the directory's pre-removal content, stored
+   * under this run's own directory — the directory equivalent of
+   * `file-overwrite`'s single-file `beforeFile` snapshot. Conflict
+   * detection is existence-only (does the path exist again since this
+   * run), not a deep content hash — a directory tree's content-drift
+   * check would need its own manifest of per-file hashes, which no
+   * caller of this module has needed yet; if that changes, extend here
+   * rather than approximating silently. */
+  | { kind: "dir-remove"; path: string; beforeDir: string };
 
 export interface BackupManifest {
   runId: string;
@@ -34,6 +51,12 @@ export interface BackupSession {
   createSymlink(path: string, linkTarget: string): Promise<void>;
   repairSymlink(path: string, oldLinkTarget: string, newLinkTarget: string): Promise<void>;
   removeSymlink(path: string, oldLinkTarget: string): Promise<void>;
+  /** Copies `sourceDir`'s content to `path` (which must not already
+   * exist) and records it as a `dir-create`. */
+  createDirFromSource(path: string, sourceDir: string): void;
+  /** Snapshots `path`'s current content into this run's own storage,
+   * then removes it, and records it as a `dir-remove`. */
+  removeDir(path: string): void;
   hasOperations(): boolean;
   /** Writes manifest.json. No-op (creates nothing) if zero operations
    * were ever recorded. */
@@ -91,6 +114,7 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
   const operations: BackupOperation[] = [];
   let dirCreated = false;
   let fileIndex = 0;
+  let dirIndex = 0;
 
   function ensureDir(): void {
     if (dirCreated) return;
@@ -139,6 +163,22 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
       ensureDir();
       await rm(path, { force: true });
       operations.push({ kind: "symlink-remove", path, beforeLinkTarget: oldLinkTarget });
+    },
+
+    createDirFromSource(path: string, sourceDir: string): void {
+      ensureDir();
+      mkdirSync(path, { recursive: true });
+      cpSync(sourceDir, path, { recursive: true });
+      operations.push({ kind: "dir-create", path });
+    },
+
+    removeDir(path: string): void {
+      ensureDir();
+      const relSnapshot = join("dirs", `${dirIndex}-${basename(path)}`);
+      dirIndex += 1;
+      cpSync(path, join(runDir, relSnapshot), { recursive: true });
+      rmSync(path, { recursive: true, force: true });
+      operations.push({ kind: "dir-remove", path, beforeDir: relSnapshot });
     },
 
     hasOperations(): boolean {

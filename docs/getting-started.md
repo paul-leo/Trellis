@@ -1031,6 +1031,119 @@ created file under `~/.trellis/skills/`.
 `~/.trellis/backups/` has no automatic pruning — delete old run
 directories by hand once you're done with them.
 
+## GUI: chat with a managed/CLI Agent (`@trellis/gui`)
+
+The desktop app (`packages/gui/`) has a "Chat" tab for a real multi-turn
+conversation with any CLI Agent you configure, streamed live with a
+typewriter effect and tool-call/tool-result bubbles when the target
+supports it. This is separate from `agent-bridge.yaml` (used for one-shot
+cross-Agent delegation via MCP tools): a chat target is identified by an
+arbitrary string, not one of the five fully-managed Agents, so you can
+point it at any non-interactive CLI without onboarding it as a full
+managed Agent.
+
+Configure targets in `~/.trellis/mcp/chat-agents.yaml` (absent by
+default — nothing is spawned until you write one):
+
+```yaml
+targets:
+  claude-code:
+    label: "Claude Code"
+    command: claude
+    args: ["-p", "{prompt}", "--output-format", "stream-json"]
+    outputFormat: stream-json
+  qoder:
+    label: "Qoder"
+    command: qoder
+    args: ["-p", "{prompt}", "--output-format", "stream-json"]
+    resumeArgs: ["-p", "{prompt}", "--output-format", "stream-json", "--session-id", "{sessionId}"]
+    outputFormat: stream-json
+    tags: ["domestic"]
+  kimi-code:
+    label: "Kimi Code"
+    command: kimi
+    args: ["-p", "{prompt}", "--output-format", "stream-json"]
+    resumeArgs: ["-p", "{prompt}", "--output-format", "stream-json", "-S", "{sessionId}"]
+    outputFormat: stream-json
+    tags: ["domestic"]
+  minimax-code:
+    label: "MiniMax Code"
+    command: mcode
+    args: ["exec", "{prompt}", "--output-format", "stream-json"]
+    resumeArgs: ["exec", "{prompt}", "--output-format", "stream-json", "--session", "{sessionId}"]
+    outputFormat: stream-json
+    tags: ["domestic"]
+```
+
+- `outputFormat: stream-json` gets structured tool-call/tool-result
+  bubbles, but only for Claude Code's documented shape (there's no
+  official schema for it — see upstream issue #24612 — so this is a
+  best-effort parse of the community-documented format; other CLIs using
+  the same flag name show their raw output instead of guessing at a
+  format that hasn't been verified against a real install).
+- Every message requires confirming a one-time-per-session banner showing
+  the exact command that will run — it spawns a real subprocess, possibly
+  a real billed API call.
+- Chat history is **never written to disk** — it may contain real code or
+  secrets. Closing the app loses it, on purpose.
+
+### Domestic CLI status (what's real, what isn't)
+
+- **Qoder**: installed for real (`npm install -g @qoder-ai/qodercli`) and
+  checked directly against `qoder --help` — `-p`/`--print`, `-o`/
+  `--output-format text|json|stream-json`, and `--session-id <id>` (resume)
+  all confirmed as real flags. Ran `qoder -p "test" -o stream-json` for
+  real, unauthenticated (`qoder status` → "Not logged in"), which failed
+  cleanly and immediately on the auth check (`total_cost_usd: 0`, zero
+  real spend) — and its `stream-json` output turned out to already match
+  Claude Code's documented shape line-for-line (`{"type":"system",
+  "subtype":"init",...}` → `{"type":"assistant","message":{"content":
+  [{"type":"text",...}]}}` → `{"type":"result","subtype":"success",...}`),
+  so this app's existing `tryParseClaudeStreamJsonLine` parser produces
+  real tool-call/tool-result bubbles for Qoder too, not just raw text —
+  confirmed for the `init`/text/`result` shapes; the `tool_use`/
+  `tool_result` shapes specifically weren't independently observed (the
+  call never got far enough to use a tool before failing on auth). The
+  `--session-id` resume combination itself (an actual resumed call) was
+  not exercised — that needs a real logged-in account.
+- **Kimi Code**: `-p`/`--prompt`, `--output-format text|stream-json`, and
+  `-S`/`--session [id]` are confirmed directly from a real, installed
+  `kimi --help` on the machine this was built on. The `-p` + `-S`
+  combination for resuming a session non-interactively is documented as
+  separate top-level flags but wasn't exercised against a real resumed
+  call (that would be a real, billed API call, and this install has a
+  live authenticated session — `kimi provider list` shows a real
+  `managed:kimi-code` OAuth provider) — verify once before relying on it
+  for anything important.
+- **MiniMax Code** (`mcode`): installed for real (`npm install -g
+  @minimax-ai/code`) and checked directly against `mcode exec --help`,
+  which — unlike what first-party prose docs implied — does document
+  both `--output-format text|json|stream-json` and a `--session <id>`
+  resume flag (distinct spelling from Qoder's `--session-id`) as real
+  `exec` options. Ran `mcode exec "test" --output-format stream-json` for
+  real, unauthenticated (no `~/.minimax-code` config exists on this
+  machine), which failed cleanly with a plain-text "Sign in to MiniMax…"
+  message before entering the agent loop — so unlike Qoder, no real
+  `stream-json` line was ever actually observed for MiniMax Code; if its
+  JSON shape turns out to differ from Claude Code's, lines simply
+  degrade to the raw-chunk fallback rather than breaking anything, but
+  treat the *existence* of the flags as confirmed and their *exact wire
+  shape* as still unconfirmed. The `--session` resume combination was
+  not exercised for the same reason as Qoder's.
+- **ZCode** (Z.ai / 智谱, `zcode`) **is not supported**. It's a real
+  product with a real CLI, but every source checked (the official
+  `zai-org/ZCode` README, `zcode --help`) describes only a TUI mode and a
+  `--web` mode — no documented non-interactive prompt flag was found for
+  the *official* CLI. (Flags like `--prompt`/`--print` do appear in
+  *unofficial* third-party `zcode-cli` forks, which is a different,
+  unofficial project — don't confuse the two.) Not configured — don't add
+  a `zcode` target expecting it to work.
+- **Trae is not supported yet.** The commercial Trae IDE (trae.ai) has no
+  documented non-interactive CLI mode; the separate open-source
+  `bytedance/trae-agent` project's `trae-cli run` streaming output format
+  has not been verified against a real install. Neither is configured —
+  don't add a `trae` target expecting it to work.
+
 ## Troubleshooting
 
 - **A `conflict` I don't understand**: `migrate` and `sync` both name the

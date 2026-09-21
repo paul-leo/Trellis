@@ -25,6 +25,7 @@ import { BuiltinRegistry, createRuntimeServer, UpstreamProvider } from "../lib/m
 import { McpStatusProvider } from "../lib/mcpStatusProvider.js";
 import { RuntimeControlProvider } from "../lib/runtimeControlProvider.js";
 import { TaskProvider } from "../lib/taskProvider.js";
+import { AgentBridgeProvider } from "../lib/agentBridgeProvider.js";
 import { RuntimeMemoryProvider } from "../lib/memoryProvider.js";
 import { SkillProvider } from "../lib/skillProvider.js";
 import { ALL_AGENTS } from "../core/types.js";
@@ -149,7 +150,7 @@ async function runMcpEdge(
         homeDir,
       });
 
-  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend), new TaskProvider(), new UpstreamProvider(backend)]);
+  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
   const server = createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry);
 
   const transport = new StdioServerTransport();

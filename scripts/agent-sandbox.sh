@@ -59,9 +59,9 @@ if [ "${1:-}" = "--host-auth" ]; then
   shift 2 || true
   use_auth_volume=true
   case "$host_auth_agent" in
-    codex|pi) ;;
+    codex|pi|kimi-code|kimi|claude-code|claude) ;;
     *)
-      echo "Usage: scripts/agent-sandbox.sh --host-auth codex|pi" >&2
+      echo "Usage: scripts/agent-sandbox.sh --host-auth codex|pi|kimi-code|claude-code" >&2
       exit 2
       ;;
   esac
@@ -82,18 +82,44 @@ if [ "$use_auth_volume" = true ]; then
   host_auth_source=""
   if [ -n "$host_auth_agent" ]; then
     case "$host_auth_agent" in
+      claude|claude-code) host_auth_agent="claude-code" ;;
+      kimi|kimi-code) host_auth_agent="kimi-code" ;;
+    esac
+    case "$host_auth_agent" in
       codex) host_auth_source="${HOME}/.codex/auth.json" ;;
       pi) host_auth_source="${HOME}/.pi/agent/auth.json" ;;
+      kimi-code) host_auth_source="${HOME}/.kimi-code/credentials/kimi-code.json" ;;
+      # macOS stores this in the system Keychain instead of a file (Claude
+      # Code migrates it there and deletes the file on write); this path is
+      # the Linux/CI fallback location the CLI itself uses when no Keychain
+      # exists. On a Mac this SHALL fail the existence check below rather
+      # than silently trying to read a stale or absent file.
+      claude-code) host_auth_source="${HOME}/.claude/.credentials.json" ;;
     esac
     if [ ! -f "$host_auth_source" ]; then
       echo "Host auth file not found: $host_auth_source" >&2
+      if [ "$host_auth_agent" = "claude-code" ]; then
+        echo "Claude Code on macOS stores its token in the system Keychain, not a file — this bridge only supports the file-based credential Claude Code itself writes on Linux/CI. Run 'claude setup-token' to mint a portable long-lived token instead, or supply it another way (e.g. CLAUDE_CODE_OAUTH_TOKEN)." >&2
+      fi
       exit 2
+    fi
+    # Kimi Code's OAuth credential alone is not enough to pick a model —
+    # that lives in its separate config.toml (provider/model registration,
+    # no different in kind from the model list Codex/Claude Code ship
+    # baked into their own binaries). Bridged the exact same read-only,
+    # single-file, container-destroyed-after way as the auth file itself,
+    # only when the host actually has one — its absence is not an error,
+    # since not every target needs a second file.
+    extra_mounts=()
+    if [ "$host_auth_agent" = "kimi-code" ] && [ -f "${HOME}/.kimi-code/config.toml" ]; then
+      extra_mounts+=(-v "${HOME}/.kimi-code/config.toml:/host-auth/config.toml:ro")
     fi
     docker run --rm $tty_flag \
       -e "TRELLIS_HOST_AUTH_AGENT=$host_auth_agent" \
       -v "$auth_volume:/root-scratch" \
       -v "$host_auth_source:/host-auth/auth.json:ro" \
-    -v "$agent_fixture_home:/fixtures-ro/home:ro" \
+      "${extra_mounts[@]}" \
+      -v "$agent_fixture_home:/fixtures-ro/home:ro" \
       trellis-agent-sandbox \
       "$@"
   else

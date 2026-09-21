@@ -1,0 +1,6 @@
+{
+  "assets": [
+    "compiled/schema/**/*",
+    "compiled/dist/**/*"
+  ]
+}

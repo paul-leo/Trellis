@@ -17,9 +17,30 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadCanonicalSource } from "../core/canonical.js";
-import type { McpConfig, McpServerDef } from "../core/types.js";
+import { resolveScope } from "../core/types.js";
+import type { AgentId, McpConfig, McpServerDef } from "../core/types.js";
 import type { BackupSession } from "../lib/backup.js";
 import { parseMemoryGraph, planMemoryExtraction, planMemorySync, renderMemoryGraph, type MemoryExtractionPlan, type MemorySyncPlan } from "../lib/memoryGraph.js";
+
+export interface MemoryListEntry {
+  name: string;
+  scope: readonly AgentId[];
+}
+
+/** Canonical `memories/*.md` profile files — the list `trellis-gui`'s
+ * Memory view reads (tasks.md 6.2), mirroring `collectSkillList`'s
+ * shape exactly (skill.ts) since both are "canonical files with a
+ * resolved managed-agent scope" lists. Distinct from this file's own
+ * `MEMORY_SERVER_NAME` sync/extraction pipeline below, which is about
+ * the separate shared-Memory-MCP-server knowledge graph, not these
+ * per-topic markdown files. */
+export function collectMemoryList(homeDir: string = homedir()): MemoryListEntry[] {
+  const canonical = loadCanonicalSource(homeDir);
+  return canonical.memories.map((memory) => ({
+    name: memory.name,
+    scope: resolveScope(memory.scope, canonical.managedAgents),
+  }));
+}
 
 /** Exported so `onboard` (`trellis onboard --memory on|off`,
  * trellis-onboard-mcp-mode) can look up and write this same entry

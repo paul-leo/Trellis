@@ -483,8 +483,12 @@ portable Skill contract.
   provides — `~/.config/agent-env/secrets.env`, 1Password's `op run`,
   anything that populates `process.env` before an adapter's generated
   command runs)
-- A GUI (P5 in the roadmap evaluates embedding into an existing one —
-  mcp-router's or skills-hub's — before building a new one)
+- A GUI is now `@trellis/gui` — P10 in the roadmap, not P5 (P5 is
+  `@trellis/sdk`, the read-only API the GUI's own read views could have
+  used but didn't, per `openspec/changes/trellis-gui/design.md` Decision
+  1 — the GUI's sidecar imports internal command modules directly
+  instead, to reuse write/backup mechanics `@trellis/sdk`'s read-only
+  barrel deliberately excludes)
 
 ## MCP handshake probing is opt-in, not default
 

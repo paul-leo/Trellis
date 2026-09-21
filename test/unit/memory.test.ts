@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { collectMemoryExtractionResult, collectMemorySyncResult, runMemoryExtraction, runMemorySync } from "../../src/commands/memory.js";
+import { collectMemoryExtractionResult, collectMemoryList, collectMemorySyncResult, runMemoryExtraction, runMemorySync } from "../../src/commands/memory.js";
 import { TRELLIS_MEMORY_ENTITY_TYPE } from "../../src/lib/memoryGraph.js";
 
 function scratchHome(): string {
@@ -31,6 +31,25 @@ test("no 'memory' server configured — reports cleanly, not an error", () => {
   assert.equal(result.configured, false);
   const { exitCode } = runMemorySync({ homeDir: home });
   assert.equal(exitCode, 0);
+});
+
+test("collectMemoryList: an unscoped memory resolves to the full managed set, mirroring collectSkillList", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers: {}\n");
+  writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [codex, pi]\n");
+  writeFileSync(join(home, ".trellis", "memories", "team-conventions.md"), "# Team conventions\n");
+
+  assert.deepEqual(collectMemoryList(home), [{ name: "team-conventions", scope: ["codex", "pi"] }]);
+});
+
+test("collectMemoryList: a memory scoped outside the managed set resolves to the intersection", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers: {}\n");
+  writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [codex, pi]\n");
+  writeFileSync(join(home, ".trellis", "memories", "team-conventions.md"), "# Team conventions\n");
+  writeFileSync(join(home, ".trellis", "scope.yaml"), "memories:\n  team-conventions: [pi, kiro]\n");
+
+  assert.deepEqual(collectMemoryList(home), [{ name: "team-conventions", scope: ["pi"] }]);
 });
 
 test("a 'memory' server without MEMORY_FILE_PATH is treated the same as unconfigured", () => {

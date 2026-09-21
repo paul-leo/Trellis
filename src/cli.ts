@@ -17,7 +17,7 @@ import { runMcpAuth } from "./commands/mcpAuth.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
 import { runSkillList, runSkillAdd, runSkillRemove, runSkillUpdateBuiltin } from "./commands/skill.js";
-import { runMemoryExtraction, runMemorySync } from "./commands/memory.js";
+import { collectMemoryList, runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseManageArgs, runManage } from "./commands/manage.js";
 import { runKimi } from "./commands/kimi.js";
 import { TRELLIS_VERSION } from "./lib/cliMetadata.js";
@@ -431,6 +431,19 @@ async function main(argv: string[]): Promise<void> {
     const [subcommand, ...memoryRest] = rest;
     const json = memoryRest.includes("--json");
     const dryRun = memoryRest.includes("--dry-run");
+    if (subcommand === "list") {
+      const entries = collectMemoryList();
+      if (json) {
+        console.log(JSON.stringify(entries, null, 2));
+      } else if (entries.length === 0) {
+        console.log("No memories in canonical source yet.");
+      } else {
+        for (const { name, scope } of entries) {
+          console.log(`${name} — ${scope.length > 0 ? scope.join(", ") : "(no managed agent reaches it)"}`);
+        }
+      }
+      return;
+    }
     if (subcommand === "sync") {
       process.exitCode = runMemorySync({ json, dryRun }).exitCode;
       return;
@@ -439,7 +452,7 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = runMemoryExtraction({ json, dryRun }).exitCode;
       return;
     }
-    console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory sync|extract\n`);
+    console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory list|sync|extract\n`);
     process.exitCode = 1;
     return;
   }
