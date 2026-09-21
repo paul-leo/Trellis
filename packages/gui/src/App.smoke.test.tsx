@@ -558,7 +558,7 @@ test("App: the language switcher really translates the UI, leaves real backend d
     // change, and real backend data (the MCP server name just added
     // above) must NOT be touched by the switch.
     clickButtonWithText("中文");
-    await bodyContains("代理");
+    await bodyContains("智能体");
     bodyDoesNotContain("Agents");
     assert.equal(dom.window.localStorage.getItem("trellis-gui-lang"), "zh", "the choice must be persisted to localStorage");
 
@@ -578,7 +578,7 @@ test("App: the language switcher really translates the UI, leaves real backend d
     root.unmount();
     const root2 = createRoot(container);
     root2.render(React.createElement(App));
-    await bodyContains("代理");
+    await bodyContains("智能体");
     assert.ok(!findButtonWithText("Agents"), "a fresh mount must honor the persisted language choice");
 
     // Switch back to English via a real click, to prove it's a genuine
