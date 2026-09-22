@@ -33,6 +33,10 @@
     ],
     "externalBin": [
       "binaries/trellis-gui-sidecar"
-    ]
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "hardenedRuntime": true
+    }
   }
 }
