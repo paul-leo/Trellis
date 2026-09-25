@@ -17,6 +17,7 @@ import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
+import * as zcodeProbe from "../probes/zcode.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 
@@ -51,7 +52,7 @@ export const AGENTS_MD_TEMPLATE = `# Shared instructions
 Write what every agent should know here — communication preferences,
 project conventions, anything you'd otherwise repeat per agent.
 
-Already using Claude Code, Codex, Kiro, pi, or Kimi Code? \`trellis migrate --from
+Already using Claude Code, Codex, Kiro, pi, Kimi Code, or ZCode? \`trellis migrate --from
 <agent>\` imports its real instructions and skills instead of starting
 from this placeholder.
 `;
@@ -125,6 +126,7 @@ export const INSTALL_HINTS: Record<AgentId, string> = {
   kiro: "https://kiro.dev/downloads/",
   pi: "npm install -g @earendil-works/pi-coding-agent",
   "kimi-code": "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+  zcode: "https://zcode.z.ai/en/docs/install",
 };
 
 function ensureFile(path: string, template: string, write = true): InitFileResult {
@@ -164,6 +166,7 @@ export async function collectInitReport(homeDir: string = homedir(), options: { 
     { agent: "kiro", run: () => kiroProbe.probe(homeDir) },
     { agent: "pi", run: () => piProbe.probe(homeDir) },
     { agent: "kimi-code", run: () => kimiCodeProbe.probe(homeDir) },
+    { agent: "zcode", run: () => zcodeProbe.probe(homeDir) },
   ];
   const settled = await Promise.allSettled(probes.map((p) => p.run()));
   const agents: AgentPointer[] = settled.map((result, index) => {

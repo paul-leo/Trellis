@@ -76,6 +76,12 @@ test("loadChatAgentConfig: parses resumeArgs and persona", () => {
   assert.equal(config.targets.qoder?.persona, "a terse reviewer");
 });
 
+test("loadChatAgentConfig: parses the ZCode stream protocol", () => {
+  const homeDir = home();
+  writeConfig(homeDir, `targets:\n  zcode:\n    label: "ZCode"\n    command: zcode\n    args: ["--prompt", "{prompt}", "--output-format", "stream-json"]\n    outputFormat: stream-json\n    streamProtocol: zcode\n`);
+  assert.equal(loadChatAgentConfig(homeDir).targets.zcode?.streamProtocol, "zcode");
+});
+
 test("docs/getting-started.md's chat-agents.yaml starter block actually parses â€” catches doc/code drift", () => {
   const docsPath = join(process.cwd(), "docs/getting-started.md");
   const docs = readFileSync(docsPath, "utf-8");
@@ -87,7 +93,7 @@ test("docs/getting-started.md's chat-agents.yaml starter block actually parses â
   writeConfig(homeDir, yaml);
   const config = loadChatAgentConfig(homeDir);
 
-  const expectedIds = ["claude-code", "qoder", "kimi-code", "minimax-code"];
+  const expectedIds = ["claude-code", "qoder", "kimi-code", "minimax-code", "zcode"];
   assert.deepEqual(Object.keys(config.targets).sort(), expectedIds.sort());
   for (const id of expectedIds) {
     const target = config.targets[id];
@@ -101,4 +107,6 @@ test("docs/getting-started.md's chat-agents.yaml starter block actually parses â
   assert.ok(config.targets.qoder?.resumeArgs?.includes("{sessionId}"));
   assert.ok(config.targets["kimi-code"]?.resumeArgs?.includes("{sessionId}"));
   assert.ok(config.targets["minimax-code"]?.resumeArgs?.includes("{sessionId}"));
+  assert.ok(config.targets.zcode?.resumeArgs?.includes("{sessionId}"));
+  assert.equal(config.targets.zcode?.streamProtocol, "zcode");
 });

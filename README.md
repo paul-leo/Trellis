@@ -7,7 +7,7 @@
 <p align="center"><strong>Unified Code Agent Runtime</strong></p>
 
 One canonical source for Skills, MCP, Memory, and shared instructions —
-projected safely into Claude Code, Codex, Kiro, pi, and Kimi Code.
+projected safely into Claude Code, Codex, Kiro, pi, Kimi Code, and ZCode.
 
 > 中文：一个 canonical source 统一管理多个 Code Agent 的 Skill、MCP、Memory
 > 与共享指令，支持预览、备份与回滚。
@@ -35,7 +35,7 @@ Something went wrong? `trellis rollback` inverts the last run.
 | [mcp-router](https://github.com/mcp-router/mcp-router) | ❌ | ✅ desktop router | ❌ | config in its own dashboard | — |
 | [MetaMCP](https://github.com/metatool-ai/metamcp), [mcp-hub](https://github.com/ravitemer/mcp-hub) | ❌ | ✅ aggregator | ❌ | ❌ | — |
 | [cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator) | ❌ | ❌ | ❌ | ❌ | Runs agent fleets, doesn't unify config |
-| **Trellis** | ✅ | ✅ native config or hub mode | ✅ shared memory + handoffs | ✅ references only, `secrets audit` | Claude Code, Codex, Kiro, pi, Kimi Code |
+| **Trellis** | ✅ | ✅ native config, Runtime, or hub mode | ✅ shared memory + handoffs | ✅ references only, `secrets audit` | Claude Code, Codex, Kiro, pi, Kimi Code, ZCode |
 
 Sync tools stop at rules and skills. MCP routers manage servers but hold their
 own config — a second source of truth (we hit real token drift with exactly

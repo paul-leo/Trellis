@@ -17,6 +17,7 @@
 import { randomUUID } from "node:crypto";
 import { loadChatAgentConfig } from "../../../../src/lib/chatAgents.js";
 import { runDelegatedCallStreaming, type ParsedStreamEvent, type StreamChunk } from "../../../../src/lib/agentBridge.js";
+import { resolveZcodeProfile } from "../../../../src/probes/zcode.js";
 import { readJsonBody, sendJson, type Route } from "../server.js";
 import type { ChatSessionStore } from "../chatSessionStore.js";
 
@@ -29,6 +30,9 @@ function chatEventFor(chatId: string, turnId: string, parsed: ParsedStreamEvent)
   }
   if (parsed.kind === "tool-result") {
     return { channel: "chat", chatId, turnId, type: "tool-result", toolCallId: parsed.toolCallId, output: parsed.output };
+  }
+  if (parsed.kind === "final" && parsed.protocol === "zcode" && parsed.output) {
+    return { channel: "chat", chatId, turnId, type: "text-delta", text: parsed.output };
   }
   // "init" and "final" are bookkeeping only (session id extraction already
   // happens inside runDelegatedCallStreaming) — never surfaced as content.
@@ -99,6 +103,13 @@ export function createChatRoutes(homeDir: string, store: ChatSessionStore, broad
         if (!target) {
           sendJson(res, 400, { error: `chat target "${session.targetId}" is no longer configured` });
           return;
+        }
+        if (target.streamProtocol === "zcode") {
+          const profile = resolveZcodeProfile(homeDir);
+          if (!profile?.supportsExecution || target.command !== profile.executable) {
+            sendJson(res, 400, { error: "ZCode chat requires a compatible public zcode CLI selected by the local ZCode probe" });
+            return;
+          }
         }
 
         const turnId = randomUUID();

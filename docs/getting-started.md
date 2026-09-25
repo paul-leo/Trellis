@@ -15,7 +15,7 @@ npm install -g agent-trellis
 $ trellis onboard
 ```
 
-Runs `init`, detects which of Claude Code/Codex/Kiro/pi/Kimi Code are on this machine,
+Runs `init`, detects which of Claude Code/Codex/Kiro/pi/Kimi Code/ZCode are on this machine,
 then resolves two styled interactive choices and two flag-only ones before running
 `migrate`, `sync`, `mcp sync`, `memory sync`, `secrets audit`, and a final
 health scan — the whole onboarding path, no follow-up commands to type by
@@ -266,6 +266,31 @@ enabled. Runtime correctness does not depend on that optimization. Native
 Kimi delivery remains available with `native` or `both`; those modes do not
 use the empty Skill-root launcher.
 
+## ZCode Runtime-first
+
+ZCode is supported as `zcode`. Trellis selects one native profile before it
+writes anything: the official CLI/Desktop profile uses
+`~/.zcode/cli/config.json`; the locally installed `zcode-app-cli` profile
+uses `~/.zcode/cli/setting.json`. Both store servers under `mcp.servers`.
+
+Selecting ZCode during `trellis onboard` defaults it to Runtime delivery.
+`trellis sync` links shared instructions at `~/.zcode/AGENTS.md` and disables
+native ZCode Skill discovery while Runtime-only delivery is active. This keeps
+ZCode's automatic `~/.agents/skills` scan from bypassing canonical Skill
+scope. `trellis mcp sync` writes the single owned `trellis` stdio entry;
+Skill, Memory, and eligible upstream MCP servers are then served through
+`trellis mcp-runtime --agent zcode`.
+
+Native or `both` delivery remains available through a capability-selection
+file. When leaving Runtime-only mode, Trellis restores ZCode's previous native
+Skill settings only when they still equal the values it wrote. User edits and
+unrelated ZCode MCP entries remain untouched.
+
+For chat or Agent delegation, Trellis uses only a public `zcode` executable
+that advertises `--prompt`, `--resume`, and `--output-format`. A desktop-only
+profile can still receive managed configuration; Trellis never launches the
+desktop application's private helper or bundled runtime path.
+
 ## Trellis Runtime Skill
 
 `trellis-runtime` is the built-in operating guide that Trellis installs into
@@ -325,7 +350,7 @@ content back into canonical Markdown remains an explicit
 
 ## Two starting points
 
-**You already use one or more of Claude Code, Codex, Kiro, pi, or Kimi Code** and have
+**You already use one or more of Claude Code, Codex, Kiro, pi, Kimi Code, or ZCode** and have
 real skills/instructions in them today. Go to
 [Migrating from an existing agent](#migrating-from-an-existing-agent).
 
@@ -353,7 +378,7 @@ Creates `~/.trellis/` with:
 `~/.trellis/` that already exists just fills in whatever's still missing —
 safe to run again any time, including after you've hand-edited things.
 
-It then prints which of the five supported agents it found on this machine.
+It then prints which of the six supported agents it found on this machine.
 For each one **not** found, it prints that agent's real install command or
 download link — `trellis init` never runs an installer itself; a global
 package install or an IDE download is your call to make, not a silent side
@@ -374,7 +399,7 @@ migrate --from claude-code
   [conflict] instructions — canonical agents.md already has different real content — resolve by hand
 ```
 
-`--from` accepts `claude-code`, `codex`, `kiro`, `pi`, or `kimi-code`. Run it once per
+`--from` accepts `claude-code`, `codex`, `kiro`, `pi`, `kimi-code`, or `zcode`. Run it once per
 agent you actually use — it's independent per agent, order doesn't matter.
 
 Add `--dry-run` to see the plan without writing anything:
@@ -942,7 +967,7 @@ periodically regardless.
 $ trellis doctor
 ```
 
-Read-only. Scans all five agents' current state and reports drift —
+Read-only. Scans all six agents' current state and reports drift —
 mismatched skill content across agents, wrong-case skill files, and (with
 `--probe-mcp`) whether each configured MCP server actually handshakes.
 Safe to run any time; nothing here writes anything.
@@ -1073,6 +1098,14 @@ targets:
     resumeArgs: ["exec", "{prompt}", "--output-format", "stream-json", "--session", "{sessionId}"]
     outputFormat: stream-json
     tags: ["domestic"]
+  zcode:
+    label: "ZCode"
+    command: zcode
+    args: ["--prompt", "{prompt}", "--output-format", "stream-json"]
+    resumeArgs: ["--resume", "{sessionId}", "--prompt", "{prompt}", "--output-format", "stream-json"]
+    outputFormat: stream-json
+    streamProtocol: zcode
+    tags: ["z-ai"]
 ```
 
 - `outputFormat: stream-json` gets structured tool-call/tool-result
@@ -1130,14 +1163,14 @@ targets:
   treat the *existence* of the flags as confirmed and their *exact wire
   shape* as still unconfirmed. The `--session` resume combination was
   not exercised for the same reason as Qoder's.
-- **ZCode** (Z.ai / 智谱, `zcode`) **is not supported**. It's a real
-  product with a real CLI, but every source checked (the official
-  `zai-org/ZCode` README, `zcode --help`) describes only a TUI mode and a
-  `--web` mode — no documented non-interactive prompt flag was found for
-  the *official* CLI. (Flags like `--prompt`/`--print` do appear in
-  *unofficial* third-party `zcode-cli` forks, which is a different,
-  unofficial project — don't confuse the two.) Not configured — don't add
-  a `zcode` target expecting it to work.
+- **ZCode** (Z.ai / 智谱, `zcode`) is supported when its public CLI probe
+  confirms `--prompt`, `--resume`, and `--output-format`. Its stream result
+  uses `response` and `sessionId`, so configure `streamProtocol: zcode` as
+  shown above. The installed `zcode-app-cli` is a community distribution over
+  the ZCode runtime; it uses `~/.zcode/cli/setting.json`. The official
+  open-source CLI/Desktop profile uses `~/.zcode/cli/config.json`. A
+  desktop-only profile is configuration-manageable but is not offered as a
+  chat or delegation executor.
 - **Trae is not supported yet.** The commercial Trae IDE (trae.ai) has no
   documented non-interactive CLI mode; the separate open-source
   `bytedance/trae-agent` project's `trae-cli run` streaming output format

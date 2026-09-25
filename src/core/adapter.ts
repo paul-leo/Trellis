@@ -49,7 +49,7 @@ export interface AdapterPlanItem {
    * a completely different target file and merge mechanism (see
    * `approvedEnvVars` below) from `"mcp"`, not something the other
    * three agents have an equivalent of. */
-  kind: "skill" | "instructions" | "mcp" | "extension" | "kiro-approved-env-vars";
+  kind: "skill" | "instructions" | "mcp" | "extension" | "kiro-approved-env-vars" | "zcode-skill-control";
   /** Human-readable description of one change this adapter would make
    * ("create" / "remove") or why it refused to ("conflict"). */
   description: string;
@@ -86,6 +86,13 @@ export interface AdapterPlanItem {
    * for Kiro, never a subtraction (trellis-kiro-approved-env-vars
    * design.md D3/D4). */
   approvedEnvVars?: string[];
+  /** ZCode Runtime-only isolation. `null` means the previous profile did
+   * not declare the value and restoration must remove the property. */
+  zcodeSkillControls?: {
+    featuresSkill: boolean | null;
+    skillsEnabled: boolean | null;
+    previous?: { featuresSkill: boolean | null; skillsEnabled: boolean | null };
+  };
 }
 
 export interface AdapterVerifyResult {

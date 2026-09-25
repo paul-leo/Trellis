@@ -15,8 +15,14 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { probe } from "../../src/probes/codex.js";
+import { codexEnv, probe } from "../../src/probes/codex.js";
 import { SKIP_NO_CODEX } from "./realCodexAvailable.js";
+
+test("codexEnv scopes both HOME and host-injected CODEX_HOME to the requested home", () => {
+  const env = codexEnv("/tmp/codex-scratch", { CODEX_HOME: "/host/relay", PATH: "/usr/bin" });
+  assert.equal(env.HOME, "/tmp/codex-scratch");
+  assert.equal(env.CODEX_HOME, "/tmp/codex-scratch/.codex");
+});
 
 function scratchHomeWithServer(serverName: string): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-codex-probe-"));

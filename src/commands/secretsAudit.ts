@@ -28,7 +28,9 @@ import type { AgentId, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
-import { declaredEnvNames, extractJsonEnvVarNames, extractTomlEnvVarNames } from "../lib/envVarNames.js";
+import { ZcodeAdapter } from "../adapters/zcode.js";
+import { declaredEnvNames, extractJsonEnvVarNames, extractTomlEnvVarNames, extractZcodeEnvVarNames } from "../lib/envVarNames.js";
+import { resolveZcodeProfile } from "../probes/zcode.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
 
 export interface RunSecretsAuditOptions {
@@ -72,6 +74,7 @@ function auditedAgents(homeDir: string, managedAgents: readonly AgentId[]): Audi
     { id: "claude-code", probe: () => new ClaudeCodeAdapter(homeDir).probe(), configPath: (h) => join(h, ".claude.json"), extractNames: extractJsonEnvVarNames },
     { id: "codex", probe: () => new CodexAdapter(homeDir).probe(), configPath: (h) => join(h, ".codex", "config.toml"), extractNames: extractTomlEnvVarNames },
     { id: "kiro", probe: () => new KiroAdapter(homeDir).probe(), configPath: (h) => join(h, ".kiro", "settings", "mcp.json"), extractNames: extractJsonEnvVarNames },
+    { id: "zcode", probe: () => new ZcodeAdapter(homeDir).probe(), configPath: (h) => resolveZcodeProfile(h)?.configPath ?? join(h, ".zcode", "cli", "config.json"), extractNames: extractZcodeEnvVarNames },
   ];
   return all.filter((a) => managedAgents.includes(a.id));
 }

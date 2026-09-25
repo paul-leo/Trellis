@@ -38,6 +38,10 @@ interface McpServersJson {
   mcpServers?: Record<string, { env?: Record<string, string>; headers?: Record<string, string> }>;
 }
 
+interface ZcodeMcpServersJson {
+  mcp?: { servers?: Record<string, { env?: Record<string, string>; headers?: Record<string, string> }> };
+}
+
 /**
  * Claude Code / Kiro's config is real JSON — parse it and walk each
  * server's `env` object *values*, plus names embedded in `headers`
@@ -76,6 +80,23 @@ export function extractJsonEnvVarNames(content: string): string[] {
     for (const value of Object.values(server.headers ?? {})) {
       names.push(...extractTemplateVarNames(value));
     }
+  }
+  return names;
+}
+
+/** ZCode stores the same server value shape under `mcp.servers` rather than
+ * the top-level `mcpServers` map used by Claude Code and Kiro. */
+export function extractZcodeEnvVarNames(content: string): string[] {
+  let parsed: ZcodeMcpServersJson;
+  try {
+    parsed = JSON.parse(content) as ZcodeMcpServersJson;
+  } catch {
+    return [];
+  }
+  const names: string[] = [];
+  for (const server of Object.values(parsed.mcp?.servers ?? {})) {
+    for (const value of Object.values(server.env ?? {})) names.push(...extractTemplateVarNames(value));
+    for (const value of Object.values(server.headers ?? {})) names.push(...extractTemplateVarNames(value));
   }
   return names;
 }

@@ -8,7 +8,7 @@
 export type Transport = "stdio" | "http" | "sse";
 export type McpAuthMode = "oauth";
 
-export type AgentId = "claude-code" | "codex" | "kiro" | "pi" | "kimi-code";
+export type AgentId = "claude-code" | "codex" | "kiro" | "pi" | "kimi-code" | "zcode";
 
 export const ALL_AGENTS: readonly AgentId[] = [
   "claude-code",
@@ -16,6 +16,7 @@ export const ALL_AGENTS: readonly AgentId[] = [
   "kiro",
   "pi",
   "kimi-code",
+  "zcode",
 ];
 
 /**

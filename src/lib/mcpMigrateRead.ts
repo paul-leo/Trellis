@@ -17,6 +17,8 @@ import { join } from "node:path";
 import type { McpServerDef, Transport } from "../core/types.js";
 import { readJsonFile } from "./probeCommon.js";
 import { readServerEnvTable } from "./tomlSection.js";
+import { resolveZcodeProfile } from "../probes/zcode.js";
+import { codexEnv } from "../probes/codex.js";
 
 export interface McpMigrateEntry {
   name: string;
@@ -107,6 +109,10 @@ interface RichJsonConfig {
   mcpServers?: Record<string, RichJsonServerDef>;
 }
 
+interface ZcodeRichJsonConfig {
+  mcp?: { servers?: Record<string, RichJsonServerDef> };
+}
+
 function fromRichJsonServerDef(raw: RichJsonServerDef): McpServerDef | undefined {
   if (raw.url) {
     const transport: Transport = raw.type === "sse" ? "sse" : "http";
@@ -146,6 +152,20 @@ export function readKiroMcpDefs(homeDir: string): McpMigrateReadResult {
 
 export function readKimiCodeMcpDefs(homeDir: string): McpMigrateReadResult {
   return readRichJsonMcpDefs(join(homeDir, ".kimi-code", "mcp.json"));
+}
+
+export function readZcodeMcpDefs(homeDir: string): McpMigrateReadResult {
+  const profile = resolveZcodeProfile(homeDir);
+  if (!profile) return EMPTY_RESULT;
+  const parsed = readJsonFile<ZcodeRichJsonConfig>(profile.configPath);
+  const entries: McpMigrateEntry[] = [];
+  const unsupported: McpMigrateUnsupported[] = [];
+  for (const [name, raw] of Object.entries(parsed?.mcp?.servers ?? {})) {
+    const def = fromRichJsonServerDef(raw);
+    if (def) entries.push({ name, def });
+    else unsupported.push({ name, reason: "stdio entry has no command — malformed, skipped" });
+  }
+  return { entries, unsupported };
 }
 
 export interface CodexMcpEntryRich {
@@ -260,7 +280,7 @@ export function readCodexMcpDefs(homeDir: string): McpMigrateReadResult {
     // `[]`, not the real machine's servers), so this must be scoped to
     // `homeDir` explicitly — `src/probes/codex.ts`'s own equivalent call
     // has this same gap, unaddressed there; not touched by this change.
-    raw = execFileSync("codex", ["mcp", "list", "--json"], { encoding: "utf-8", timeout: 5_000, env: { ...process.env, HOME: homeDir } });
+    raw = execFileSync("codex", ["mcp", "list", "--json"], { encoding: "utf-8", timeout: 5_000, env: codexEnv(homeDir) });
   } catch {
     return EMPTY_RESULT;
   }

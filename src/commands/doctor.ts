@@ -11,6 +11,7 @@ import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
+import * as zcodeProbe from "../probes/zcode.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { GATEWAY_ENTRY_NAME, RUNTIME_ENTRY_NAME, resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { ALL_AGENTS } from "../core/types.js";
@@ -136,6 +137,7 @@ export async function collectDoctorReport(
     { agent: "kiro", run: () => kiroProbe.probe(homeDir, { probeMcp }) },
     { agent: "pi", run: () => piProbe.probe(homeDir) },
     { agent: "kimi-code", run: () => kimiCodeProbe.probe(homeDir, { probeMcp }) },
+    { agent: "zcode", run: () => zcodeProbe.probe(homeDir, { probeMcp }) },
   ];
 
   // One agent erroring must not blank the other three's results.

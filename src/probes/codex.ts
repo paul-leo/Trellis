@@ -12,7 +12,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { probeMcpServer } from "../lib/mcpProbe.js";
 import { pathRef, resolveEnvRefs, scanSkillRoot } from "../lib/probeCommon.js";
 import type { AgentSnapshot, AgentSnapshotMcpServer, Transport } from "../core/types.js";
@@ -50,6 +50,30 @@ export interface ProbeOptions {
   probeMcp?: boolean;
 }
 
+/**
+ * Codex resolves its config through HOME, but Volta's shim resolves its own
+ * installation through VOLTA_HOME. A probe against a scratch HOME must keep
+ * those identities separate or `codex mcp list` fails before it can read the
+ * scratch config.
+ */
+export function codexEnv(homeDir: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const voltaHome = env.VOLTA_HOME ?? join(homedir(), ".volta");
+  const voltaBin = join(voltaHome, "bin");
+  const pathParts = (env.PATH ?? "").split(delimiter).filter(Boolean);
+  const hasVolta = existsSync(voltaBin);
+  if (hasVolta && !pathParts.includes(voltaBin)) pathParts.unshift(voltaBin);
+  return {
+    ...env,
+    HOME: homeDir,
+    // A host may inject CODEX_HOME for its own relay/session state. It has
+    // higher priority than HOME inside Codex, so override it as well or a
+    // scratch-home probe silently reads the host's real configuration.
+    CODEX_HOME: join(homeDir, ".codex"),
+    ...(hasVolta ? { VOLTA_HOME: voltaHome } : {}),
+    ...(pathParts.length ? { PATH: pathParts.join(delimiter) } : {}),
+  };
+}
+
 export async function probe(homeDir: string = homedir(), opts: ProbeOptions = {}): Promise<AgentSnapshot> {
   const configTomlPath = join(homeDir, ".codex", "config.toml");
 
@@ -65,18 +89,18 @@ export async function probe(homeDir: string = homedir(), opts: ProbeOptions = {}
   // default `homeDir` would silently get this real machine's real MCP
   // server list instead (trellis-migrate-mcp-servers found this gap in
   // src/lib/mcpMigrateRead.ts's own equivalent call; fixed there first).
-  const codexEnv = { ...process.env, HOME: homeDir };
+  const scopedCodexEnv = codexEnv(homeDir);
 
   let version: string | undefined;
   try {
-    version = execFileSync("codex", ["--version"], { encoding: "utf-8", timeout: 5_000, env: codexEnv }).trim();
+    version = execFileSync("codex", ["--version"], { encoding: "utf-8", timeout: 5_000, env: scopedCodexEnv }).trim();
   } catch {
     // config exists without the binary on PATH — unusual, still probeable
   }
 
   let mcpEntries: CodexMcpEntry[] = [];
   try {
-    const raw = execFileSync("codex", ["mcp", "list", "--json"], { encoding: "utf-8", timeout: 5_000, env: codexEnv });
+    const raw = execFileSync("codex", ["mcp", "list", "--json"], { encoding: "utf-8", timeout: 5_000, env: scopedCodexEnv });
     mcpEntries = JSON.parse(raw) as CodexMcpEntry[];
   } catch (err) {
     // ENOENT means the binary itself isn't on PATH — the same benign,

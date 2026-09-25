@@ -81,7 +81,7 @@ function now(): string {
 }
 
 function assertAgent(value: unknown, label: string): asserts value is AgentId {
-  if (value !== "claude-code" && value !== "codex" && value !== "kiro" && value !== "pi" && value !== "kimi-code") {
+  if (value !== "claude-code" && value !== "codex" && value !== "kiro" && value !== "pi" && value !== "kimi-code" && value !== "zcode") {
     throw new Error(`${label} must be a supported Agent id`);
   }
 }

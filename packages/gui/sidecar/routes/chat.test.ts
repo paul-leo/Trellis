@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import { createWsHub } from "../ws.js";
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = join(here, "..", "..", "..", "..");
 const STUB_CLI = join(repoRoot, "test/fixtures/stub-agent-cli.js");
+const STUB_ZCODE = join(repoRoot, "test/fixtures/stub-zcode-cli.js");
 
 function chatAgentsHome(): string {
   const homeDir = mkdtempSync(join(tmpdir(), "trellis-gui-chat-"));
@@ -37,6 +38,30 @@ function chatAgentsHome(): string {
     ].join("\n"),
   );
   return homeDir;
+}
+
+function zcodeChatHome(): { homeDir: string; bin: string } {
+  const homeDir = mkdtempSync(join(tmpdir(), "trellis-gui-zcode-chat-"));
+  const bin = join(homeDir, "zcode-public");
+  writeFileSync(bin, `#!${process.execPath}\nrequire(${JSON.stringify(STUB_ZCODE)});\n`);
+  chmodSync(bin, 0o755);
+  const mcpDir = join(homeDir, ".trellis", "mcp");
+  mkdirSync(mcpDir, { recursive: true });
+  writeFileSync(
+    join(mcpDir, "chat-agents.yaml"),
+    [
+      "targets:",
+      "  zcode:",
+      '    label: "ZCode"',
+      `    command: ${JSON.stringify(bin)}`,
+      '    args: ["--prompt", "{prompt}", "--output-format", "stream-json"]',
+      '    resumeArgs: ["--resume", "{sessionId}", "--prompt", "{prompt}", "--output-format", "stream-json"]',
+      "    outputFormat: stream-json",
+      "    streamProtocol: zcode",
+      "",
+    ].join("\n"),
+  );
+  return { homeDir, bin };
 }
 
 function post(port: number, path: string, body: unknown): Promise<{ status: number; body: unknown }> {
@@ -178,6 +203,41 @@ test("POST /chat/:chatId/message: requires confirm=true, and refuses without spa
     assert.equal(status, 400);
     assert.match(String((body as { error: string }).error), /confirm=true/);
   } finally {
+    hub.closeAll();
+    server.close();
+  }
+});
+
+test("ZCode chat keeps its session id, renders the final response, and surfaces unknown protocol records", async () => {
+  const { homeDir, bin } = zcodeChatHome();
+  const previousBin = process.env.TRELLIS_ZCODE_BIN;
+  process.env.TRELLIS_ZCODE_BIN = bin;
+  const store = createChatSessionStore();
+  const hub = createWsHub();
+  const server = createSidecarServer(createChatRoutes(homeDir, store, (m) => hub.broadcast(m)));
+  server.on("upgrade", (req, socket, head) => hub.handleUpgrade(req, socket, head));
+  const port = await listenOnEphemeralLoopbackPort(server);
+  const messages: Array<Record<string, unknown>> = [];
+  const socket = await connect(port);
+  socket.addEventListener("message", (event) => messages.push(JSON.parse(event.data as string)));
+  try {
+    const started = await post(port, "/chat/start", { targetId: "zcode" });
+    const { chatId } = started.body as { chatId: string };
+    const first = await post(port, `/chat/${chatId}/message`, { message: "first", confirm: true });
+    assert.equal(first.status, 202);
+    const complete = await waitFor(messages, (m) => m.type === "turn-complete" && m.chatId === chatId);
+    assert.equal(complete.status, "completed");
+    assert.equal(complete.sessionId, "zcode-session-123");
+    assert.ok(messages.some((m) => m.type === "raw-chunk" && String(m.text).includes("model.streaming")));
+    assert.ok(messages.some((m) => m.type === "text-delta" && m.text === "fresh:zcode:first"));
+
+    const second = await post(port, `/chat/${chatId}/message`, { message: "second", confirm: true });
+    assert.equal(second.status, 202);
+    await waitFor(messages, (m) => m.type === "text-delta" && m.text === "resumed:zcode:second");
+  } finally {
+    if (previousBin === undefined) delete process.env.TRELLIS_ZCODE_BIN;
+    else process.env.TRELLIS_ZCODE_BIN = previousBin;
+    socket.close();
     hub.closeAll();
     server.close();
   }

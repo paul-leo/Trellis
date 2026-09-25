@@ -4,11 +4,11 @@
 
 ## One-line description
 
-> Trellis is a unified Code Agent Runtime for managing Skills, MCP, Memory, and shared instructions across Claude Code, Codex, Kiro, pi, and Kimi Code.
+> Trellis is a unified Code Agent Runtime for managing Skills, MCP, Memory, and shared instructions across Claude Code, Codex, Kiro, pi, Kimi Code, and ZCode.
 
 中文定位：
 
-> Trellis 是统一的 Code Agent Runtime，为 Claude Code、Codex、Kiro、pi 和 Kimi Code 统一管理 Skill、MCP、Memory 与共享指令。
+> Trellis 是统一的 Code Agent Runtime，为 Claude Code、Codex、Kiro、pi、Kimi Code 和 ZCode 统一管理 Skill、MCP、Memory 与共享指令。
 
 ## Quick start
 
@@ -79,6 +79,7 @@ flowchart LR
     Native --> Kiro["Kiro"]
     Native --> Pi["pi"]
     Edge --> Kimi["Kimi Code"]
+    Edge --> ZCode["ZCode"]
     Edge --> Claude
     Edge --> Pi
 ```

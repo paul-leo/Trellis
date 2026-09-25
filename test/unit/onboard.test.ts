@@ -332,7 +332,7 @@ test("managed-set selection: interactive prompt receives already-managed agents 
     isTTY: true,
     manage: undefined,
     promptForManagedAgents: async (candidates, alreadyManaged) => {
-      assert.equal(candidates.length, 5, "all supported agents are offered, present or not");
+      assert.equal(candidates.length, 6, "all supported agents are offered, present or not");
       assert.deepEqual(alreadyManaged, ["kiro"]);
       return "pi"; // pi is not present -> triggers install flow
     },

@@ -24,6 +24,7 @@ import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
+import * as zcodeProbe from "../probes/zcode.js";
 import { ALL_AGENTS, capabilityDeliveryForAgent } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpConfig, McpRouteMode } from "../core/types.js";
 import { loadCanonicalSource, removeServerYaml, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml } from "../core/canonical.js";
@@ -69,6 +70,7 @@ const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
   kiro: (homeDir) => kiroProbe.probe(homeDir),
   pi: (homeDir) => piProbe.probe(homeDir),
   "kimi-code": (homeDir) => kimiCodeProbe.probe(homeDir),
+  zcode: (homeDir) => zcodeProbe.probe(homeDir),
 };
 
 /**
@@ -1058,14 +1060,23 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     requestedRoutes = await resolveInteractiveMcpRoutes(managedAgents, availableMcpNames, currentMcpAfterMigration.hub !== undefined);
   }
 
-  const requestedRuntimeDelivery = capabilitySelection?.runtimeDelivery;
+  // ZCode's generic ~/.agents/skills discovery bypasses Trellis scope. Its
+  // default is therefore Runtime-first unless a capability-selection file
+  // explicitly chooses native/both, or canonical already has a choice.
+  const zcodeRuntimeRecommendation = managedAgents.includes("zcode") && currentMcpAfterMigration.runtime?.delivery?.zcode === undefined
+    ? { zcode: "mcp" as const }
+    : {};
+  const requestedRuntimeDelivery = {
+    ...zcodeRuntimeRecommendation,
+    ...(capabilitySelection?.runtimeDelivery ?? {}),
+  };
   let mcpSyncOverride: McpConfig | undefined;
-  if ((requestedRoutes && Object.keys(requestedRoutes).length > 0) || (requestedRuntimeDelivery && Object.keys(requestedRuntimeDelivery).length > 0)) {
+  if ((requestedRoutes && Object.keys(requestedRoutes).length > 0) || Object.keys(requestedRuntimeDelivery).length > 0) {
     const currentMcp = currentMcpAfterMigration;
     const routes = requestedRoutes && Object.keys(requestedRoutes).length > 0
       ? { ...(currentMcp.routes ?? {}), ...requestedRoutes }
       : currentMcp.routes;
-    const delivery = requestedRuntimeDelivery && Object.keys(requestedRuntimeDelivery).length > 0
+    const delivery = Object.keys(requestedRuntimeDelivery).length > 0
       ? { ...(currentMcp.runtime?.delivery ?? {}), ...requestedRuntimeDelivery }
       : currentMcp.runtime?.delivery;
     mcpSyncOverride = {
@@ -1076,7 +1087,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
     if (!opts.dryRun && requestedRoutes && Object.keys(requestedRoutes).length > 0) {
       writeMcpRoutesYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), routes ?? {}, backupSession);
     }
-    if (!opts.dryRun && requestedRuntimeDelivery && Object.keys(requestedRuntimeDelivery).length > 0) {
+    if (!opts.dryRun && Object.keys(requestedRuntimeDelivery).length > 0) {
       writeMcpRuntimeDeliveryYaml(join(homeDir, ".trellis", "mcp", "servers.yaml"), delivery ?? {}, backupSession);
     }
   }

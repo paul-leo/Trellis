@@ -15,6 +15,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
+import type { StreamProtocol } from "./agentBridge.js";
 
 export type ChatAgentOutputFormat = "text" | "json" | "stream-json";
 
@@ -32,6 +33,8 @@ export interface ChatAgentTargetConfig {
   resumeArgs?: string[];
   /** How to interpret stdout. Omit for plain text. */
   outputFormat?: ChatAgentOutputFormat;
+  /** Optional stream parser for a CLI with a non-Claude event envelope. */
+  streamProtocol?: StreamProtocol;
   timeoutMs?: number;
   /** Free-text, informational only — surfaced in the GUI as a hint. */
   tags?: string[];
@@ -44,6 +47,7 @@ export interface ChatAgentConfig {
 }
 
 const OUTPUT_FORMATS: readonly ChatAgentOutputFormat[] = ["text", "json", "stream-json"];
+const STREAM_PROTOCOLS: readonly StreamProtocol[] = ["claude", "zcode"];
 
 export function chatAgentsPath(homeDir: string): string {
   return join(homeDir, ".trellis", "mcp", "chat-agents.yaml");
@@ -55,6 +59,7 @@ interface ChatAgentTargetYaml {
   args?: string[];
   resumeArgs?: string[];
   outputFormat?: string;
+  streamProtocol?: string;
   timeoutMs?: number;
   tags?: string[];
   persona?: string;
@@ -83,12 +88,16 @@ export function loadChatAgentConfig(homeDir: string): ChatAgentConfig {
     if (raw.outputFormat !== undefined && !OUTPUT_FORMATS.includes(raw.outputFormat as ChatAgentOutputFormat)) {
       throw new Error(`chat-agents.yaml: target "${id}" has unknown outputFormat "${raw.outputFormat}"`);
     }
+    if (raw.streamProtocol !== undefined && !STREAM_PROTOCOLS.includes(raw.streamProtocol as StreamProtocol)) {
+      throw new Error(`chat-agents.yaml: target "${id}" has unknown streamProtocol "${raw.streamProtocol}"`);
+    }
     targets[id] = {
       label: raw.label,
       command: raw.command,
       args: raw.args,
       ...(raw.resumeArgs ? { resumeArgs: raw.resumeArgs } : {}),
       ...(raw.outputFormat ? { outputFormat: raw.outputFormat as ChatAgentOutputFormat } : {}),
+      ...(raw.streamProtocol ? { streamProtocol: raw.streamProtocol as StreamProtocol } : {}),
       ...(raw.timeoutMs ? { timeoutMs: raw.timeoutMs } : {}),
       ...(raw.tags ? { tags: raw.tags } : {}),
       ...(raw.persona ? { persona: raw.persona } : {}),

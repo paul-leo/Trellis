@@ -1,6 +1,7 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentId } from "../core/types.js";
 import { DEFAULT_MAX_DELEGATION_DEPTH, loadAgentBridgeConfig, readDelegationDepth, runDelegatedCall, type AgentBridgeTargetConfig } from "./agentBridge.js";
+import { resolveZcodeProfile } from "../probes/zcode.js";
 import type { RuntimeContext, TrellisProvider } from "./mcpRuntime.js";
 
 function toolNameFor(agentId: AgentId): string {
@@ -74,6 +75,12 @@ export class AgentBridgeProvider implements TrellisProvider {
     const config = loadAgentBridgeConfig(context.homeDir);
     const target = config.targets[targetAgent];
     if (!target) return failure(`agent "${targetAgent}" is no longer configured for delegation`);
+    if (targetAgent === "zcode") {
+      const profile = resolveZcodeProfile(context.homeDir);
+      if (!profile?.supportsExecution || target.command !== profile.executable) {
+        return failure("zcode delegation requires a compatible public zcode CLI selected by the local ZCode probe");
+      }
+    }
 
     const maxDepth = config.maxDepth ?? DEFAULT_MAX_DELEGATION_DEPTH;
     const currentDepth = readDelegationDepth();

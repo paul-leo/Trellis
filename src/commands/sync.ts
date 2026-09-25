@@ -15,6 +15,7 @@ import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
 import { PiAdapter } from "../adapters/pi.js";
 import { KimiCodeAdapter } from "../adapters/kimi-code.js";
+import { ZcodeAdapter } from "../adapters/zcode.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
 
 const ADAPTER_FACTORY: Record<AgentId, (homeDir: string) => TrellisAdapter> = {
@@ -23,6 +24,7 @@ const ADAPTER_FACTORY: Record<AgentId, (homeDir: string) => TrellisAdapter> = {
   kiro: (homeDir) => new KiroAdapter(homeDir),
   pi: (homeDir) => new PiAdapter(homeDir),
   "kimi-code": (homeDir) => new KimiCodeAdapter(homeDir),
+  zcode: (homeDir) => new ZcodeAdapter(homeDir),
 };
 
 export interface RunSyncOptions {
@@ -106,7 +108,7 @@ export async function collectSyncReport(opts: RunSyncOptions = {}): Promise<Sync
       // out (found via the sandbox: every agent reported "already in
       // sync" even with real create items pending).
       const kind: AdapterPlanItem["kind"] = opts.target === "skills" ? "skill" : "instructions";
-      items = items.filter((item) => item.kind === kind);
+      items = items.filter((item) => item.kind === kind || (kind === "skill" && item.kind === "zcode-skill-control"));
     }
 
     if (!opts.dryRun) {

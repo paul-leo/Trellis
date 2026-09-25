@@ -136,7 +136,7 @@ known_host_injected:
   - memory
   - mirasim
 
-# How the servers above reach the five supported agents. Omit BOTH blocks below for
+# How the servers above reach the six supported agents. Omit BOTH blocks below for
 # direct mode (today's default: every agent gets all N server definitions
 # written straight into its native config).
 #

@@ -10,13 +10,15 @@
  * servers").
  */
 import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
+import { codexEnv } from "../../src/probes/codex.js";
 
 let cached: boolean | undefined;
 
 export function isCodexAvailable(): boolean {
   if (cached === undefined) {
     try {
-      execFileSync("codex", ["--version"], { stdio: "ignore", timeout: 5_000 });
+      execFileSync("codex", ["--version"], { stdio: "ignore", timeout: 5_000, env: codexEnv(homedir()) });
       cached = true;
     } catch {
       cached = false;

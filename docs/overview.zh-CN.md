@@ -4,7 +4,7 @@
 
 ## 一句话介绍
 
-> Trellis 是统一的 Code Agent Runtime，为 Claude Code、Codex、Kiro、pi 和 Kimi Code 统一管理 Skill、MCP、Memory 与共享指令。
+> Trellis 是统一的 Code Agent Runtime，为 Claude Code、Codex、Kiro、pi、Kimi Code 和 ZCode 统一管理 Skill、MCP、Memory 与共享指令。
 
 ## 快速开始
 
@@ -68,7 +68,7 @@ Trellis 以 `~/.trellis/` 为 canonical source，在中心统一管理四类能�
 Trellis Runtime / Gateway
         │
         ├── Native adapters ── Claude Code / Codex / Kiro / pi
-        └── MCP Runtime ────── Kimi Code / 其他 Runtime-first Agent
+        └── MCP Runtime ────── Kimi Code / ZCode / 其他 Runtime-first Agent
 ```
 
 ## 与相似产品的关系

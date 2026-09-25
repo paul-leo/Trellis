@@ -10,6 +10,7 @@ import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
+import * as zcodeProbe from "../probes/zcode.js";
 import { TRELLIS_VERSION } from "./cliMetadata.js";
 import type { GatewayBackend } from "./gatewayBackend.js";
 import { inspectMemoryReadiness } from "./memoryStatus.js";
@@ -45,6 +46,7 @@ const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
   kiro: (homeDir) => kiroProbe.probe(homeDir),
   pi: (homeDir) => piProbe.probe(homeDir),
   "kimi-code": (homeDir) => kimiCodeProbe.probe(homeDir),
+  zcode: (homeDir) => zcodeProbe.probe(homeDir),
 };
 
 function textResult(value: unknown): CallToolResult {

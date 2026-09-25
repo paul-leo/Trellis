@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runDelegatedCallStreaming, tryParseClaudeStreamJsonLine, type StreamChunk } from "../../src/lib/agentBridge.js";
+import { runDelegatedCallStreaming, tryParseClaudeStreamJsonLine, tryParseZcodeStreamJsonLine, type StreamChunk } from "../../src/lib/agentBridge.js";
 
 const STUB_CLI = join(process.cwd(), "test/fixtures/stub-agent-cli.js");
+const STUB_ZCODE = join(process.cwd(), "test/fixtures/stub-zcode-cli.js");
 
 test("tryParseClaudeStreamJsonLine: parses the four known shapes", () => {
   assert.deepEqual(
@@ -33,6 +34,29 @@ test("tryParseClaudeStreamJsonLine: malformed or unrecognized lines degrade to u
   assert.equal(tryParseClaudeStreamJsonLine(""), undefined);
   assert.equal(tryParseClaudeStreamJsonLine(JSON.stringify({ type: "something-unknown" })), undefined);
   assert.equal(tryParseClaudeStreamJsonLine(JSON.stringify({ type: "assistant", message: { content: [{ type: "image" }] } })), undefined);
+});
+
+test("tryParseZcodeStreamJsonLine: final result keeps ZCode response and session id", () => {
+  assert.deepEqual(
+    tryParseZcodeStreamJsonLine(JSON.stringify({ type: "result", response: "done", sessionId: "z-1" })),
+    { kind: "final", output: "done", protocol: "zcode", sessionId: "z-1" },
+  );
+  assert.equal(tryParseZcodeStreamJsonLine(JSON.stringify({ type: "model.streaming", payload: {} })), undefined);
+});
+
+test("runDelegatedCallStreaming: ZCode stream emits raw unknown events and retains its result session", async () => {
+  const chunks: StreamChunk[] = [];
+  const result = await runDelegatedCallStreaming(
+    "zcode",
+    { command: process.execPath, args: [STUB_ZCODE, "--prompt", "{prompt}", "--output-format", "stream-json"], outputFormat: "stream-json", streamProtocol: "zcode" },
+    "hello",
+    { onChunk: (chunk) => chunks.push(chunk) },
+  );
+  assert.equal(result.status, "completed");
+  assert.equal(result.output, "fresh:zcode:hello");
+  assert.equal(result.sessionId, "zcode-session-123");
+  assert.equal(chunks[0]?.parsed, undefined);
+  assert.deepEqual(chunks[1]?.parsed, { kind: "final", output: "fresh:zcode:hello", protocol: "zcode", sessionId: "zcode-session-123" });
 });
 
 test("runDelegatedCallStreaming: chunks arrive incrementally, before the process closes", async () => {

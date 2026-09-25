@@ -23,6 +23,11 @@ export const REAL_HOME_ALLOWLIST: readonly string[] = [
   ".codex/config.toml",
   ".agents/skills",
   ".codex/skills",
+  // zcode (src/probes/zcode.ts)
+  ".zcode/cli/config.json",
+  ".zcode/cli/setting.json",
+  ".zcode/skills",
+  ".zcode/AGENTS.md",
   // kiro (src/probes/kiro.ts)
   ".kiro/settings/mcp.json",
   ".kiro/skills",

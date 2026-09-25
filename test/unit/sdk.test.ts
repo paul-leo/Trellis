@@ -37,7 +37,7 @@ test("sdk: loadCanonicalSource is callable and returns the expected shape", () =
 });
 
 test("sdk: ALL_AGENTS and resolveScope are exported and behave correctly", () => {
-  assert.deepEqual([...sdk.ALL_AGENTS], ["claude-code", "codex", "kiro", "pi", "kimi-code"]);
+  assert.deepEqual([...sdk.ALL_AGENTS], ["claude-code", "codex", "kiro", "pi", "kimi-code", "zcode"]);
   assert.deepEqual(sdk.resolveScope(undefined, sdk.ALL_AGENTS), sdk.ALL_AGENTS);
   assert.deepEqual(sdk.resolveScope(["claude-code"], sdk.ALL_AGENTS), ["claude-code"]);
   assert.deepEqual(sdk.resolveScope(undefined, ["pi"]), ["pi"], "no-scope falls back to managedAgents, not ALL_AGENTS");

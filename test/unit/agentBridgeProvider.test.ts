@@ -87,6 +87,25 @@ test("AgentBridgeProvider: a failing target reports failed, not a thrown error",
   assert.equal(parsed.status, "failed");
 });
 
+test("AgentBridgeProvider: ZCode delegation refuses before spawning without a compatible public CLI", async () => {
+  const homeDir = home();
+  mkdirSync(join(homeDir, ".trellis", "mcp"), { recursive: true });
+  writeFileSync(agentBridgePath(homeDir), ["targets:", "  zcode:", "    command: zcode", '    args: ["--prompt", "{prompt}", "--output-format", "json"]', "    outputFormat: json"].join("\n"));
+  const previous = process.env.TRELLIS_ZCODE_BIN;
+  process.env.TRELLIS_ZCODE_BIN = join(homeDir, "missing-zcode");
+  try {
+    const provider = new AgentBridgeProvider();
+    const context: RuntimeContext = { agentId: "claude-code", homeDir };
+    provider.listTools(context);
+    const outcome = await provider.callTool("trellis.agent_bridge.run_zcode", { prompt: "hi", confirm: true }, context);
+    assert.equal(outcome.isError, true);
+    assert.match(text(outcome), /compatible public zcode CLI/);
+  } finally {
+    if (previous === undefined) delete process.env.TRELLIS_ZCODE_BIN;
+    else process.env.TRELLIS_ZCODE_BIN = previous;
+  }
+});
+
 async function withDepthEnv<T>(value: string, fn: () => Promise<T>): Promise<T> {
   const previous = process.env[DELEGATION_DEPTH_ENV];
   process.env[DELEGATION_DEPTH_ENV] = value;

@@ -13,10 +13,11 @@ import * as codexProbe from "../probes/codex.js";
 import * as kiroProbe from "../probes/kiro.js";
 import * as piProbe from "../probes/pi.js";
 import * as kimiCodeProbe from "../probes/kimi-code.js";
+import * as zcodeProbe from "../probes/zcode.js";
 import { AGENTS_MD_TEMPLATE } from "./init.js";
 import { decideDirImport } from "../lib/dirEquals.js";
 import { deepEqual } from "../lib/deepEqual.js";
-import { readClaudeCodeMcpDefs, readCodexMcpDefs, readKiroMcpDefs, readKimiCodeMcpDefs, resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
+import { readClaudeCodeMcpDefs, readCodexMcpDefs, readKiroMcpDefs, readKimiCodeMcpDefs, readZcodeMcpDefs, resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
 import { parseDotenv, writeLocalSecretValue } from "../lib/secretEnv.js";
 import { findLiteralSecret } from "../adapters/mcpPlan.js";
 import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsertServerYaml, writeSecretsPolicyExtraction } from "../core/canonical.js";
@@ -56,6 +57,7 @@ const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
   kiro: (homeDir) => kiroProbe.probe(homeDir),
   pi: (homeDir) => piProbe.probe(homeDir),
   "kimi-code": (homeDir) => kimiCodeProbe.probe(homeDir),
+  zcode: (homeDir) => zcodeProbe.probe(homeDir),
 };
 
 /** pi has no static MCP config to read at all (roadmap.md P14/
@@ -66,6 +68,7 @@ const MCP_READERS: Partial<Record<AgentId, (homeDir: string) => { entries: { nam
   kiro: readKiroMcpDefs,
   codex: readCodexMcpDefs,
   "kimi-code": readKimiCodeMcpDefs,
+  zcode: readZcodeMcpDefs,
 };
 
 export type MigrateAction = "create" | "skip-symlink" | "skip-case-broken" | "skip-unsupported" | "already-migrated" | "reclassify" | "conflict" | "extract-secret";

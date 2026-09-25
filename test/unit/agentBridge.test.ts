@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { agentBridgePath, loadAgentBridgeConfig, readDelegationDepth, runDelegatedCall } from "../../src/lib/agentBridge.js";
 
 const STUB_CLI = join(process.cwd(), "test/fixtures/stub-agent-cli.js");
+const STUB_ZCODE = join(process.cwd(), "test/fixtures/stub-zcode-cli.js");
 
 function home(): string { return mkdtempSync(join(tmpdir(), "trellis-agent-bridge-")); }
 
@@ -120,6 +121,13 @@ test("runDelegatedCall: a call-level persona overrides the target's default", as
 test("runDelegatedCall: extracts a sessionId from json output", async () => {
   const outcome = await runDelegatedCall("codex", { command: process.execPath, args: [STUB_CLI, "echo", "{prompt}"], outputFormat: "json" }, "hi");
   assert.equal(outcome.sessionId, "stub-session-123");
+});
+
+test("runDelegatedCall: extracts ZCode response and sessionId fields", async () => {
+  const outcome = await runDelegatedCall("zcode", { command: process.execPath, args: [STUB_ZCODE, "--prompt", "{prompt}", "--output-format", "json"], outputFormat: "json" }, "hi");
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.output, "fresh:zcode:hi");
+  assert.equal(outcome.sessionId, "zcode-session-123");
 });
 
 test("runDelegatedCall: resuming uses resumeArgs and threads the sessionId through", async () => {

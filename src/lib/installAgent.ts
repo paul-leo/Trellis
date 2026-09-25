@@ -14,7 +14,7 @@ import type { AgentId } from "../core/types.js";
 /** Only agents with a real `npm install -g <pkg>` command — Kiro's own
  * `INSTALL_HINTS` entry is a download URL, not a package, and is never
  * looked up here. */
-export const NPM_INSTALLABLE: Record<Exclude<AgentId, "kiro" | "kimi-code">, string> = {
+export const NPM_INSTALLABLE: Record<Exclude<AgentId, "kiro" | "kimi-code" | "zcode">, string> = {
   "claude-code": "@anthropic-ai/claude-code",
   codex: "@openai/codex",
   pi: "@earendil-works/pi-coding-agent",
@@ -53,7 +53,7 @@ export interface ConfirmAndInstallResult {
 }
 
 export async function confirmAndInstall(agent: AgentId, opts: ConfirmAndInstallOptions = {}): Promise<ConfirmAndInstallResult> {
-  if (agent === "kiro" || agent === "kimi-code") {
+  if (agent === "kiro" || agent === "kimi-code" || agent === "zcode") {
     return { installed: false, installable: false };
   }
   const pkg = NPM_INSTALLABLE[agent];

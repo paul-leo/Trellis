@@ -18,7 +18,7 @@ required reading for that.
                 │  trellis sync / trellis doctor
         ┌───────┼────────┬─────────────┬──────────────┐
         ▼                ▼             ▼              ▼
-   Claude Code         Codex          Kiro            pi          Kimi Code
+   Claude Code         Codex          Kiro            pi          Kimi Code       ZCode
   (symlink adapter) (incremental   (symlink adapter) (bridge
                      TOML writer)                    extension)
 ```
@@ -57,7 +57,7 @@ Aligned to the `.agents Protocol` draft, extended where the draft is silent:
 ## Global vs. workspace scope
 
 **Global only, for now.** Trellis manages `~/.trellis` — one canonical
-source per machine, applied to that machine's five supported agents. It does not yet
+source per machine, applied to that machine's six supported agents. It does not yet
 read or merge a project-local `.trellis/` in a specific repo.
 
 The `.agents Protocol` draft (see `research.md`) describes a two-layer
@@ -72,7 +72,7 @@ that's scope creep against this section, not a natural extension.
 
 ## Private / agent-specific capabilities
 
-Not everything belongs to all five agents. A skill built around Claude
+Not everything belongs to all six agents. A skill built around Claude
 Code's Task-based subagent delegation has no equivalent to delegate to on
 Codex; an MCP server might only make sense for one agent's workflow. Every
 scopable item — skill, subagent profile, memory entry, MCP server —

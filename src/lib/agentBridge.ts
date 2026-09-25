@@ -16,6 +16,7 @@ import { parse as parseYaml } from "yaml";
 import { ALL_AGENTS, type AgentId } from "../core/types.js";
 
 export type AgentBridgeOutputFormat = "text" | "json" | "stream-json";
+export type StreamProtocol = "claude" | "zcode";
 
 export interface AgentBridgeTargetConfig {
   /** Binary to spawn, e.g. "codex", "claude", "pi", "kimi". */
@@ -35,6 +36,9 @@ export interface AgentBridgeTargetConfig {
   resumeArgs?: string[];
   /** How to interpret stdout. Omit for plain text. */
   outputFormat?: AgentBridgeOutputFormat;
+  /** Selects a verified event envelope for stream-json output. Omit for
+   * Claude-compatible streams, which remains the existing default. */
+  streamProtocol?: StreamProtocol;
   timeoutMs?: number;
   /** Free-text, informational only — surfaced in the exposed tool's
    * description so a caller can judge fit; never validated against a
@@ -86,6 +90,7 @@ interface AgentBridgeTargetYaml {
   args?: string[];
   resumeArgs?: string[];
   outputFormat?: string;
+  streamProtocol?: string;
   timeoutMs?: number;
   tags?: string[];
   persona?: string;
@@ -97,6 +102,7 @@ interface AgentBridgeYaml {
 }
 
 const OUTPUT_FORMATS: readonly AgentBridgeOutputFormat[] = ["text", "json", "stream-json"];
+const STREAM_PROTOCOLS: readonly StreamProtocol[] = ["claude", "zcode"];
 
 export function loadAgentBridgeConfig(homeDir: string): AgentBridgeConfig {
   const path = agentBridgePath(homeDir);
@@ -120,11 +126,15 @@ export function loadAgentBridgeConfig(homeDir: string): AgentBridgeConfig {
     if (raw.outputFormat !== undefined && !OUTPUT_FORMATS.includes(raw.outputFormat as AgentBridgeOutputFormat)) {
       throw new Error(`agent-bridge.yaml: target "${agentId}" has unknown outputFormat "${raw.outputFormat}"`);
     }
+    if (raw.streamProtocol !== undefined && !STREAM_PROTOCOLS.includes(raw.streamProtocol as StreamProtocol)) {
+      throw new Error(`agent-bridge.yaml: target "${agentId}" has unknown streamProtocol "${raw.streamProtocol}"`);
+    }
     targets[agentId as AgentId] = {
       command: raw.command,
       args: raw.args,
       ...(raw.resumeArgs ? { resumeArgs: raw.resumeArgs } : {}),
       ...(raw.outputFormat ? { outputFormat: raw.outputFormat as AgentBridgeOutputFormat } : {}),
+      ...(raw.streamProtocol ? { streamProtocol: raw.streamProtocol as StreamProtocol } : {}),
       ...(raw.timeoutMs ? { timeoutMs: raw.timeoutMs } : {}),
       ...(raw.tags ? { tags: raw.tags } : {}),
       ...(raw.persona ? { persona: raw.persona } : {}),
@@ -287,7 +297,7 @@ export type ParsedStreamEvent =
   | { kind: "text-delta"; text: string }
   | { kind: "tool-call"; toolCallId: string; name: string; input: unknown }
   | { kind: "tool-result"; toolCallId: string; output: unknown }
-  | { kind: "final"; output: string; sessionId?: string };
+  | { kind: "final"; output: string; sessionId?: string; protocol?: "zcode" };
 
 export function tryParseClaudeStreamJsonLine(line: string): ParsedStreamEvent | undefined {
   const trimmed = line.trim();
@@ -331,6 +341,27 @@ export function tryParseClaudeStreamJsonLine(line: string): ParsedStreamEvent | 
   }
 
   return undefined;
+}
+
+/** ZCode's documented headless result envelope is deliberately distinct from
+ * Claude-compatible streams: `{ type: "result", response, sessionId }`.
+ * Intermediate ZCode protocol events evolve with the runtime, so unknown
+ * records remain raw chunks rather than being guessed into false tool/text
+ * events. */
+export function tryParseZcodeStreamJsonLine(line: string): ParsedStreamEvent | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+  let json: unknown;
+  try {
+    json = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (!json || typeof json !== "object") return undefined;
+  const record = json as Record<string, unknown>;
+  if (record.type !== "result" || typeof record.response !== "string") return undefined;
+  const sessionId = typeof record.sessionId === "string" ? record.sessionId : undefined;
+  return { kind: "final", output: record.response, protocol: "zcode", ...(sessionId ? { sessionId } : {}) };
 }
 
 export interface StreamChunk {
@@ -433,7 +464,7 @@ export async function runDelegatedCallStreaming(
       if (!line) return;
       let parsed: ParsedStreamEvent | undefined;
       if (isStreamJson) {
-        parsed = tryParseClaudeStreamJsonLine(line);
+        parsed = target.streamProtocol === "zcode" ? tryParseZcodeStreamJsonLine(line) : tryParseClaudeStreamJsonLine(line);
         if (parsed?.kind === "text-delta") structuredOutput += structuredOutput ? `\n${parsed.text}` : parsed.text;
         if (parsed?.kind === "final") structuredOutput = parsed.output;
         if (parsed?.kind === "init" && parsed.sessionId) sessionId = parsed.sessionId;
