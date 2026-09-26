@@ -1,6 +1,6 @@
 {
   "name": "agent-trellis",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "A unified Code Agent Runtime for Skills, MCP, Memory, and shared instructions across Claude Code, Codex, Kiro, pi, Kimi Code, and ZCode.",
   "license": "MIT",
   "author": "Paul Leo",
@@ -23,7 +23,9 @@
   "files": [
     "dist",
     "schema",
-    "docs"
+    "docs/*.md",
+    "docs/assets/brand-v3",
+    "docs/assets/poster-series-v3"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-pi-bridge.mjs",
