@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml, writeSecretsPolicyExtraction } from "../../src/core/canonical.js";
+import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsertServerYaml, writeMcpModeYaml, writeMcpRoutesYaml, writeMcpRuntimeDeliveryYaml, writeSecretsPolicyExtraction, writeSkillScopeYaml } from "../../src/core/canonical.js";
 
 function tmpHome(): string {
   return mkdtempSync(join(tmpdir(), "trellis-canonical-"));
@@ -51,6 +51,22 @@ test("loadCanonicalSource: a scope.yaml entry naming a nonexistent skill is a di
   assert.deepEqual(source.skills[0].scope, ["claude-code"]);
   assert.equal(source.diagnostics.length, 1);
   assert.match(source.diagnostics[0], /typo-name/);
+});
+
+test("writeSkillScopeYaml preserves unrelated scope sections and removes an empty skills map", () => {
+  const home = tmpHome();
+  const path = join(home, ".trellis", "scope.yaml");
+  mkdirSync(join(home, ".trellis"), { recursive: true });
+  writeFileSync(path, "# preserve this\nagents:\n  reviewer: [codex]\n");
+  assert.deepEqual(writeSkillScopeYaml(path, "remote-review", ["claude-code"]), { ok: true });
+  const scoped = readFileSync(path, "utf8");
+  assert.match(scoped, /# preserve this/);
+  assert.match(scoped, /reviewer/);
+  assert.match(scoped, /remote-review/);
+  assert.deepEqual(writeSkillScopeYaml(path, "remote-review", undefined), { ok: true });
+  const cleared = readFileSync(path, "utf8");
+  assert.doesNotMatch(cleared, /^skills:/m);
+  assert.match(cleared, /reviewer/);
 });
 
 test("loadCanonicalSource: a populated mcp/servers.yaml populates canonical.mcp", () => {

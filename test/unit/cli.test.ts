@@ -47,6 +47,14 @@ test("nested help short-circuits before MCP sync can create state", () => {
   assert.equal(existsSync(join(home, ".trellis")), false);
 });
 
+test("remote Skill add rejects skills-CLI copy and project-local modes before any state write", () => {
+  const home = mkdtempSync(join(tmpdir(), "trellis-cli-remote-skill-"));
+  const result = runCli(["add", "mattpocock/skills", "--skill", "loop-me", "--copy"], { HOME: home });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /always imported into ~\/\.trellis\/skills/);
+  assert.equal(existsSync(join(home, ".trellis")), false);
+});
+
 test("trellis kimi forwards --version to Kimi instead of intercepting it", async () => {
   const home = mkdtempSync(join(tmpdir(), "trellis-cli-kimi-"));
   await collectInitReport(home);

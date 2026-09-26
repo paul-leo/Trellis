@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { backupsRoot } from "../lib/backup.js";
 import type { BackupManifest, BackupOperation } from "../lib/backup.js";
+import { directoryDigest } from "../lib/dirDigest.js";
 
 export interface RunRollbackOptions {
   runId?: string;
@@ -132,14 +133,23 @@ async function planOperation(homeDir: string, runId: string, op: BackupOperation
       }
       return { action: "restore", path: op.path, description: `recreate ${op.path} -> ${op.beforeLinkTarget}` };
     }
-    // Directory conflict detection is existence-only, not a deep content
-    // hash (see BackupOperation's "dir-create"/"dir-remove" doc comment
-    // in backup.ts) — a real, documented simplification, not an
-    // oversight: something touching a file inside an otherwise-untouched
-    // directory won't be caught as a conflict.
+    // Historical `dir-remove` operations remain existence-only because they
+    // predate directory manifests. New directory creates/replacements carry a
+    // deterministic digest, so remote Skill rollback refuses an edited tree.
     case "dir-create": {
       if (!existsSync(op.path)) {
         return { action: "already-reverted", path: op.path, description: `${op.path} no longer exists — nothing to undo` };
+      }
+      if (op.afterDigest !== undefined) {
+        let digest: string;
+        try {
+          digest = directoryDigest(op.path);
+        } catch {
+          return { action: "conflict", path: op.path, description: `${op.path} can no longer be read safely — left untouched` };
+        }
+        if (digest !== op.afterDigest) {
+          return { action: "conflict", path: op.path, description: `${op.path} has changed since this run — left untouched` };
+        }
       }
       return { action: "restore", path: op.path, description: `delete ${op.path} (created by this run)` };
     }
@@ -148,6 +158,21 @@ async function planOperation(homeDir: string, runId: string, op: BackupOperation
         return { action: "conflict", path: op.path, description: `${op.path} exists again since this run — left untouched` };
       }
       return { action: "restore", path: op.path, description: `recreate ${op.path} from its content before this run (${join(runDir, op.beforeDir)})` };
+    }
+    case "dir-replace": {
+      if (!existsSync(op.path)) {
+        return { action: "already-reverted", path: op.path, description: `${op.path} no longer exists — nothing to undo` };
+      }
+      let digest: string;
+      try {
+        digest = directoryDigest(op.path);
+      } catch {
+        return { action: "conflict", path: op.path, description: `${op.path} can no longer be read safely — left untouched` };
+      }
+      if (digest !== op.afterDigest) {
+        return { action: "conflict", path: op.path, description: `${op.path} has changed since this run — left untouched` };
+      }
+      return { action: "restore", path: op.path, description: `restore ${op.path} to its content before this run (${join(runDir, op.beforeDir)})` };
     }
   }
 }
@@ -186,6 +211,10 @@ async function restoreOperation(homeDir: string, runId: string, op: BackupOperat
       rmSync(op.path, { recursive: true, force: true });
       return;
     case "dir-remove":
+      cpSync(join(runDir, op.beforeDir), op.path, { recursive: true });
+      return;
+    case "dir-replace":
+      rmSync(op.path, { recursive: true, force: true });
       cpSync(join(runDir, op.beforeDir), op.path, { recursive: true });
       return;
   }

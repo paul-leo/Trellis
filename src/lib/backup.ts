@@ -10,9 +10,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readlink, rm, symlink } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { directoryDigest } from "./dirDigest.js";
 
 export type BackupOperation =
   | { kind: "file-create"; path: string; afterHash: string }
@@ -21,12 +22,10 @@ export type BackupOperation =
   | { kind: "symlink-repair"; path: string; beforeLinkTarget: string; afterLinkTarget: string }
   | { kind: "symlink-remove"; path: string; beforeLinkTarget: string }
   /** A whole directory created where none existed — e.g. `skill add`
-   * copying a canonical skill in. Unlike `file-create`, there is no
-   * `afterHash`: hashing an arbitrary directory tree for drift detection
-   * is deliberately not attempted here (see `dir-remove`'s doc comment
-   * for why); rollback for this kind only checks existence, same
-   * simplification both directions. */
-  | { kind: "dir-create"; path: string }
+   * copying a canonical Skill in. New operations carry the resulting
+   * directory digest so rollback can refuse a tree edited after the run;
+   * the optional field preserves compatibility with old backup manifests. */
+  | { kind: "dir-create"; path: string; afterDigest?: string }
   /** A whole directory removed — e.g. `skill remove`. `beforeDir` is a
    * full recursive copy of the directory's pre-removal content, stored
    * under this run's own directory — the directory equivalent of
@@ -36,7 +35,11 @@ export type BackupOperation =
    * check would need its own manifest of per-file hashes, which no
    * caller of this module has needed yet; if that changes, extend here
    * rather than approximating silently. */
-  | { kind: "dir-remove"; path: string; beforeDir: string };
+  | { kind: "dir-remove"; path: string; beforeDir: string }
+  /** A whole directory replaced in-place.  The before-tree snapshot and the
+   * exact after-tree digest let rollback refuse a locally edited remote Skill
+   * instead of overwriting it. */
+  | { kind: "dir-replace"; path: string; beforeDir: string; afterDigest: string };
 
 export interface BackupManifest {
   runId: string;
@@ -57,6 +60,10 @@ export interface BackupSession {
   /** Snapshots `path`'s current content into this run's own storage,
    * then removes it, and records it as a `dir-remove`. */
   removeDir(path: string): void;
+  /** Snapshots an existing directory then copies `sourceDir` in its place,
+   * recorded as one operation so rollback can restore it without an
+   * intermediate same-path conflict. */
+  replaceDirFromSource(path: string, sourceDir: string): void;
   hasOperations(): boolean;
   /** Writes manifest.json. No-op (creates nothing) if zero operations
    * were ever recorded. */
@@ -142,7 +149,12 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
       } else {
         operations.push({ kind: "file-create", path, afterHash });
       }
-      writeFileSync(path, content);
+      // A lock/provenance update must not leave a partially-written JSON file
+      // if the process stops mid-write.  This also strengthens the existing
+      // backup-aware file writes without changing their manifest contract.
+      const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${fileIndex}.tmp`);
+      writeFileSync(temporary, content);
+      renameSync(temporary, path);
     },
 
     async createSymlink(path: string, linkTarget: string): Promise<void> {
@@ -169,7 +181,7 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
       ensureDir();
       mkdirSync(path, { recursive: true });
       cpSync(sourceDir, path, { recursive: true });
-      operations.push({ kind: "dir-create", path });
+      operations.push({ kind: "dir-create", path, afterDigest: directoryDigest(path) });
     },
 
     removeDir(path: string): void {
@@ -179,6 +191,18 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
       cpSync(path, join(runDir, relSnapshot), { recursive: true });
       rmSync(path, { recursive: true, force: true });
       operations.push({ kind: "dir-remove", path, beforeDir: relSnapshot });
+    },
+
+    replaceDirFromSource(path: string, sourceDir: string): void {
+      if (!existsSync(path)) throw new Error(`Cannot replace missing directory: ${path}`);
+      ensureDir();
+      const relSnapshot = join("dirs", `${dirIndex}-${basename(path)}`);
+      dirIndex += 1;
+      cpSync(path, join(runDir, relSnapshot), { recursive: true });
+      rmSync(path, { recursive: true, force: true });
+      mkdirSync(path, { recursive: true });
+      cpSync(sourceDir, path, { recursive: true });
+      operations.push({ kind: "dir-replace", path, beforeDir: relSnapshot, afterDigest: directoryDigest(path) });
     },
 
     hasOperations(): boolean {

@@ -98,6 +98,25 @@ test("a session that records nothing creates no directory at all on finalize", (
   assert.equal(existsSync(backupsRoot(home)), false);
 });
 
+test("replaceDirFromSource snapshots an existing directory and records its exact after digest", () => {
+  const home = scratchHome();
+  const target = join(home, "skill");
+  const source = join(home, "incoming");
+  mkdirSync(target);
+  mkdirSync(source);
+  writeFileSync(join(target, "SKILL.md"), "before\n");
+  writeFileSync(join(source, "SKILL.md"), "after\n");
+  const session = openBackupSession(home, "test");
+  session.replaceDirFromSource(target, source);
+  session.finalize();
+  const [runId] = readdirSync(backupsRoot(home));
+  const operation = readManifest(home, runId).operations[0];
+  assert.equal(operation?.kind, "dir-replace");
+  assert.equal(readFileSync(join(target, "SKILL.md"), "utf8"), "after\n");
+  if (operation?.kind !== "dir-replace") throw new Error("unreachable");
+  assert.match(operation.afterDigest, /^sha256:[0-9a-f]{64}$/);
+});
+
 test("run directory name embeds the command, sorts lexically after an earlier run", () => {
   const home = scratchHome();
   const s1 = openBackupSession(home, "sync");

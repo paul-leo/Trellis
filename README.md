@@ -22,6 +22,9 @@ npm install -g agent-trellis
 trellis onboard --dry-run   # preview: migration source, managed agents, MCP, memory
 trellis onboard             # apply — every write is backed up automatically
 trellis doctor              # verify state, any time
+
+# import a GitHub Skill into Trellis canonical storage, then sync it
+npx trellis add mattpocock/skills --skill loop-me --dry-run
 ```
 
 Something went wrong? `trellis rollback` inverts the last run.

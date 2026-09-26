@@ -22,6 +22,8 @@ import { isBuiltinSkillName } from "../lib/builtinSkills.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
+import { remoteSkillProvenance } from "./remoteSkill.js";
+import type { RemoteSkillLockEntry } from "../lib/remoteSkillLock.js";
 
 function builtinSkillTemplate(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -68,13 +70,16 @@ export function runSkillUpdateBuiltin(opts: { homeDir?: string; json?: boolean; 
 export interface SkillListEntry {
   name: string;
   scope: readonly AgentId[];
+  remote?: Pick<RemoteSkillLockEntry, "source" | "requestedRef" | "commit" | "subdirectory" | "digest">;
 }
 
 export function collectSkillList(homeDir: string = homedir()): SkillListEntry[] {
   const canonical = loadCanonicalSource(homeDir);
+  const provenance = remoteSkillProvenance(homeDir);
   return canonical.skills.filter((skill) => !isBuiltinSkillName(skill.name)).map((skill) => ({
     name: skill.name,
     scope: resolveScope(skill.scope, canonical.managedAgents),
+    ...(provenance[skill.name] ? { remote: provenance[skill.name] } : {}),
   }));
 }
 
@@ -85,8 +90,9 @@ export function runSkillList(opts: { homeDir?: string; json?: boolean } = {}): {
   } else if (entries.length === 0) {
     console.log("No skills in canonical source yet.");
   } else {
-    for (const { name, scope } of entries) {
-      console.log(`${name} — ${scope.length > 0 ? scope.join(", ") : "(no managed agent reaches it)"}`);
+    for (const { name, scope, remote } of entries) {
+      const provenance = remote ? ` — remote: ${remote.source}@${remote.commit.slice(0, 12)}` : "";
+      console.log(`${name} — ${scope.length > 0 ? scope.join(", ") : "(no managed agent reaches it)"}${provenance}`);
     }
   }
   return { exitCode: 0 };

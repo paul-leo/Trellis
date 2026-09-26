@@ -210,6 +210,55 @@ function persistText(path: string, content: string, backup?: BackupSession): voi
   else writeFileSync(path, content);
 }
 
+export type ScopeYamlWriteResult = { ok: true } | { ok: false; error: string };
+
+/** Read-only preflight for a later scope edit.  Remote import calls this
+ * before creating canonical content so an invalid hand-authored scope file
+ * cannot leave a half-applied import behind. */
+export function validateSkillScopeYaml(path: string): ScopeYamlWriteResult {
+  if (!existsSync(path)) return { ok: true };
+  try {
+    const doc = parseDocument(readFileSync(path, "utf-8"));
+    if (doc.errors.length > 0) throw new Error(doc.errors.map((error) => error.message).join("; "));
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
+ * Sets one Skill's canonical scope without rebuilding unrelated hand-authored
+ * scope entries.  `undefined` removes this Skill's explicit entry and
+ * therefore restores the normal all-managed default.
+ */
+export function writeSkillScopeYaml(path: string, name: string, scope: Scope, backup?: BackupSession): ScopeYamlWriteResult {
+  if (!existsSync(path) && scope === undefined) return { ok: true };
+  let doc;
+  try {
+    doc = existsSync(path) ? parseDocument(readFileSync(path, "utf-8")) : parseDocument("");
+    if (doc.errors.length > 0) throw new Error(doc.errors.map((error) => error.message).join("; "));
+  } catch (err) {
+    return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const current = doc.getIn(["skills", name], true);
+  if (scope === undefined) {
+    if (current === undefined) return { ok: true };
+    doc.deleteIn(["skills", name]);
+    const skills = doc.get("skills", true);
+    if (isMap(skills) && skills.items.length === 0) doc.delete("skills");
+  } else {
+    const currentJson = current && typeof current === "object" && "toJSON" in current && typeof current.toJSON === "function" ? current.toJSON() : current;
+    if (Array.isArray(currentJson) && currentJson.length === scope.length && currentJson.every((agent, index) => agent === scope[index])) {
+      return { ok: true };
+    }
+    doc.setIn(["skills", name], [...scope]);
+    forceBlockStyle(doc.get("skills", true));
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  persistText(path, doc.toString(), backup);
+  return { ok: true };
+}
+
 export function upsertServerYaml(path: string, name: string, def: McpServerDef, backup?: BackupSession): ServersYamlWriteResult {
   if (!existsSync(path)) {
     return { ok: false, error: `${path} does not exist — run \`trellis init\` first` };

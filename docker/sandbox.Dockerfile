@@ -6,12 +6,14 @@
 FROM node:20-slim
 
 WORKDIR /trellis
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json tsconfig.json ./
 RUN npm install
 
 COPY src ./src
 COPY scripts ./scripts
 COPY schema ./schema
+COPY test ./test
 COPY test/fixtures/sample-mcp-server.js /fixtures/sample-mcp-server.js
 COPY test/fixtures/memory-mcp-server.js /fixtures/memory-mcp-server.js
 

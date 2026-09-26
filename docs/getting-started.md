@@ -614,6 +614,74 @@ trellis skill update-builtin
 The update is backed up and updates the canonical file in place; native Agent
 symlinks and Runtime providers then consume the same refreshed content.
 
+### Importing a GitHub Skill with Trellis ownership
+
+If you would normally run `npx skills add`, use Trellis's top-level `add`
+command instead. It is a remote-source importer, while `trellis skill add`
+remains the command for a local directory:
+
+```sh
+# Review exact-case SKILL.md candidates before selecting one.
+npx trellis add mattpocock/skills --list
+
+# Fetch and inspect the exact plan without writing canonical or Agent files.
+npx trellis add mattpocock/skills --skill loop-me --dry-run
+
+# Import to the user-level canonical store, then sync to every managed Agent.
+npx trellis add mattpocock/skills --skill loop-me --yes
+```
+
+The source may be `owner/repository` or a credential-free HTTPS
+`github.com` repository URL. Trellis fetches the selected ref into a system
+temporary directory, discovers a directory containing an exact-case
+`SKILL.md`, and copies that directory into
+`~/.trellis/skills/<name>/`. It does not run repository scripts, install
+dependencies, or write into `.agents/skills`, `~/.agents/skills`, or any
+Agent-specific Skill directory during import. Review the imported
+`SKILL.md` before relying on it in an Agent session.
+
+By default the imported Skill is unscoped, which means every Agent currently
+listed in `~/.trellis/managed.yaml` receives it on sync. Restrict delivery to
+managed Agents with `--agent`; comma-separated values and repeated flags are
+accepted. `--agent '*'` writes the current managed set as an explicit scope.
+An Agent that is installed but unmanaged is refused before any canonical or
+native write. Add it to Trellis's managed boundary first:
+
+```sh
+trellis manage add zcode
+npx trellis add mattpocock/skills --skill loop-me --agent zcode --yes
+```
+
+`--branch <ref>` selects a Git branch, tag, or ref. Without it, Trellis asks
+Git for the repository's default branch. `--global` is accepted for
+`skills`-CLI compatibility and still means Trellis's existing user-level
+canonical store; `--copy` and project-local modes are refused because they
+would create another Skill source outside Trellis.
+
+Each successful remote import writes
+`~/.trellis/skills.lock.json` in the same backup session as its canonical
+Skill directory. The lock records the normalized GitHub URL, requested ref,
+resolved immutable commit, source subdirectory, and deterministic content
+digest. It never records credentials or a temporary path. `trellis skill
+list` marks remote Skills with their source and short locked commit; JSON
+output includes the complete credential-free provenance record.
+
+Refresh tracked Skills with:
+
+```sh
+trellis update loop-me --dry-run
+trellis update loop-me
+trellis update                 # check every tracked remote Skill
+```
+
+Before replacement, `trellis update` compares the current canonical directory
+to its locked digest. A local canonical edit is a conflict and is never
+overwritten. A successful update preserves the Skill's scope, replaces its
+directory and provenance record in one backup session, and then runs Skill
+sync. Use `trellis rollback --list` to find a `remote-skill-add` or
+`remote-skill-update` run; rolling it back restores the previous directory
+and matching lock record when neither has changed since the run.
+
 ```
 $ trellis mcp list
 tanka (http) — codex, pi
@@ -1012,9 +1080,10 @@ scripts/agent-sandbox.sh --status kiro
 Git，也不会自动读取或删除宿主机凭据。清理时请明确执行
 `docker volume rm <volume-name>`。
 
-## `trellis rollback` — undoing a `sync`/`mcp sync`/`onboard` run
+## `trellis rollback` — undoing a managed write run
 
-Every real write those three commands perform is recorded, before it
+Every real `sync`, `mcp sync`, `onboard`, remote Skill import, and remote Skill
+update write is recorded, before it
 happens, to a structured run directory under `~/.trellis/backups/` — no
 flag needed, this is always on for any run that actually writes
 something. `--dry-run` never creates one, since nothing was written.

@@ -17,13 +17,14 @@ import { runMcpAuth } from "./commands/mcpAuth.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
 import { runSkillList, runSkillAdd, runSkillRemove, runSkillUpdateBuiltin } from "./commands/skill.js";
+import { runRemoteSkillAdd, runRemoteSkillList, runRemoteSkillUpdate } from "./commands/remoteSkill.js";
 import { collectMemoryList, runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseManageArgs, runManage } from "./commands/manage.js";
 import { runKimi } from "./commands/kimi.js";
 import { TRELLIS_VERSION } from "./lib/cliMetadata.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "memory", "manage", "kimi", "secrets", "rollback"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "add", "update", "memory", "manage", "kimi", "secrets", "rollback"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -93,6 +94,22 @@ Commands:
             Distribute skills/instructions to each agent (omit target for both)
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
+  add <github-source> --skill <name>
+            Import one GitHub-hosted Skill into ~/.trellis/skills/, record
+            immutable provenance, then sync it only to managed Agents.
+              --skill, -s <name>       required unless --list
+              --branch <ref>           Git branch, tag, or ref; default is
+                                       the source repository's default branch
+              --agent, -a <ids|*>      restrict delivery to managed Agent ids
+              --list                   show discovered Skills without import
+              --global, --yes          accepted skills-CLI compatibility flags
+              --dry-run                fetch and preview; write nothing
+              --json                   machine-readable output
+  update [skills...]
+            Safely refresh remotely tracked Skills. Refuses to overwrite a
+            canonical Skill edited since its recorded import.
+              --dry-run    preview writes only
+              --json       machine-readable output
   mcp sync  Distribute MCP servers to each agent's native config
               (create/repair, plus ownership-ledger-gated removal — an
               entry is only ever removed when it's still exactly what
@@ -206,6 +223,31 @@ See docs/roadmap.md for what's built vs. planned.`);
 
 function printVersion(): void {
   console.log(TRELLIS_VERSION);
+}
+
+function remoteOptionValues(args: readonly string[], flags: readonly string[]): { values: string[]; error?: string; positions: Set<number> } {
+  const values: string[] = [];
+  const positions = new Set<number>();
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    const matching = flags.find((flag) => arg === flag || arg.startsWith(`${flag}=`));
+    if (!matching) continue;
+    positions.add(index);
+    if (arg.startsWith(`${matching}=`)) {
+      values.push(arg.slice(matching.length + 1));
+      continue;
+    }
+    const value = args[index + 1];
+    if (!value || value.startsWith("-")) return { values, positions, error: `${matching} needs a value` };
+    positions.add(index + 1);
+    values.push(value);
+    index += 1;
+  }
+  return { values, positions };
+}
+
+function remotePositionals(args: readonly string[], consumed: ReadonlySet<number>): string[] {
+  return args.filter((arg, index) => !consumed.has(index) && !arg.startsWith("-"));
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -325,6 +367,50 @@ async function main(argv: string[]): Promise<void> {
     }
     const { exitCode } = await runSync({ target, json: rest.includes("--json"), dryRun: rest.includes("--dry-run") });
     process.exitCode = exitCode;
+    return;
+  }
+
+  if (command === "add") {
+    const skill = remoteOptionValues(rest, ["--skill", "-s"]);
+    const branch = remoteOptionValues(rest, ["--branch"]);
+    const agents = remoteOptionValues(rest, ["--agent", "-a"]);
+    const consumed = new Set([...skill.positions, ...branch.positions, ...agents.positions]);
+    const positionals = remotePositionals(rest, consumed);
+    const json = rest.includes("--json");
+    const prohibited = rest.find((arg) => /^(--copy|--project|--local)(?:=|$)/.test(arg));
+    if (prohibited) {
+      const detail = "Trellis remote Skills are always imported into ~/.trellis/skills; --copy and project-local installation are not supported.";
+      if (json) console.log(JSON.stringify({ action: "invalid-options", detail }, null, 2)); else console.error(detail);
+      process.exitCode = 1;
+      return;
+    }
+    if (skill.error || branch.error || agents.error || positionals.length !== 1) {
+      const detail = skill.error ?? branch.error ?? agents.error ?? "Usage: trellis add <github-source> --skill <name>";
+      if (json) console.log(JSON.stringify({ action: "invalid-options", detail }, null, 2)); else console.error(detail);
+      process.exitCode = 1;
+      return;
+    }
+    const source = positionals[0];
+    if (rest.includes("--list")) {
+      process.exitCode = (await runRemoteSkillList(source, { branch: branch.values[0], json })).exitCode;
+      return;
+    }
+    if (skill.values.length !== 1 || branch.values.length > 1) {
+      const detail = skill.values.length !== 1 ? "Use exactly one --skill value" : "Use at most one --branch value";
+      if (json) console.log(JSON.stringify({ action: "invalid-options", detail }, null, 2)); else console.error(detail);
+      process.exitCode = 1;
+      return;
+    }
+    process.exitCode = (await runRemoteSkillAdd(source, skill.values[0], {
+      branch: branch.values[0], agents: agents.values, dryRun: rest.includes("--dry-run"), json,
+    })).exitCode;
+    return;
+  }
+
+  if (command === "update") {
+    const json = rest.includes("--json");
+    const names = rest.filter((arg) => !arg.startsWith("-"));
+    process.exitCode = (await runRemoteSkillUpdate(names, { dryRun: rest.includes("--dry-run"), json })).exitCode;
     return;
   }
 
