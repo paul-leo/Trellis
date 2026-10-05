@@ -34,7 +34,10 @@ test("SkillProvider: lists progressive-disclosure tools and scoped resources", (
     "trellis.skills.read_file",
   ]);
   const resources = provider.listResources(context(fixtureHome(), "claude-code"));
-  assert.equal(resources.length, 2);
+  // The existing trellis:// view is unchanged; the skill:// view is additive
+  // (trellis-skills-over-mcp design.md D1).
+  const legacy = resources.filter((resource) => resource.uri.startsWith("trellis://skills/"));
+  assert.deepEqual(legacy.map((resource) => resource.uri).sort(), ["trellis://skills/claude-only/SKILL.md", "trellis://skills/shared/SKILL.md"]);
   assert.ok(resources.some((resource) => resource.uri.includes("shared")));
 });
 

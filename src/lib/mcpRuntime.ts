@@ -1,8 +1,9 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, GetPromptRequestSchema, ListPromptsRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ErrorCode, McpError, GetPromptRequestSchema, ListPromptsRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult, GetPromptResult, Implementation, Prompt, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentId } from "../core/types.js";
 import type { GatewayBackend } from "./gatewayBackend.js";
+import type { SkillEntry } from "./skillManifest.js";
 import { allocateExposedToolNames } from "./mcpToolRegistry.js";
 
 function compactBuiltinToolName(name: string): string {
@@ -22,6 +23,9 @@ export interface TrellisProvider {
   readResource?(uri: URL, context: RuntimeContext): Promise<ReadResourceResult> | ReadResourceResult;
   listPrompts?(context: RuntimeContext): Promise<Prompt[]> | Prompt[];
   getPrompt?(name: string, args: Record<string, string> | undefined, context: RuntimeContext): Promise<GetPromptResult> | GetPromptResult;
+  /** Skills-over-MCP `skills/list` and `skills/get` (trellis-skills-over-mcp). */
+  listSkillEntries?(context: RuntimeContext): Promise<SkillEntry[]> | SkillEntry[];
+  getSkillEntry?(uri: string, context: RuntimeContext): Promise<SkillEntry | undefined> | SkillEntry | undefined;
   close?(): Promise<void>;
 }
 
@@ -120,6 +124,32 @@ export class BuiltinRegistry {
     return provider.readResource(uri, context);
   }
 
+  async listSkills(context: RuntimeContext): Promise<SkillEntry[]> {
+    const skills: SkillEntry[] = [];
+    for (const provider of this.providers) {
+      if (!provider.listSkillEntries) continue;
+      try {
+        skills.push(...(await provider.listSkillEntries(context)));
+      } catch (err) {
+        this.warn(providerError(provider.id, err));
+      }
+    }
+    return skills;
+  }
+
+  async getSkill(uri: string, context: RuntimeContext): Promise<SkillEntry | undefined> {
+    for (const provider of this.providers) {
+      if (!provider.getSkillEntry) continue;
+      try {
+        const entry = await provider.getSkillEntry(uri, context);
+        if (entry) return entry;
+      } catch (err) {
+        this.warn(providerError(provider.id, err));
+      }
+    }
+    return undefined;
+  }
+
   async listPrompts(context: RuntimeContext): Promise<Prompt[]> {
     const prompts: Prompt[] = [];
     this.promptOwners.clear();
@@ -196,5 +226,27 @@ export function createRuntimeServer(serverInfo: Implementation, context: Runtime
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => registry.readResource(new URL(request.params.uri), context));
   server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: await registry.listPrompts(context) }));
   server.setRequestHandler(GetPromptRequestSchema, async (request) => registry.getPrompt(request.params.name, request.params.arguments, context));
+
+  // `skills/list` and `skills/get` are not in this SDK's schema set (it speaks
+  // at most 2025-11-25), so they are answered through the SDK's fallback for
+  // methods with no registered handler, which keeps the extension free of a new
+  // direct zod dependency. The extension itself is deliberately NOT declared in
+  // the capabilities above: the specification declares it only through
+  // `server/discover`, which this revision lacks, and inventing another field
+  // would claim a protocol nobody defined (trellis-skills-over-mcp D4). Any
+  // other unknown method keeps the SDK's usual "method not found".
+  server.fallbackRequestHandler = async (request) => {
+    const cache = { resultType: "complete" as const, ttlMs: 0, cacheScope: "private" as const };
+    if (request.method === "skills/list") {
+      return { ...cache, skills: await registry.listSkills(context) };
+    }
+    if (request.method === "skills/get") {
+      const uri = (request.params as { uri?: unknown } | undefined)?.uri;
+      const entry = typeof uri === "string" ? await registry.getSkill(uri, context) : undefined;
+      if (!entry) throw new McpError(ErrorCode.InvalidParams, "unknown skill");
+      return { ...cache, skill: entry };
+    }
+    throw new McpError(ErrorCode.MethodNotFound, `Method not found: ${request.method}`);
+  };
   return server;
 }
