@@ -12,7 +12,11 @@ import {
   collectMcpAddPlan,
   collectMcpListPlan,
   collectMcpRemovePlan,
+  collectMcpScopePlan,
   collectMcpSetAuthPlan,
+  applyMcpScopeWithSync,
+  runMcpList,
+  runMcpScope,
   collectMcpSyncReport,
   applyMcpAddPlan,
   applyMcpRemovePlan,
@@ -23,6 +27,8 @@ import {
 } from "../../src/commands/mcp.js";
 import { loadCanonicalSource } from "../../src/core/canonical.js";
 import { backupsRoot } from "../../src/lib/backup.js";
+import { writeToken } from "../../src/lib/oauth/store.js";
+import { parse as parseYaml } from "yaml";
 
 function scratchHome(): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-mcp-"));
@@ -571,4 +577,257 @@ test("mcp set: a metadata-less object and the scalar form list identically", () 
     assert.equal(entry?.auth, "oauth");
     assert.equal(entry?.preRegisteredClient, undefined, `${name}: no client metadata to report`);
   }
+});
+
+// --- mcp scope (trellis-scope-editing-and-auth-status tasks.md 1.2) ------
+
+const STDIO_FOO = "servers:\n  foo:\n    transport: stdio\n    command: node\n";
+
+function agentsOnDisk(home: string, name = "foo"): unknown {
+  const text = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  return (parseYaml(text) as { servers?: Record<string, { agents?: unknown }> }).servers?.[name]?.agents;
+}
+
+function claudeServers(home: string): Record<string, { command?: string }> {
+  return (JSON.parse(readFileSync(join(home, ".claude.json"), "utf-8")) as { mcpServers?: Record<string, { command?: string }> }).mcpServers ?? {};
+}
+
+test("mcp scope: --agents records the list on the entry and reads back through the loader", async () => {
+  const home = scratchHome();
+  initCanonical(home, STDIO_FOO);
+
+  const plan = collectMcpScopePlan("foo", { agents: "kiro, codex" }, home);
+  assert.equal(plan.action, "updated");
+  const outcome = await applyMcpScopeWithSync(plan, { homeDir: home });
+
+  assert.equal(outcome.writeError, undefined);
+  assert.deepEqual(loadCanonicalSource(home).mcp.servers.foo.agents, ["codex", "kiro"]);
+  assert.deepEqual(collectMcpListPlan(home).find((e) => e.name === "foo")?.agents, ["codex", "kiro"]);
+  assert.equal(loadCanonicalSource(home).mcp.servers.foo.command, "node", "the rest of the entry is untouched");
+});
+
+test("mcp scope: --all removes the agents key, --none records an explicit empty list", async () => {
+  const home = scratchHome();
+  initCanonical(home, STDIO_FOO);
+
+  await applyMcpScopeWithSync(collectMcpScopePlan("foo", { agents: "codex" }, home), { homeDir: home });
+  assert.deepEqual(agentsOnDisk(home), ["codex"]);
+
+  await applyMcpScopeWithSync(collectMcpScopePlan("foo", { none: true }, home), { homeDir: home });
+  assert.deepEqual(agentsOnDisk(home), []);
+  assert.deepEqual(collectMcpListPlan(home).find((e) => e.name === "foo")?.agents, []);
+
+  const all = collectMcpScopePlan("foo", { all: true }, home);
+  assert.equal(all.mode, "all");
+  await applyMcpScopeWithSync(all, { homeDir: home });
+  assert.equal(agentsOnDisk(home), undefined, "the key is gone, not set to a full list");
+  assert.deepEqual(collectMcpListPlan(home).find((e) => e.name === "foo")?.agents, ["claude-code", "codex", "kiro", "pi"]);
+});
+
+test("mcp scope: selecting every managed agent clears the explicit scope", async () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  foo:\n    transport: stdio\n    command: node\n    agents: [codex]\n", ["claude-code", "codex"]);
+
+  const plan = collectMcpScopePlan("foo", { agents: "claude-code,codex" }, home);
+
+  assert.equal(plan.action, "updated");
+  assert.equal(plan.normalizedFromFull, true);
+  await applyMcpScopeWithSync(plan, { homeDir: home });
+  assert.equal(agentsOnDisk(home), undefined);
+});
+
+test("mcp scope: an already-effective scope is already-set and leaves the file byte-identical", async () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  foo:\n    transport: stdio\n    command: node\n    agents: [codex]\n");
+  const path = join(home, ".trellis", "mcp", "servers.yaml");
+  const before = readFileSync(path, "utf-8");
+
+  const plan = collectMcpScopePlan("foo", { agents: "codex" }, home);
+  assert.equal(plan.action, "already-set");
+  await applyMcpScopeWithSync(plan, { homeDir: home });
+
+  assert.equal(readFileSync(path, "utf-8"), before);
+});
+
+test("mcp scope: bad selections, an unmanaged agent and an unknown server are refused without writing", async () => {
+  const home = scratchHome();
+  initCanonical(home, STDIO_FOO, ["claude-code", "codex"]);
+  const path = join(home, ".trellis", "mcp", "servers.yaml");
+  const before = readFileSync(path, "utf-8");
+
+  assert.match(collectMcpScopePlan("foo", {}, home).detail, /exactly one of/);
+  assert.match(collectMcpScopePlan("foo", { all: true, agents: "codex" }, home).detail, /exactly one of/);
+  assert.match(collectMcpScopePlan("foo", { agents: "" }, home).detail, /at least one agent id/);
+  const unmanaged = collectMcpScopePlan("foo", { agents: "claude-code,kiro" }, home);
+  assert.equal(unmanaged.action, "invalid-input");
+  assert.match(unmanaged.detail, /"kiro" is not a managed agent.*claude-code, codex/);
+  assert.equal(collectMcpScopePlan("ghost", { all: true }, home).action, "not-found");
+  assert.equal(collectMcpScopePlan(undefined, { all: true }, home).action, "invalid-input");
+
+  assert.equal(readFileSync(path, "utf-8"), before);
+});
+
+test("mcp scope: narrowing removes the entry Trellis wrote from the agent that lost it", async () => {
+  const home = scratchHome();
+  initCanonical(home, STDIO_FOO);
+  await collectMcpSyncReport({ homeDir: home });
+  assert.ok("foo" in claudeServers(home), "precondition: the first sync wrote it");
+
+  const outcome = await applyMcpScopeWithSync(collectMcpScopePlan("foo", { agents: "codex" }, home), { homeDir: home });
+
+  assert.equal(outcome.writeError, undefined);
+  assert.ok(!("foo" in claudeServers(home)), "scoped away and owned by Trellis, so it goes — in the same command");
+});
+
+test("mcp scope: narrowing never deletes an entry Trellis did not write", async () => {
+  const home = scratchHome();
+  // A hand-written entry under the same name, present before Trellis ever
+  // synced: the ownership ledger has no claim on it.
+  writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { foo: { command: "hand-written" } } }));
+  initCanonical(home, STDIO_FOO);
+
+  await applyMcpScopeWithSync(collectMcpScopePlan("foo", { agents: "codex" }, home), { homeDir: home });
+
+  assert.equal(claudeServers(home).foo?.command, "hand-written", "the user's own entry must survive a scope narrowing");
+});
+
+test("mcp scope: --dry-run reports the plan and writes nothing, not even a backup", async () => {
+  const home = scratchHome();
+  initCanonical(home, STDIO_FOO);
+  const path = join(home, ".trellis", "mcp", "servers.yaml");
+  const before = readFileSync(path, "utf-8");
+
+  const outcome = await applyMcpScopeWithSync(collectMcpScopePlan("foo", { agents: "codex" }, home), { homeDir: home, dryRun: true });
+
+  assert.equal(outcome.plan.action, "updated");
+  assert.equal(readFileSync(path, "utf-8"), before);
+  assert.equal(existsSync(backupsRoot(home)) ? readdirSync(backupsRoot(home)).length : 0, 0);
+});
+
+test("mcp scope: a real write leaves a backup so rollback can undo it", async () => {
+  const home = scratchHome();
+  initCanonical(home, STDIO_FOO);
+
+  await applyMcpScopeWithSync(collectMcpScopePlan("foo", { agents: "codex" }, home), { homeDir: home });
+
+  assert.ok(existsSync(backupsRoot(home)) && readdirSync(backupsRoot(home)).length > 0);
+});
+
+test("mcp scope: --json prints the plan with no report text", async () => {
+  const home = scratchHome();
+  initCanonical(home, STDIO_FOO);
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line?: unknown) => lines.push(String(line));
+  try {
+    const { exitCode } = await runMcpScope("foo", { agents: "codex" }, { homeDir: home, json: true, dryRun: true });
+    assert.equal(exitCode, 0);
+  } finally {
+    console.log = original;
+  }
+  const payload = JSON.parse(lines.join("\n"));
+  assert.equal(payload.action, "updated");
+  assert.deepEqual(payload.effective, ["codex"]);
+});
+
+// --- credential state in the listing (tasks.md 2.1) ----------------------
+
+const OAUTH_SERVERS = `servers:
+  fresh:
+    transport: http
+    url: https://a.example/mcp
+    auth: oauth
+  renewable:
+    transport: http
+    url: https://b.example/mcp
+    auth: oauth
+  dead:
+    transport: http
+    url: https://c.example/mcp
+    auth: oauth
+  never:
+    transport: http
+    url: https://d.example/mcp
+    auth:
+      kind: oauth
+      client_id: published-client-id
+  forever:
+    transport: http
+    url: https://e.example/mcp
+    auth: oauth
+  plain:
+    transport: http
+    url: https://f.example/mcp
+`;
+
+test("mcp list: reports credential state for OAuth-classified servers, from the token store alone", () => {
+  const home = scratchHome();
+  initCanonical(home, OAUTH_SERVERS);
+  const future = Date.now() + 3_600_000;
+  const past = Date.now() - 3_600_000;
+  writeToken(home, "fresh", { accessToken: "AT-fresh", refreshToken: "RT-fresh", expiresAt: future });
+  writeToken(home, "renewable", { accessToken: "AT-old", refreshToken: "RT-keep", expiresAt: past });
+  writeToken(home, "dead", { accessToken: "AT-dead", expiresAt: past });
+  writeToken(home, "forever", { accessToken: "AT-forever" });
+
+  const byName = Object.fromEntries(collectMcpListPlan(home).map((e) => [e.name, e]));
+
+  assert.equal(byName.fresh.authStatus, "authorized");
+  assert.equal(byName.fresh.authExpiresAt, future);
+  assert.equal(byName.renewable.authStatus, "refreshable");
+  assert.equal(byName.dead.authStatus, "expired");
+  assert.equal(byName.never.authStatus, "not-authorized");
+  assert.equal(byName.never.authExpiresAt, undefined);
+  assert.equal(byName.forever.authStatus, "authorized", "a token that advertised no expiry never expires");
+  assert.equal(byName.forever.authExpiresAt, undefined);
+});
+
+test("mcp list: a token file never makes an unclassified server OAuth", () => {
+  const home = scratchHome();
+  initCanonical(home, OAUTH_SERVERS);
+  writeToken(home, "plain", { accessToken: "AT-stray", refreshToken: "RT-stray", expiresAt: Date.now() + 3_600_000 });
+
+  const plain = collectMcpListPlan(home).find((e) => e.name === "plain");
+
+  assert.equal(plain?.auth, undefined);
+  assert.equal(plain?.authStatus, undefined, "classification stays explicit — no inference from a file on disk");
+  assert.equal(plain?.authExpiresAt, undefined);
+});
+
+test("mcp list: no credential material reaches the JSON or the text listing", () => {
+  const home = scratchHome();
+  initCanonical(home, OAUTH_SERVERS);
+  writeToken(home, "fresh", {
+    accessToken: "AT-SECRET-ACCESS",
+    refreshToken: "RT-SECRET-REFRESH",
+    clientId: "stored-client-id",
+    clientSecret: "SECRET-CLIENT-SECRET",
+    expiresAt: Date.now() + 3_600_000,
+  });
+
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line?: unknown) => lines.push(String(line));
+  try {
+    runMcpList({ homeDir: home });
+    runMcpList({ homeDir: home, json: true });
+  } finally {
+    console.log = original;
+  }
+  const output = lines.join("\n");
+
+  assert.match(output, /fresh \(http, oauth, credential: authorized\)/);
+  for (const secret of ["AT-SECRET-ACCESS", "RT-SECRET-REFRESH", "SECRET-CLIENT-SECRET", "stored-client-id", "published-client-id"]) {
+    assert.equal(output.includes(secret), false, `${secret} must never be printed`);
+  }
+});
+
+test("mcp list: a server name that cannot be a token filename does not take the whole listing down", () => {
+  const home = scratchHome();
+  initCanonical(home, 'servers:\n  ".hidden":\n    transport: http\n    url: https://x.example/mcp\n    auth: oauth\n  ok:\n    transport: stdio\n    command: node\n');
+
+  const entries = collectMcpListPlan(home);
+
+  assert.equal(entries.find((e) => e.name === ".hidden")?.authStatus, "not-authorized");
+  assert.ok(entries.some((e) => e.name === "ok"), "the rest of the listing survives");
 });

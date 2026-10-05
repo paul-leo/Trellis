@@ -1,5 +1,5 @@
 /**
- * `trellis skill list|add|remove` — command-line CRUD for canonical
+ * `trellis skill list|add|remove|scope` — command-line CRUD for canonical
  * skills (trellis-canonical-cli-crud), an alternative to hand-editing
  * `~/.trellis/skills/<name>/SKILL.md` directly. `add`'s conflict
  * decision and `remove`'s "sync will un-sync it" behavior both reuse
@@ -15,7 +15,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decideDirImport } from "../lib/dirEquals.js";
 import { findSkillFile } from "../lib/skillFile.js";
-import { loadCanonicalSource } from "../core/canonical.js";
+import { loadCanonicalSource, writeSkillScopeYaml } from "../core/canonical.js";
 import { resolveScope } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 import { isBuiltinSkillName } from "../lib/builtinSkills.js";
@@ -23,6 +23,7 @@ import { openBackupSession, type BackupSession } from "../lib/backup.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
 import { remoteSkillProvenance } from "./remoteSkill.js";
+import { describeScope, resolveScopeSelection, sameScope, type ScopeSelectorRaw } from "../lib/scopeSelection.js";
 import type { RemoteSkillLockEntry } from "../lib/remoteSkillLock.js";
 
 function builtinSkillTemplate(): string {
@@ -245,6 +246,108 @@ export async function runSkillRemove(name: string, opts: { homeDir?: string; jso
     console.log(`${opts.dryRun ? "[dry run] " : ""}removed skill "${name}" from canonical source.`);
     if (syncReport) printSyncReport(syncReport, opts.dryRun ?? false);
   }
+  const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+  return { exitCode: failed || syncConflict ? 1 : 0 };
+}
+
+export type SkillScopeAction = "updated" | "already-set" | "not-found" | "invalid-input";
+
+export interface SkillScopePlan {
+  name: string;
+  action: SkillScopeAction;
+  detail: string;
+  /** What will be recorded in `scope.yaml`; `undefined` clears the explicit
+   * scope so the skill reaches every managed agent. Set when the selection was
+   * valid, whatever the action. */
+  scope?: AgentId[];
+  mode?: "all" | "none" | "explicit";
+  /** True when a full selection was dropped instead of recorded
+   * (trellis-scope-editing-and-auth-status design.md D3). */
+  normalizedFromFull?: boolean;
+  /** The agents that will actually receive the skill afterwards. */
+  effective?: readonly AgentId[];
+}
+
+/**
+ * `skill scope <name> --agents a,b | --all | --none`
+ * (trellis-scope-editing-and-auth-status tasks.md 1.1). Plan only — the write
+ * and the cascade sync live in `applySkillScopeWithSync`.
+ */
+export function collectSkillScopePlan(name: string | undefined, raw: ScopeSelectorRaw, homeDir: string = homedir()): SkillScopePlan {
+  if (!name) return { name: "(none)", action: "invalid-input", detail: "usage: trellis skill scope <name> --agents <ids> | --all | --none" };
+  if (isBuiltinSkillName(name)) {
+    return { name, action: "invalid-input", detail: `"${name}" is a Trellis package-owned Skill — its scope is not editable` };
+  }
+
+  const canonical = loadCanonicalSource(homeDir);
+  const selection = resolveScopeSelection(raw, canonical.managedAgents);
+  if (!selection.ok) return { name, action: "invalid-input", detail: selection.detail };
+
+  const skill = canonical.skills.find((candidate) => candidate.name === name);
+  if (!skill) return { name, action: "not-found", detail: `no canonical skill named "${name}"` };
+
+  const base = {
+    name,
+    scope: selection.scope,
+    mode: selection.mode,
+    normalizedFromFull: selection.normalizedFromFull,
+    effective: resolveScope(selection.scope, canonical.managedAgents),
+  };
+  const summary = describeScope(selection.scope, canonical.managedAgents);
+  const normalized = selection.normalizedFromFull ? " (every managed agent selected — recorded as the default, so a newly managed agent is included)" : "";
+  if (sameScope(skill.scope, selection.scope)) {
+    return { ...base, action: "already-set", detail: `scope is already ${summary}` };
+  }
+  return { ...base, action: "updated", detail: `set scope to ${summary}${normalized}` };
+}
+
+export interface SkillScopeOutcome {
+  plan: SkillScopePlan;
+  writeError?: string;
+  sync?: SyncReport;
+}
+
+/** Write inside a backup session so `trellis rollback` covers it, then the
+ * same skills sync `add` / `remove` run — narrowing is converged by
+ * `symlinkPlan`'s existing "canonical entry gone or scoped away" removal
+ * (design.md D5). */
+export async function applySkillScopeWithSync(plan: SkillScopePlan, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<SkillScopeOutcome> {
+  const homeDir = opts.homeDir ?? homedir();
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "updated" ? openBackupSession(homeDir, "skill-scope") : undefined;
+  const session = opts.backupSession ?? ownSession;
+  let writeError: string | undefined;
+  if (!opts.dryRun && plan.action === "updated") {
+    const result = writeSkillScopeYaml(join(homeDir, ".trellis", "scope.yaml"), plan.name, plan.scope, session);
+    if (!result.ok) writeError = result.error;
+  }
+  ownSession?.finalize();
+  let syncReport: SyncReport | undefined;
+  if (!writeError && plan.action === "updated" && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectSyncReport({ target: "skills", homeDir, dryRun: opts.dryRun });
+  }
+  return { plan, ...(writeError ? { writeError } : {}), ...(syncReport ? { sync: syncReport } : {}) };
+}
+
+export async function runSkillScope(name: string | undefined, raw: ScopeSelectorRaw, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+  const homeDir = opts.homeDir ?? homedir();
+  let outcome: SkillScopeOutcome;
+  try {
+    outcome = await applySkillScopeWithSync(collectSkillScopePlan(name, raw, homeDir), { homeDir, dryRun: opts.dryRun });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return { exitCode: 1 };
+  }
+  const { plan, writeError, sync: syncReport } = outcome;
+  if (opts.json) {
+    const payload = writeError ? { ...plan, writeError } : plan;
+    console.log(JSON.stringify(syncReport ? { ...payload, sync: syncReport } : payload, null, 2));
+  } else {
+    console.log(`${opts.dryRun ? "[dry run] " : ""}skill scope ${plan.name}`);
+    console.log(`  [${plan.action}] ${plan.detail}`);
+    if (writeError) console.error(`  write failed: ${writeError}`);
+    if (syncReport) printSyncReport(syncReport, opts.dryRun ?? false);
+  }
+  const failed = plan.action === "invalid-input" || plan.action === "not-found" || Boolean(writeError);
   const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
   return { exitCode: failed || syncConflict ? 1 : 0 };
 }

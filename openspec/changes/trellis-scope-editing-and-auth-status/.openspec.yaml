@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-10-05
+goal: Skills and MCP servers can have their agent scope edited from the CLI and
+  the desktop GUI, MCP servers show their credential state, and diagnostic
+  findings say which agent they belong to.

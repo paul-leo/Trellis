@@ -10,13 +10,14 @@ import { runInit } from "./commands/init.js";
 import { runMigrate } from "./commands/migrate.js";
 import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
-import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, runMcpSetAuth, parseMcpAddArgs, parseMcpSetArgs } from "./commands/mcp.js";
+import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, runMcpSetAuth, runMcpScope, parseMcpAddArgs, parseMcpSetArgs } from "./commands/mcp.js";
+import { parseScopeArgs } from "./lib/scopeSelection.js";
 import { runMcpImport } from "./commands/mcpImport.js";
 import { parseMcpGatewayArgs, runMcpGateway, runMcpRuntime } from "./commands/mcpGateway.js";
 import { runMcpAuth } from "./commands/mcpAuth.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
-import { runSkillList, runSkillAdd, runSkillRemove, runSkillUpdateBuiltin } from "./commands/skill.js";
+import { runSkillList, runSkillAdd, runSkillRemove, runSkillScope, runSkillUpdateBuiltin } from "./commands/skill.js";
 import { runRemoteSkillAdd, runRemoteSkillList, runRemoteSkillUpdate } from "./commands/remoteSkill.js";
 import { collectMemoryList, runMemoryExtraction, runMemorySync } from "./commands/memory.js";
 import { parseManageArgs, runManage } from "./commands/manage.js";
@@ -145,6 +146,14 @@ Commands:
                          --auth none removes it along with the classification.
             --dry-run    preview the plan, write nothing
             --json       machine-readable output, no report text
+  mcp scope <name> --agents <ids> | --all | --none
+            Choose which managed agents reach a canonical MCP server, then
+            run the same sync as mcp sync. Exactly one selector is
+            required; ids must be managed agents. Selecting every managed
+            agent records no explicit scope, so a newly managed agent is
+            included. An entry Trellis did not write is never removed.
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
   mcp auth <server-name>
             Authorize a remote (http/sse) MCP server that uses OAuth —
               opens a browser once, stores the result 0600 under
@@ -172,6 +181,12 @@ Commands:
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill remove <name>
+  skill scope <name> --agents <ids> | --all | --none
+            Choose which managed agents receive a canonical skill, then
+            sync it. Same selector rules as mcp scope; a built-in skill's
+            scope is not editable
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
   skill update-builtin
             Refresh the package-owned trellis-runtime Skill in canonical
             source; existing native symlinks see the update
@@ -451,6 +466,11 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = runMcpSetAuth(name, parseMcpSetArgs(mcpRest), { json, dryRun }).exitCode;
       return;
     }
+    if (subcommand === "scope") {
+      const [name] = mcpRest;
+      process.exitCode = (await runMcpScope(name && !name.startsWith("--") ? name : undefined, parseScopeArgs(mcpRest), { json, dryRun })).exitCode;
+      return;
+    }
     if (subcommand === "remove") {
       const [name] = mcpRest;
       if (!name) {
@@ -474,7 +494,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
 
-    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|set <name>|remove <name>|auth <name>\n`);
+    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|set <name>|scope <name>|remove <name>|auth <name>\n`);
     process.exitCode = 1;
     return;
   }
@@ -510,11 +530,16 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = (await runSkillRemove(name, { json, dryRun })).exitCode;
       return;
     }
+    if (subcommand === "scope") {
+      const [name] = skillRest;
+      process.exitCode = (await runSkillScope(name && !name.startsWith("--") ? name : undefined, parseScopeArgs(skillRest), { json, dryRun })).exitCode;
+      return;
+    }
     if (subcommand === "update-builtin") {
       process.exitCode = runSkillUpdateBuiltin({ json, dryRun }).exitCode;
       return;
     }
-    console.error(`Unknown skill subcommand: ${subcommand ?? "(none)"}\nUsage: trellis skill list|add <name> --from <path>|remove <name>|update-builtin\n`);
+    console.error(`Unknown skill subcommand: ${subcommand ?? "(none)"}\nUsage: trellis skill list|add <name> --from <path>|remove <name>|scope <name> --agents <ids>|--all|--none|update-builtin\n`);
     process.exitCode = 1;
     return;
   }
