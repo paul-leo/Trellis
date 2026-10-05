@@ -15,6 +15,15 @@ import type { SecretsPolicy } from "../core/types.js";
 import type { BackupSession } from "./backup.js";
 
 const LINE_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/;
+const VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The name half of LINE_RE, standing alone: what counts as a variable
+ * NAME wherever secrets enter by name (`env`, `client_secret_env`). A
+ * value failing this in a name position is at best a typo, at worst a
+ * pasted secret — callers refuse it instead of trying to resolve it. */
+export function isValidSecretVarName(name: string): boolean {
+  return VAR_NAME_RE.test(name);
+}
 
 export function parseDotenv(content: string): Record<string, string> {
   const result: Record<string, string> = {};

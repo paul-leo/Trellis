@@ -152,9 +152,12 @@ test("registerClient: an AS with no registration endpoint returns undefined, and
     const metadata = await metadataFor(as);
     assert.equal(await registerClient(metadata, "http://127.0.0.1:1/callback"), undefined);
 
+    // The message has to name the fix, not just the problem: a dead end
+    // with no remediation is a support ticket
+    // (trellis-mcp-oauth-static-client design.md D3, tasks.md 2.3).
     await assert.rejects(
       () => authorize("remote", metadata, { openBrowser: (url) => as.authorizeViaBrowser(url) }),
-      /offers no dynamic client registration, and no client_id is configured/,
+      /offers no dynamic client registration.*auth\.client_id.*~\/\.trellis\/mcp\/servers\.yaml/s,
     );
   } finally {
     await as.close();
@@ -193,6 +196,91 @@ test("authorize: the fake AS really does enforce PKCE — a wrong verifier is re
 
     assert.equal(response.status, 400);
     assert.match(JSON.stringify(await response.json()), /PKCE verification failed/);
+  } finally {
+    await as.close();
+  }
+});
+
+// --- pre-registered client (trellis-mcp-oauth-static-client) ----------
+
+test("authorize: a configured client_id skips registration entirely", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const token = await authorize("remote", await metadataFor(as), {
+      clientId: "static-client",
+      openBrowser: (url) => as.authorizeViaBrowser(url),
+    });
+
+    assert.equal(token.clientId, "static-client");
+    // The point of the feature: a provider that refuses DCR must never be
+    // asked to register at all, not merely survive being refused
+    // (design.md D3).
+    assert.equal(as.registrations, 0);
+  } finally {
+    await as.close();
+  }
+});
+
+test("authorize: a refused registration reports the provider's error code and names the fix", async () => {
+  const as = await startFakeAuthServer({ rejectRegistration: true });
+  try {
+    const err = await authorize("remote", await metadataFor(as), { openBrowser: (url) => as.authorizeViaBrowser(url) }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    assert.ok(err instanceof AuthorizationError, `expected an AuthorizationError, got ${String(err)}`);
+    // The AS's own code, not just the status — it is what tells a person
+    // this is an allowlist provider rather than a transient outage
+    // (tasks.md 2.3).
+    assert.match(err.message, /unauthorized_client/);
+    assert.match(err.message, /auth\.client_id/);
+    assert.match(err.message, /~\/\.trellis\/mcp\/servers\.yaml/);
+    assert.equal(as.registrations, 0);
+  } finally {
+    await as.close();
+  }
+});
+
+test("authorize: a refused registration is recovered from by configuring client_id", async () => {
+  // The remediation the error message advertises has to actually work,
+  // against the same server that just refused us.
+  const as = await startFakeAuthServer({ rejectRegistration: true });
+  try {
+    const token = await authorize("remote", await metadataFor(as), {
+      clientId: "static-client",
+      openBrowser: (url) => as.authorizeViaBrowser(url),
+    });
+    assert.equal(token.clientId, "static-client");
+    assert.match(token.accessToken, /^access-/);
+  } finally {
+    await as.close();
+  }
+});
+
+test("authorize: a configured client_secret is presented at the token endpoint", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const token = await authorize("remote", await metadataFor(as), {
+      clientId: "confidential-client",
+      clientSecret: "s3cret-from-env",
+      openBrowser: (url) => as.authorizeViaBrowser(url),
+    });
+
+    assert.deepEqual(as.clientSecretsSeen, ["s3cret-from-env"]);
+    // Stored alongside the grant so a later refresh presents it too —
+    // otherwise the first refresh would fail for a confidential client.
+    assert.equal(token.clientSecret, "s3cret-from-env");
+  } finally {
+    await as.close();
+  }
+});
+
+test("authorize: no client_secret is sent when none was configured", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    await authorize("remote", await metadataFor(as), { openBrowser: (url) => as.authorizeViaBrowser(url) });
+    assert.deepEqual(as.clientSecretsSeen, [], "a public client must not send an empty or spurious secret");
   } finally {
     await as.close();
   }

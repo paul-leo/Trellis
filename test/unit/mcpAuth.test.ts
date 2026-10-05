@@ -268,3 +268,195 @@ test("gateway: an explicit Authorization header in canonical wins over a stored 
     await as.close();
   }
 });
+
+// --- pre-registered client metadata (trellis-mcp-oauth-static-client) --
+
+/** A home whose canonical `remote` server carries the object-form auth. */
+function homeWithAuthBlock(as: FakeAuthServer, authYaml: string, secretsPolicyYaml = "allowed_vars: []\nreject_patterns: []\n"): string {
+  const home = scratchHome(`servers:
+  remote:
+    transport: http
+    url: "${as.resourceUrl}"
+    auth:
+${authYaml}
+`);
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), secretsPolicyYaml);
+  return home;
+}
+
+test("mcp auth: a canonical client_id skips dynamic registration", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const home = homeWithAuthBlock(as, '      kind: oauth\n      client_id: "pub-from-provider"');
+    const { exitCode } = await quietly(() =>
+      runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }),
+    );
+
+    assert.equal(exitCode, 0);
+    assert.equal(as.registrations, 0, "a provider that refuses DCR must never be asked to register");
+    // The stored grant carries the client identity it was issued to, so a
+    // later silent refresh presents the same one (tasks.md 2.5).
+    assert.equal(readToken(home, "remote")?.clientId, "pub-from-provider");
+  } finally {
+    await as.close();
+  }
+});
+
+test("mcp auth: client_secret_env resolves through secrets.policy.yaml and reaches the token endpoint", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const envFile = join(mkdtempSync(join(tmpdir(), "trellis-mcpauth-env-")), "secrets.env");
+    writeFileSync(envFile, "FIGMA_CLIENT_SECRET=resolved-from-env-file\n");
+    const home = homeWithAuthBlock(
+      as,
+      '      kind: oauth\n      client_id: "confidential"\n      client_secret_env: FIGMA_CLIENT_SECRET',
+      `allowed_vars: [FIGMA_CLIENT_SECRET]\nreject_patterns: []\nenv_file: "${envFile}"\n`,
+    );
+
+    const { exitCode } = await quietly(() =>
+      runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }),
+    );
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(as.clientSecretsSeen, ["resolved-from-env-file"]);
+    // D8: resolved secret values belong in the token store and nowhere else.
+    assert.ok(!readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8").includes("resolved-from-env-file"));
+  } finally {
+    await as.close();
+  }
+});
+
+test("mcp auth: an unresolvable client_secret_env names the variable and the source, never a value", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const home = homeWithAuthBlock(as, '      kind: oauth\n      client_id: "confidential"\n      client_secret_env: NEVER_SET_ANYWHERE');
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (message: string) => errors.push(message);
+    let browserOpened = false;
+    try {
+      const { exitCode } = await runMcpAuth({
+        serverName: "remote",
+        homeDir: home,
+        openBrowser: () => {
+          browserOpened = true;
+        },
+      });
+
+      assert.equal(exitCode, 1);
+      const message = errors.join("\n");
+      assert.match(message, /NEVER_SET_ANYWHERE/, "the variable NAME is what the user has to go set");
+      assert.match(message, /process environment/);
+      // Failing before the browser opens is the point: sending someone
+      // through a consent screen for a grant that cannot be redeemed is
+      // worse than an immediate error.
+      assert.equal(browserOpened, false);
+    } finally {
+      console.error = original;
+    }
+  } finally {
+    await as.close();
+  }
+});
+
+test("mcp auth: the scalar form and a metadata-less object authorize identically", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const scalarHome = scratchHome(`servers:
+  remote:
+    transport: http
+    url: "${as.resourceUrl}"
+    auth: oauth
+`);
+    const objectHome = homeWithAuthBlock(as, "      kind: oauth");
+
+    for (const home of [scalarHome, objectHome]) {
+      const { exitCode } = await quietly(() =>
+        runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }),
+      );
+      assert.equal(exitCode, 0);
+    }
+
+    // Both fell back to DCR, exactly as before the object form existed
+    // (design.md D1: metadata extends the flow, it never changes routing).
+    assert.equal(as.registrations, 2);
+  } finally {
+    await as.close();
+  }
+});
+
+test("mcp auth: a registration-refusing provider fails with the remediation, then succeeds once client_id is set", async () => {
+  const as = await startFakeAuthServer({ rejectRegistration: true });
+  try {
+    const home = scratchHome(`servers:
+  remote:
+    transport: http
+    url: "${as.resourceUrl}"
+`);
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (message: string) => errors.push(message);
+    try {
+      const { exitCode } = await runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) });
+      assert.equal(exitCode, 1);
+      assert.match(errors.join("\n"), /unauthorized_client/);
+      assert.match(errors.join("\n"), /auth\.client_id/);
+    } finally {
+      console.error = original;
+    }
+
+    // Following the message's own advice has to be sufficient.
+    writeFileSync(
+      join(home, ".trellis", "mcp", "servers.yaml"),
+      `servers:\n  remote:\n    transport: http\n    url: "${as.resourceUrl}"\n    auth:\n      kind: oauth\n      client_id: "team-client"\n`,
+    );
+    const retry = await quietly(() => runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }));
+    assert.equal(retry.exitCode, 0);
+    assert.equal(readToken(home, "remote")?.clientId, "team-client");
+  } finally {
+    await as.close();
+  }
+});
+
+test("mcp auth: a later refresh presents the same confidential-client identity", async () => {
+  // tasks.md 2.5 in full: persisting the grant paired with the client
+  // identity is only worth anything if the refresh actually uses it.
+  const as = await startFakeAuthServer();
+  try {
+    const envFile = join(mkdtempSync(join(tmpdir(), "trellis-mcpauth-env-")), "secrets.env");
+    writeFileSync(envFile, "CONFIDENTIAL_SECRET=stored-secret\n");
+    const home = homeWithAuthBlock(
+      as,
+      '      kind: oauth\n      client_id: "confidential"\n      client_secret_env: CONFIDENTIAL_SECRET',
+      `allowed_vars: [CONFIDENTIAL_SECRET]\nreject_patterns: []\nenv_file: "${envFile}"\n`,
+    );
+
+    await quietly(() => runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }));
+    const stored = readToken(home, "remote")!;
+    assert.equal(stored.clientSecret, "stored-secret");
+
+    // Expire the grant, then re-run: this must refresh, not re-authorize.
+    writeToken(home, "remote", { ...stored, expiresAt: Date.now() - 1000 });
+    const grantsBefore = as.grants.length;
+    let browserOpened = false;
+    const { exitCode } = await quietly(() =>
+      runMcpAuth({
+        serverName: "remote",
+        homeDir: home,
+        openBrowser: () => {
+          browserOpened = true;
+        },
+      }),
+    );
+
+    assert.equal(exitCode, 0);
+    assert.equal(browserOpened, false);
+    assert.deepEqual(
+      as.grants.slice(grantsBefore).map((grant) => grant.grantType),
+      ["refresh_token"],
+    );
+    assert.deepEqual(as.clientSecretsSeen, ["stored-secret", "stored-secret"]);
+  } finally {
+    await as.close();
+  }
+});

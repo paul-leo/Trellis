@@ -8,6 +8,37 @@
 export type Transport = "stdio" | "http" | "sse";
 export type McpAuthMode = "oauth";
 
+/**
+ * Object form of the OAuth classification (trellis-mcp-oauth-static-client
+ * design.md D1). `kind` is the only discriminator; `client_id` is a public
+ * literal by design; `client_secret_env` is a variable NAME resolved
+ * through the secrets policy at authorization time. There is deliberately
+ * no field for a secret value in any form.
+ */
+export interface McpAuthConfig {
+  kind: McpAuthMode;
+  clientId?: string;
+  clientSecretEnv?: string;
+}
+
+/** True when `auth` classifies the server as OAuth, in either form. Every
+ * former `def.auth === "oauth"` check must go through this now that the
+ * object form exists — a strict-equality check would silently strip the
+ * OAuth routing from metadata-bearing servers. */
+export function isOAuthAuth(auth: McpAuthMode | McpAuthConfig | undefined): boolean {
+  return auth === "oauth" || (typeof auth === "object" && auth !== null && auth.kind === "oauth");
+}
+
+/** The pre-registered client metadata a classification carries. A scalar
+ * carries none — both forms route identically (design.md D1). */
+export function oauthClientMetadata(auth: McpAuthMode | McpAuthConfig | undefined): { clientId?: string; clientSecretEnv?: string } {
+  if (typeof auth !== "object" || auth === null) return {};
+  const meta: { clientId?: string; clientSecretEnv?: string } = {};
+  if (auth.clientId !== undefined) meta.clientId = auth.clientId;
+  if (auth.clientSecretEnv !== undefined) meta.clientSecretEnv = auth.clientSecretEnv;
+  return meta;
+}
+
 export type AgentId = "claude-code" | "codex" | "kiro" | "pi" | "kimi-code" | "zcode";
 
 export const ALL_AGENTS: readonly AgentId[] = [
@@ -44,8 +75,11 @@ export function resolveScope(scope: Scope, managedAgents: readonly AgentId[]): r
 export interface McpServerDef {
   transport: Transport;
   /** Explicit authorization classification. Absence means ordinary MCP;
-   * Trellis never infers OAuth from a URL or a transient 401. */
-  auth?: McpAuthMode;
+   * Trellis never infers OAuth from a URL or a transient 401. The scalar
+   * form and a metadata-less object are equivalent — metadata extends the
+   * authorization flow, it never changes routing
+   * (trellis-mcp-oauth-static-client design.md D1). */
+  auth?: McpAuthMode | McpAuthConfig;
   /** stdio only */
   command?: string;
   args?: string[];

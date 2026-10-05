@@ -20,7 +20,7 @@ import { resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { connectServer, withTimeout, DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
 import { McpToolRegistry, type AggregatedTool } from "../lib/mcpToolRegistry.js";
 import { withOAuthHeader } from "../lib/gatewayBackend.js";
-import { ALL_AGENTS } from "../core/types.js";
+import { ALL_AGENTS, isOAuthAuth } from "../core/types.js";
 import { toParametersSchema, toPiContent, type McpContentItem } from "./schemaTranslate.js";
 
 /** Re-exported so `trellis-mcp-connect-timeout`'s existing test keeps
@@ -108,7 +108,7 @@ export default async function trellisMcpBridge(
     desired.map(async ({ name, def }) => {
       let client: Client;
       try {
-        const effectiveDef = def.auth === "oauth" && def.url
+        const effectiveDef = isOAuthAuth(def.auth) && def.url
           ? await withOAuthHeader(name, def, homeDir)
           : def;
         client = await connectServer(effectiveDef, canonical.secretsPolicy, connectTimeoutMs, CLIENT_INFO);

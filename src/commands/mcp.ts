@@ -18,8 +18,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadCanonicalSource, upsertServerYaml, removeServerYaml, type ServersYamlWriteResult } from "../core/canonical.js";
 import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
-import { ALL_AGENTS, resolveScope } from "../core/types.js";
+import { ALL_AGENTS, isOAuthAuth, oauthClientMetadata, resolveScope } from "../core/types.js";
 import type { AgentId, McpAuthMode, McpConfig, McpServerDef, Transport } from "../core/types.js";
+import { isValidSecretVarName } from "../lib/secretEnv.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
@@ -158,7 +159,16 @@ function serversYamlPath(homeDir: string): string {
 export interface McpListEntry {
   name: string;
   transport: Transport;
+  /** Normalized: `oauth` in either the scalar or the object form reports as
+   * the scalar here — the listing reports classification, not metadata. */
   auth?: McpAuthMode;
+  /** Presence of pre-registered client metadata
+   * (trellis-mcp-oauth-static-client task 3.2) — `true` when the object form
+   * carries a `client_id`. A presence flag, deliberately not the id itself:
+   * the id is public-by-design, but listing output stays stable if that
+   * ever changes and there is one less place a future secret-looking field
+   * could leak through. */
+  preRegisteredClient?: true;
   enabled: boolean;
   agents: readonly AgentId[];
   command?: string;
@@ -180,7 +190,8 @@ export function collectMcpListPlan(homeDir: string = homedir()): McpListEntry[] 
   return Object.entries(canonical.mcp.servers).map(([name, def]) => ({
     name,
     transport: def.transport,
-    auth: def.auth,
+    auth: isOAuthAuth(def.auth) ? ("oauth" as const) : undefined,
+    preRegisteredClient: oauthClientMetadata(def.auth).clientId !== undefined ? (true as const) : undefined,
     enabled: def.enabled ?? true,
     agents: resolveScope(def.agents, canonical.managedAgents),
     command: def.command,
@@ -209,7 +220,7 @@ export function runMcpList(opts: { homeDir?: string; json?: boolean } = {}): { e
   } else {
     for (const e of entries) {
       const scope = e.agents.length > 0 ? e.agents.join(", ") : "(no managed agent reaches it)";
-      console.log(`${e.name} (${e.transport}${e.auth === "oauth" ? ", oauth" : ""})${e.enabled ? "" : " [disabled]"} — ${scope}`);
+      console.log(`${e.name} (${e.transport}${e.auth === "oauth" ? ", oauth" : ""}${e.preRegisteredClient ? ", pre-registered client" : ""})${e.enabled ? "" : " [disabled]"} — ${scope}`);
       if (e.env && e.env.length > 0) console.log(`   env: ${e.env.join(", ")} (values never read/printed)`);
       if (e.staticEnv) console.log(`   static_env: ${Object.entries(e.staticEnv).map(([k, v]) => `${k}=${v}`).join(", ")}`);
     }
@@ -256,6 +267,18 @@ export function parseMcpAddArgs(argv: readonly string[]): McpAddRawArgs {
     staticEnv: flag("--static-env"),
     agents: flag("--agents"),
     enabled: flag("--enabled"),
+  };
+}
+
+export function parseMcpSetArgs(argv: readonly string[]): McpSetAuthRawArgs {
+  const flag = (name: string): string | undefined => {
+    const i = argv.indexOf(name);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  return {
+    auth: flag("--auth"),
+    clientId: flag("--client-id"),
+    clientSecretEnv: flag("--client-secret-env"),
   };
 }
 
@@ -364,29 +387,127 @@ export interface McpSetAuthPlan {
   def?: McpServerDef;
 }
 
-export function collectMcpSetAuthPlan(name: string | undefined, auth: string | undefined, homeDir: string = homedir()): McpSetAuthPlan {
-  const mode = auth === "oauth" || auth === "none" ? auth : undefined;
-  if (!name) return { name: "(none)", auth: (mode ?? "none"), action: "invalid-input", detail: "usage: trellis mcp set <name> --auth oauth|none" };
-  if (!mode) return { name, auth: "none", action: "invalid-input", detail: `--auth must be "oauth" or "none" (got ${auth ?? "(missing)"})` };
+/** Raw, unvalidated CLI flag values for `mcp set` — same posture as
+ * `McpAddRawArgs`: the parser stays a dumb reader, validation lives in the
+ * plan collector. */
+export interface McpSetAuthRawArgs {
+  auth?: string;
+  /** Public literal by design (design.md D2) — the one field it is fine to
+   * pass on a command line. Never echoed back in output or errors. */
+  clientId?: string;
+  /** A variable NAME, never a secret value. */
+  clientSecretEnv?: string;
+}
+
+/**
+ * Sets or clears the OAuth classification, and optionally the
+ * pre-registered client metadata that goes with it
+ * (trellis-mcp-oauth-static-client tasks.md 3.1).
+ *
+ * Three rules the flag interaction has to get right:
+ *   - A bare `--auth oauth` is a re-classification, not a reset: an entry
+ *     that already carries a `client_id` keeps it. Silently dropping
+ *     metadata here would turn "make sure this is OAuth" into "break my
+ *     Figma setup", which is exactly the kind of invisible precedence
+ *     `mcp set` exists to avoid.
+ *   - `--auth none` is the reset — it strips the whole `auth` key,
+ *     metadata included, because that is the only reading of "none" that
+ *     leaves the file in a self-consistent state.
+ *   - `--client-id` / `--client-secret-env` require an explicit
+ *     `--auth oauth` in the same invocation. Implying it would make a
+ *     typo'd flag name mutate the classification.
+ */
+export function collectMcpSetAuthPlan(name: string | undefined, raw: McpSetAuthRawArgs, homeDir: string = homedir()): McpSetAuthPlan {
+  const mode = raw.auth === "oauth" || raw.auth === "none" ? raw.auth : undefined;
+  if (!name) return { name: "(none)", auth: (mode ?? "none"), action: "invalid-input", detail: "usage: trellis mcp set <name> --auth oauth|none [--client-id <id>] [--client-secret-env <NAME>]" };
+
+  const hasClientFlags = raw.clientId !== undefined || raw.clientSecretEnv !== undefined;
+  const clientFlagsDetail = "--client-id / --client-secret-env require an explicit --auth oauth in the same command";
+  if (mode === undefined) {
+    // Naming the missing --auth is the actionable error when that is what
+    // the user was reaching for; otherwise report the invalid value itself.
+    if (hasClientFlags) return { name, auth: "none", action: "invalid-input", detail: clientFlagsDetail };
+    return { name, auth: "none", action: "invalid-input", detail: `--auth must be "oauth" or "none" (got ${raw.auth ?? "(missing)"})` };
+  }
+  if (hasClientFlags && mode !== "oauth") {
+    return { name, auth: mode, action: "invalid-input", detail: clientFlagsDetail };
+  }
+  if (raw.clientId === "") {
+    return { name, auth: mode, action: "invalid-input", detail: "--client-id must not be empty" };
+  }
+  if (raw.clientSecretEnv !== undefined && !isValidSecretVarName(raw.clientSecretEnv)) {
+    // The value is deliberately not echoed: a name-shaped field failing
+    // this check is at best a typo and at worst a pasted credential
+    // (design.md D2).
+    return {
+      name,
+      auth: mode,
+      action: "invalid-input",
+      detail: "--client-secret-env must be a variable NAME (e.g. FIGMA_CLIENT_SECRET), never a secret value",
+    };
+  }
+
   const canonical = loadCanonicalSource(homeDir);
   const current = canonical.mcp.servers[name];
   if (!current) return { name, auth: mode, action: "not-found", detail: `no canonical MCP server named "${name}"` };
   if (mode === "oauth" && !current.url) {
     return { name, auth: mode, action: "invalid-input", detail: "auth: oauth requires an http or sse MCP server" };
   }
-  const next = mode === "oauth" ? { ...current, auth: "oauth" as const } : (() => {
+
+  // Same load-time guard as `assertAuthMetadataClean`, applied at write
+  // time so an offending value never reaches the file in the first place.
+  const offending = [
+    ["client-id", raw.clientId],
+    ["client-secret-env", raw.clientSecretEnv],
+  ].find(([, value]) => value !== undefined && canonical.secretsPolicy.rejectPatterns.some((pattern) => pattern.test(value)));
+  if (offending) {
+    return {
+      name,
+      auth: mode,
+      action: "invalid-input",
+      detail: `--${offending[0]} matches a secrets.policy.yaml reject pattern — client-id must be the provider-published id, client-secret-env a variable name; the offending value is intentionally not printed`,
+    };
+  }
+
+  let next: McpServerDef;
+  if (mode === "none") {
     const { auth: _auth, ...withoutAuth } = current;
-    return withoutAuth;
-  })();
+    next = withoutAuth;
+  } else if (!hasClientFlags && isOAuthAuth(current.auth)) {
+    // Already classified and no new metadata: a true no-op. Rewriting the
+    // scalar into a metadata-less object here would churn the file to say
+    // exactly what it already said (design.md D1 makes them equivalent).
+    next = current;
+  } else if (!hasClientFlags) {
+    // Newly classified, nothing to record — the scalar is the documented
+    // shorthand, so write the smaller of two equivalent forms.
+    next = { ...current, auth: "oauth" };
+  } else {
+    const existing = oauthClientMetadata(current.auth);
+    // Per-field override, not replacement: `--client-id` alone keeps a
+    // `client_secret_env` that is already configured.
+    const clientId = raw.clientId ?? existing.clientId;
+    const clientSecretEnv = raw.clientSecretEnv ?? existing.clientSecretEnv;
+    next = {
+      ...current,
+      auth: {
+        kind: "oauth",
+        ...(clientId !== undefined ? { clientId } : {}),
+        ...(clientSecretEnv !== undefined ? { clientSecretEnv } : {}),
+      },
+    };
+  }
+
   if (JSON.stringify(current) === JSON.stringify(next)) return { name, auth: mode, action: "already-set", detail: `auth is already ${mode}`, def: next };
-  return { name, auth: mode, action: "updated", detail: `set auth to ${mode}`, def: next };
+  const changed = hasClientFlags ? " and client metadata" : "";
+  return { name, auth: mode, action: "updated", detail: `set auth to ${mode}${changed}`, def: next };
 }
 
-export function runMcpSetAuth(name: string | undefined, auth: string | undefined, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
+export function runMcpSetAuth(name: string | undefined, raw: McpSetAuthRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
   const homeDir = opts.homeDir ?? homedir();
   let plan: McpSetAuthPlan;
   try {
-    plan = collectMcpSetAuthPlan(name, auth, homeDir);
+    plan = collectMcpSetAuthPlan(name, raw, homeDir);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return { exitCode: 1 };

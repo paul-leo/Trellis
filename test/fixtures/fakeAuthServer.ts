@@ -24,6 +24,12 @@ export interface FakeAuthServerOptions {
   /** Omit the registration endpoint from metadata, to exercise the
    * "AS offers no DCR" path. */
   noRegistration?: boolean;
+  /** Advertise the registration endpoint but refuse every attempt with
+   * `unauthorized_client` — the allowlist behavior (Figma), as distinct
+   * from `noRegistration`, which is the endpoint simply being absent.
+   * The distinction matters: only the first is what a real provider does,
+   * and the client is expected to handle both. */
+  rejectRegistration?: boolean;
   /** Serve AS metadata only at the path-aware well-known URL, not the
    * root one — the shape a server mounted under a path produces. */
   pathAwareMetadataOnly?: boolean;
@@ -49,6 +55,10 @@ export interface FakeAuthServer {
   /** Every token grant this server has served, for assertions about how
    * many actually happened. */
   readonly grants: Array<{ grantType: string; at: number }>;
+  /** Client secrets presented at the token endpoint, so a test can prove
+   * a resolved secret actually travelled — and, just as importantly, that
+   * it is absent when none was configured. */
+  readonly clientSecretsSeen: string[];
   readonly registrations: number;
   /** Refresh tokens this server has invalidated by rotation. */
   isRefreshTokenValid(token: string): boolean;
@@ -66,6 +76,7 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
   const pending = new Map<string, PendingAuthorization>();
   const validRefreshTokens = new Set<string>();
   const grants: Array<{ grantType: string; at: number }> = [];
+  const clientSecretsSeen: string[] = [];
   let registrations = 0;
 
   let base = "";
@@ -110,6 +121,12 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
     // --- dynamic client registration (RFC 7591) ----------------------
     if (url.pathname === "/register" && req.method === "POST") {
       if (options.noRegistration) return json(404, { error: "not_found" });
+      if (options.rejectRegistration) {
+        // What Figma actually answers: a genuine RFC 6749 §5.2 error body,
+        // not a bare 4xx. A client that only reads the status code loses
+        // the one piece of information that says what to do instead.
+        return json(401, { error: "unauthorized_client", error_description: "client registration is not permitted" });
+      }
       registrations += 1;
       const clientId = `client-${randomBytes(6).toString("hex")}`;
       clients.add(clientId);
@@ -146,6 +163,8 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
       const params = new URLSearchParams(body);
       const grantType = params.get("grant_type") ?? "";
       grants.push({ grantType, at: Date.now() });
+      const presentedSecret = params.get("client_secret");
+      if (presentedSecret) clientSecretsSeen.push(presentedSecret);
 
       if (grantType === "authorization_code") {
         const code = params.get("code") ?? "";
@@ -204,6 +223,7 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
     url: base,
     resourceUrl: `${base}/mcp`,
     grants,
+    clientSecretsSeen,
     get registrations() {
       return registrations;
     },

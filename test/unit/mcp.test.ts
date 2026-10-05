@@ -12,6 +12,7 @@ import {
   collectMcpAddPlan,
   collectMcpListPlan,
   collectMcpRemovePlan,
+  collectMcpSetAuthPlan,
   collectMcpSyncReport,
   applyMcpAddPlan,
   applyMcpRemovePlan,
@@ -20,6 +21,7 @@ import {
   runMcpSetAuth,
   runMcpRemove,
 } from "../../src/commands/mcp.js";
+import { loadCanonicalSource } from "../../src/core/canonical.js";
 import { backupsRoot } from "../../src/lib/backup.js";
 
 function scratchHome(): string {
@@ -333,10 +335,10 @@ test("mcp add: --auth oauth is accepted only for remote transports", () => {
 test("mcp set auth: updates and clears an explicit OAuth classification", () => {
   const home = scratchHome();
   initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
-  const set = runMcpSetAuth("figma", "oauth", { homeDir: home });
+  const set = runMcpSetAuth("figma", { auth: "oauth" }, { homeDir: home });
   assert.equal(set.exitCode, 0);
   assert.match(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /auth: oauth/);
-  const clear = runMcpSetAuth("figma", "none", { homeDir: home });
+  const clear = runMcpSetAuth("figma", { auth: "none" }, { homeDir: home });
   assert.equal(clear.exitCode, 0);
   assert.doesNotMatch(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf8"), /auth:/);
 });
@@ -446,4 +448,127 @@ test("mcp add/remove: --dry-run computes the plan but writes nothing", async () 
   const removeResult = await runMcpRemove("sample", { homeDir: home, dryRun: true });
   assert.equal(removeResult.exitCode, 0);
   assert.equal(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8"), before, "dry-run remove must not write");
+});
+
+// --- mcp set: pre-registered client metadata (tasks.md 3.1) -----------
+
+test("mcp set: --client-id writes the object form with the snake_case keys the loader reads back", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+
+  const { exitCode } = runMcpSetAuth("figma", { auth: "oauth", clientId: "published-id", clientSecretEnv: "FIGMA_CLIENT_SECRET" }, { homeDir: home });
+  assert.equal(exitCode, 0);
+
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.match(written, /client_id: published-id/);
+  assert.match(written, /client_secret_env: FIGMA_CLIENT_SECRET/);
+
+  // The round trip is the real assertion: camelCase leaking into the file
+  // would make it unreadable by the loader that just wrote it.
+  const def = loadCanonicalSource(home).mcp.servers.figma;
+  assert.deepEqual(def.auth, { kind: "oauth", clientId: "published-id", clientSecretEnv: "FIGMA_CLIENT_SECRET" });
+});
+
+test("mcp set: a bare --auth oauth preserves existing client metadata instead of resetting it", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+  runMcpSetAuth("figma", { auth: "oauth", clientId: "published-id" }, { homeDir: home });
+
+  const { exitCode } = runMcpSetAuth("figma", { auth: "oauth" }, { homeDir: home });
+
+  assert.equal(exitCode, 0);
+  assert.equal(loadCanonicalSource(home).mcp.servers.figma.auth?.clientId, "published-id", "'make sure this is OAuth' must not become 'break my setup'");
+});
+
+test("mcp set: --auth none strips the metadata along with the classification", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+  runMcpSetAuth("figma", { auth: "oauth", clientId: "published-id", clientSecretEnv: "FIGMA_CLIENT_SECRET" }, { homeDir: home });
+
+  runMcpSetAuth("figma", { auth: "none" }, { homeDir: home });
+
+  const written = readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8");
+  assert.doesNotMatch(written, /auth/);
+  assert.equal(loadCanonicalSource(home).mcp.servers.figma.auth, undefined);
+});
+
+test("mcp set: client flags without an explicit --auth oauth are refused, not implied", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+
+  const plan = collectMcpSetAuthPlan("figma", { clientId: "published-id" }, home);
+
+  assert.equal(plan.action, "invalid-input");
+  assert.match(plan.detail, /require an explicit --auth oauth/);
+  assert.equal(loadCanonicalSource(home).mcp.servers.figma.auth, undefined, "a refused plan must not have written anything");
+});
+
+test("mcp set: a non-variable-name in the secret position is refused without echoing it", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+
+  const plan = collectMcpSetAuthPlan("figma", { auth: "oauth", clientSecretEnv: "shhh-not-a-name" }, home);
+
+  assert.equal(plan.action, "invalid-input");
+  assert.match(plan.detail, /must be a variable NAME/);
+  // At best a typo, at worst a pasted credential — the message says which
+  // field, never what was in it (design.md D2).
+  assert.doesNotMatch(plan.detail, /shhh-not-a-name/);
+});
+
+test("mcp set: an explicit empty --client-id is refused rather than written as a blank", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+
+  const plan = collectMcpSetAuthPlan("figma", { auth: "oauth", clientId: "" }, home);
+
+  assert.equal(plan.action, "invalid-input");
+  assert.match(plan.detail, /must not be empty/);
+});
+
+test("mcp set: a value matching a reject_patterns entry is refused at write time, unnamed", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+  const secretLooking = "ghp_0123456789abcdefghijklmnopqrstuvwx";
+  // Write the value into the FIXTURE policy, not into canonical: the point
+  // is the write-time guard, and the load-time guard would refuse the file
+  // before a plan could even be computed.
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), 'allowed_vars: []\nreject_patterns: ["^ghp_"]\n');
+
+  const plan = collectMcpSetAuthPlan("figma", { auth: "oauth", clientId: secretLooking }, home);
+
+  assert.equal(plan.action, "invalid-input");
+  assert.match(plan.detail, /reject pattern/);
+  assert.doesNotMatch(plan.detail, /ghp_0123456789/, "the offending value is never echoed");
+});
+
+test("mcp set: a pre-registered client is reported by presence in mcp list, never by value", () => {
+  const home = scratchHome();
+  initCanonical(home, "servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n");
+  runMcpSetAuth("figma", { auth: "oauth", clientId: "published-id", clientSecretEnv: "FIGMA_CLIENT_SECRET" }, { homeDir: home });
+
+  const entry = collectMcpListPlan(home).find((e) => e.name === "figma");
+
+  // Normalized to the scalar: the listing reports classification, and the
+  // object form is a classification like any other (tasks.md 3.2).
+  assert.equal(entry?.auth, "oauth");
+  assert.equal(entry?.preRegisteredClient, true);
+  assert.equal(JSON.stringify(entry).includes("published-id"), false, "the listing never carries the id or the name");
+  assert.equal(JSON.stringify(entry).includes("FIGMA_CLIENT_SECRET"), false);
+});
+
+test("mcp set: a metadata-less object and the scalar form list identically", () => {
+  const home = scratchHome();
+  initCanonical(
+    home,
+    "servers:\n  plain:\n    transport: http\n    url: https://a.example/mcp\n    auth: oauth\n  objecty:\n    transport: http\n    url: https://b.example/mcp\n    auth:\n      kind: oauth\n",
+  );
+
+  const entries = collectMcpListPlan(home);
+
+  for (const name of ["plain", "objecty"]) {
+    const entry = entries.find((e) => e.name === name);
+    assert.equal(entry?.auth, "oauth");
+    assert.equal(entry?.preRegisteredClient, undefined, `${name}: no client metadata to report`);
+  }
 });

@@ -14,8 +14,9 @@ import { loadCanonicalSource } from "../core/canonical.js";
 import { discoverAuthorizationServer, parseResourceMetadataUrl } from "../lib/oauth/discovery.js";
 import { authorize } from "../lib/oauth/flow.js";
 import { ensureFreshToken } from "../lib/oauth/refresh.js";
+import { resolveSecretEnv } from "../lib/secretEnv.js";
 import { isExpired, readToken, tokenPath, writeToken } from "../lib/oauth/store.js";
-import type { McpServerDef } from "../core/types.js";
+import { oauthClientMetadata, type McpServerDef, type SecretsPolicy } from "../core/types.js";
 
 export interface RunMcpAuthOptions {
   serverName: string;
@@ -102,12 +103,42 @@ async function authorizeServer(opts: RunMcpAuthOptions, homeDir: string): Promis
     );
   }
 
+  // Pre-registered client metadata from canonical (design.md D3): a
+  // `client_id` here means the RFC 7591 step is skipped entirely, which is
+  // the only way to authorize against a provider that refuses registration.
+  // The secret is resolved by NAME through the same policy machinery `env`
+  // uses, and the resolved value never leaves this call — it goes straight
+  // into `authorize`, which pairs it with the grant it persists.
+  const client = oauthClientMetadata(def.auth);
+  let clientSecret: string | undefined;
+  if (client.clientSecretEnv) {
+    const { [client.clientSecretEnv]: value } = resolveSecretEnv([client.clientSecretEnv], canonical.secretsPolicy);
+    if (value === undefined) {
+      throw new Error(
+        `auth.client_secret_env is "${client.clientSecretEnv}", but no value for that variable was found in ${secretSourceLabel(canonical.secretsPolicy)} — set it there, or drop the field if this provider issues a public client`,
+      );
+    }
+    clientSecret = value;
+  }
+
   const token = await authorize(opts.serverName, metadata, {
     ...(opts.openBrowser ? { openBrowser: opts.openBrowser } : {}),
     ...(metadata.scopesSupported?.length ? { scope: metadata.scopesSupported.join(" ") } : {}),
+    ...(client.clientId !== undefined ? { clientId: client.clientId } : {}),
+    ...(clientSecret !== undefined ? { clientSecret } : {}),
   });
   writeToken(homeDir, opts.serverName, token);
   return { server: opts.serverName, status: "authorized", tokenFile: file, ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}) };
+}
+
+/**
+ * Names where a declared secret was looked for, so an unresolvable name
+ * points at the file to edit. Mirrors `resolveSecretEnv`'s own two
+ * sources: an explicit `env_file` is the sole source when set, otherwise
+ * the ambient process environment.
+ */
+function secretSourceLabel(policy: SecretsPolicy): string {
+  return policy.envFile ? `${policy.envFile} (secrets.policy.yaml env_file)` : "the process environment (no env_file is set in secrets.policy.yaml)";
 }
 
 /**

@@ -216,6 +216,17 @@ every agent's adapter renders it through the exact same reference mechanism
 `env` already uses, and the pi bridge resolves it through the exact same
 `resolveSecretEnv` call.
 
+The same reference-not-value rule is what shapes OAuth client metadata
+(trellis-mcp-oauth-static-client). A public client's `client_id` is published
+by design — it rides in the browser URL on every authorization — so it is a
+plain literal, comparable to how `mcp-remote --static-oauth-client-info` and
+`claude mcp add --client-id` already treat it. A `client_secret` is the
+opposite kind of thing, so it enters only as `client_secret_env`, a variable
+NAME resolved through this same machinery; there is deliberately no literal
+secret field. Which providers accept an unregistered client at all is a
+per-provider question — see docs/mcp-oauth-matrix.md, including its note that
+that matrix records observed behavior, not provider policy.
+
 ## pi coding agent — the one place we write real code, not config generation
 
 Reverse-engineered directly from the installed binary

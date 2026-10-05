@@ -118,6 +118,24 @@ servers:
     # Explicit OAuth classification keeps this server direct when an Agent
     # uses gateway mode. Trellis never infers OAuth from a URL or 401.
     # auth: oauth
+    #
+    # Object form (trellis-mcp-oauth-static-client): for a provider that
+    # rejects Dynamic Client Registration (Figma does — `unauthorized_client`)
+    # and requires a pre-registered client. `kind: oauth` is the only
+    # discriminator and the only required key; a bare `auth: oauth` above and
+    # a metadata-less `{ kind: oauth }` are exactly equivalent.
+    #   - `client_id` is a PUBLIC literal by design — fine to commit. Use the
+    #     identifier the PROVIDER published for this client; a self-registered
+    #     one from your own account only if you accept managing it.
+    #   - `client_secret_env` is a variable NAME, resolved through
+    #     secrets.policy.yaml at `trellis mcp auth` time — never a secret
+    #     value, and never a literal secret field (there is none).
+    # Placeholders below on purpose: only provider-published identifiers may
+    # ever be pre-filled in a distribution artifact.
+    # auth:
+    #   kind: oauth
+    #   client_id: "<provider-published-client-id>"
+    #   client_secret_env: FIGMA_CLIENT_SECRET
 
   # Example of a private/agent-specific server: only Claude Code has a use
   # for this one, so the other three agents never see it defined at all.

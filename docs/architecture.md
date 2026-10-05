@@ -266,6 +266,25 @@ flow for Claude Code/Codex/Kiro; Pi's bridge is the client for its direct OAuth
 connection and may use Trellis's own OAuth store. Trellis never infers this
 classification from a URL or a transient 401.
 
+The classification optionally carries pre-registered client metadata, for
+providers that refuse Dynamic Client Registration and require an allowlisted
+client instead:
+
+```yaml
+auth:
+  kind: oauth
+  client_id: "<provider-published-id>"    # public by design, literal
+  client_secret_env: PROVIDER_CLIENT_SECRET  # a NAME, resolved via secrets.policy.yaml
+```
+
+`client_id` wins over DCR when present; DCR stays the fallback when it is
+absent. There is deliberately no literal secret field — a secret enters only
+as a variable name, the same `env`-style discipline everything else follows.
+See docs/mcp-oauth-matrix.md for which providers are open to registration and
+which are not, and for the distribution rule: examples, docs, and seed data
+ship placeholders only, and only provider-**published** identifiers may ever
+be pre-filled.
+
 Trellis still implements the client half itself — discovery (RFC 8414 /
 RFC 9728), dynamic client registration (RFC 7591), authorization code with
 PKCE S256 (RFC 7636), and the refresh grant — in `src/lib/oauth/`, but that

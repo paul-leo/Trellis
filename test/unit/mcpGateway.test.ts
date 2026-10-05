@@ -102,6 +102,28 @@ gateway:
   assert.deepEqual(resolveGatewayUpstreams("claude-code", canonical).upstreams.map((u) => u.name), ["ordinary"]);
 });
 
+test("gateway upstreams: the object form of the classification is excluded too, not just the scalar", () => {
+  // Regression guard for a real bug class: any `def.auth === "oauth"`
+  // comparison reads the metadata-bearing object as "not OAuth" and lets
+  // the server leak into the gateway, where its token is never resolved
+  // (trellis-mcp-oauth-static-client design.md D1).
+  const canonical = loadCanonicalSource(scratchHome(`
+servers:
+  ordinary:
+    transport: stdio
+    command: node
+  figma:
+    transport: http
+    url: https://mcp.figma.com/mcp
+    auth:
+      kind: oauth
+      client_id: published-id
+gateway:
+  enabled: true
+`));
+  assert.deepEqual(resolveGatewayUpstreams("claude-code", canonical).upstreams.map((u) => u.name), ["ordinary"]);
+});
+
 test("gateway upstreams: an unresolvable env name is reported and its server dropped, not connected with an empty value", () => {
   const canonical = loadCanonicalSource(
     scratchHome(`

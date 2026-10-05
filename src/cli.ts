@@ -10,7 +10,7 @@ import { runInit } from "./commands/init.js";
 import { runMigrate } from "./commands/migrate.js";
 import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
-import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, runMcpSetAuth, parseMcpAddArgs } from "./commands/mcp.js";
+import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, runMcpSetAuth, parseMcpAddArgs, parseMcpSetArgs } from "./commands/mcp.js";
 import { runMcpImport } from "./commands/mcpImport.js";
 import { parseMcpGatewayArgs, runMcpGateway, runMcpRuntime } from "./commands/mcpGateway.js";
 import { runMcpAuth } from "./commands/mcpAuth.js";
@@ -134,7 +134,15 @@ Commands:
             --dry-run    preview without writing
             --json       machine-readable output, no report text
   mcp set <name> --auth oauth|none
-            Set or clear explicit OAuth classification; canonical only
+            Set or clear explicit OAuth classification; canonical only.
+            --auth oauth [--client-id <id>] [--client-secret-env <NAME>]
+                         pre-register a client for a provider that refuses
+                         dynamic registration. --client-id is the PROVIDER's
+                         published identifier (public by design);
+                         --client-secret-env is a variable NAME resolved via
+                         secrets.policy.yaml, never a secret value.
+                         A bare --auth oauth keeps existing client metadata;
+                         --auth none removes it along with the classification.
             --dry-run    preview the plan, write nothing
             --json       machine-readable output, no report text
   mcp auth <server-name>
@@ -440,9 +448,7 @@ async function main(argv: string[]): Promise<void> {
     }
     if (subcommand === "set") {
       const [name] = mcpRest;
-      const authIndex = mcpRest.indexOf("--auth");
-      const auth = authIndex >= 0 ? mcpRest[authIndex + 1] : undefined;
-      process.exitCode = runMcpSetAuth(name, auth, { json, dryRun }).exitCode;
+      process.exitCode = runMcpSetAuth(name, parseMcpSetArgs(mcpRest), { json, dryRun }).exitCode;
       return;
     }
     if (subcommand === "remove") {

@@ -19,6 +19,7 @@
 
 import { isInScope } from "../core/adapter.js";
 import { capabilityDeliveryForAgent } from "../core/types.js";
+import { isOAuthAuth } from "../core/types.js";
 import type { AgentId, McpConfig, McpRoute, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
@@ -36,8 +37,13 @@ export const LEGACY_RUNTIME_ENTRY_NAME = "trellis-runtime";
 export const GATEWAY_COMMAND = "trellis";
 export const RUNTIME_COMMAND = "trellis";
 
+/** Either form of the OAuth classification counts — a strict equality
+ * check against the scalar would read the metadata-bearing object
+ * (`{ kind: oauth, client_id }`) as "not OAuth" and silently drop the
+ * routing it exists to carry (trellis-mcp-oauth-static-client design.md
+ * D1). */
 export function isOAuthMcpServer(def: McpServerDef): boolean {
-  return def.auth === "oauth";
+  return isOAuthAuth(def.auth);
 }
 
 /**

@@ -2,6 +2,12 @@
  * The interactive half: dynamic client registration (RFC 7591) plus the
  * authorization-code grant with PKCE (RFC 6749 §4.1, RFC 7636).
  *
+ * Registration is a fallback, not a requirement: a caller that already
+ * holds a pre-registered `client_id` passes it in and the RFC 7591 step
+ * is skipped entirely (trellis-mcp-oauth-static-client design.md D3) —
+ * some providers refuse registration outright, and those are exactly the
+ * ones that publish a client for third-party use instead.
+ *
  * Only ever reached from `trellis mcp auth`, run by a human. The gateway
  * must never call into this file: it is spawned silently by an agent,
  * typically with no terminal and no display, so it can neither show a
@@ -43,6 +49,13 @@ interface RegistrationResponse {
  * endpoint — that is a legitimate configuration (a pre-registered
  * client), not an error, so the caller falls back to whatever client id
  * it was given.
+ *
+ * A refused registration is the one failure a human can actually fix, so
+ * the AS's own OAuth error code is read out of the response body rather
+ * than collapsed into a bare status: `unauthorized_client` is the
+ * provider saying "this server is not open to registration", which is
+ * precisely when a pre-registered `client_id` is the answer
+ * (trellis-mcp-oauth-static-client design.md D3).
  */
 export async function registerClient(
   metadata: AuthorizationServerMetadata,
@@ -66,7 +79,12 @@ export async function registerClient(
   });
 
   if (!response.ok) {
-    throw new AuthorizationError(`dynamic client registration failed with HTTP ${response.status}`);
+    const code = await readOAuthErrorCode(response);
+    throw new AuthorizationError(
+      code
+        ? `dynamic client registration was refused (${code})`
+        : `dynamic client registration failed with HTTP ${response.status}`,
+    );
   }
   const payload = (await response.json()) as RegistrationResponse;
   if (!payload.client_id) {
@@ -76,6 +94,24 @@ export async function registerClient(
   if (payload.client_secret) out.clientSecret = payload.client_secret;
   return out;
 }
+
+/** RFC 6749 §5.2 error body. Best-effort by design: a registration
+ * endpoint that answers with plain text or an empty body still produces
+ * a usable error, just a less specific one. */
+async function readOAuthErrorCode(response: { json: () => Promise<unknown> }): Promise<string | undefined> {
+  try {
+    const payload = (await response.json()) as { error?: unknown };
+    return typeof payload.error === "string" ? payload.error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Provider-neutral remediation, appended wherever registration is the
+ * thing that failed. Names the exact file and key so the fix needs no
+ * further search. */
+const STATIC_CLIENT_REMEDIATION =
+  "register a client with the provider and set auth.client_id (plus auth.client_secret_env if the provider requires a secret) under this server in ~/.trellis/mcp/servers.yaml";
 
 interface CallbackResult {
   code?: string;
@@ -148,10 +184,22 @@ export async function authorize(
     let clientId = opts.clientId;
     let clientSecret = opts.clientSecret;
     if (!clientId) {
-      const registered = await registerClient(metadata, redirectUri, { fetchImpl, scope: opts.scope });
+      // The AS cannot register us AND canonical carries no client_id — the
+      // one dead end a person has to resolve by hand, so it is reported as
+      // such rather than as a generic registration failure
+      // (trellis-mcp-oauth-static-client design.md D3, task 2.3).
+      let registered: { clientId: string; clientSecret?: string } | undefined;
+      try {
+        registered = await registerClient(metadata, redirectUri, { fetchImpl, scope: opts.scope });
+      } catch (err) {
+        if (err instanceof AuthorizationError) {
+          throw new AuthorizationError(`"${serverName}": ${err.message} — ${STATIC_CLIENT_REMEDIATION}`);
+        }
+        throw err;
+      }
       if (!registered) {
         throw new AuthorizationError(
-          `"${serverName}"'s authorization server offers no dynamic client registration, and no client_id is configured for it`,
+          `"${serverName}"'s authorization server offers no dynamic client registration — ${STATIC_CLIENT_REMEDIATION}`,
         );
       }
       clientId = registered.clientId;
