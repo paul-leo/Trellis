@@ -333,3 +333,62 @@ test("plan/apply mcp-import: a real mcpServers export file is imported into serv
     server.close();
   }
 });
+
+test("plan/apply skill-scope: a real plan, a confirmed write, and a refusal that writes nothing", async () => {
+  const homeDir = pendingSyncHome();
+  cli(homeDir, ["manage", "add", "codex"]);
+  const scopePath = join(homeDir, ".trellis", "scope.yaml");
+  const server = createSidecarServer(createPlanApplyRoutes(homeDir, new PlanStore()));
+  const port = await listenOnEphemeralLoopbackPort(server);
+  try {
+    // A selection the CLI would refuse comes back as a plan refusal, and
+    // applying it changes nothing — the GUI cannot write what the CLI won't.
+    const refused = await post(port, "/plan/skill-scope", { name: "demo-skill", selection: { agents: "kiro" } });
+    assert.equal(refused.status, 200);
+    const refusedPlan = (refused.body as { plan: { action: string; detail: string } }).plan;
+    assert.equal(refusedPlan.action, "invalid-input");
+    assert.match(refusedPlan.detail, /"kiro" is not a managed agent/);
+    await post(port, "/apply/skill-scope", { planId: (refused.body as { planId: string }).planId });
+    assert.equal(existsSync(scopePath) && /demo-skill/.test(readFileSync(scopePath, "utf-8")), false);
+
+    const planned = await post(port, "/plan/skill-scope", { name: "demo-skill", selection: { agents: "codex" } });
+    const { planId, plan } = planned.body as { planId: string; plan: { action: string; effective: string[] } };
+    assert.equal(plan.action, "updated");
+    assert.deepEqual(plan.effective, ["codex"]);
+
+    const applied = await post(port, "/apply/skill-scope", { planId });
+    assert.equal(applied.status, 200);
+    assert.match(readFileSync(scopePath, "utf-8"), /demo-skill:\s*\n\s*- codex/);
+
+    const reused = await post(port, "/apply/skill-scope", { planId });
+    assert.equal(reused.status, 400, "a plan is single-use, same as every other operation");
+  } finally {
+    server.close();
+  }
+});
+
+test("plan/apply mcp-scope: narrows an MCP server through the same collect/apply the CLI uses", async () => {
+  const homeDir = pendingSyncHome();
+  cli(homeDir, ["manage", "add", "codex"]);
+  const server = createSidecarServer(createPlanApplyRoutes(homeDir, new PlanStore()));
+  const port = await listenOnEphemeralLoopbackPort(server);
+  try {
+    const added = await post(port, "/plan/mcp-add", { name: "demo-server", raw: { transport: "stdio", command: "echo" } });
+    await post(port, "/apply/mcp-add", { planId: (added.body as { planId: string }).planId });
+
+    const planned = await post(port, "/plan/mcp-scope", { name: "demo-server", selection: { agents: "codex" } });
+    const { planId, plan } = planned.body as { planId: string; plan: { action: string; effective: string[] } };
+    assert.equal(plan.action, "updated");
+    assert.deepEqual(plan.effective, ["codex"]);
+
+    const applied = await post(port, "/apply/mcp-scope", { planId });
+    assert.equal(applied.status, 200);
+    assert.match(serversYaml(homeDir), /agents:\s*\n\s*- codex/, "the choice is recorded on the entry itself");
+
+    const cleared = await post(port, "/plan/mcp-scope", { name: "demo-server", selection: { all: true } });
+    await post(port, "/apply/mcp-scope", { planId: (cleared.body as { planId: string }).planId });
+    assert.doesNotMatch(serversYaml(homeDir), /agents:/, "--all removes the key rather than recording a full list");
+  } finally {
+    server.close();
+  }
+});

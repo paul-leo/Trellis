@@ -592,3 +592,157 @@ test("App: the language switcher really translates the UI, leaves real backend d
     await sidecar.close();
   }
 });
+
+// --- scope editing and credential state (trellis-scope-editing-and-auth-status) ---
+
+async function mountApp(homeDir: string) {
+  const sidecar = await startSidecar(homeDir);
+  const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: `http://localhost/?port=${sidecar.port}` });
+  (globalThis as unknown as { window: typeof window }).window = dom.window as unknown as typeof window;
+  (globalThis as unknown as { document: Document }).document = dom.window.document;
+  Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true, writable: true });
+  const { createRoot } = await import("react-dom/client");
+  const React = await import("react");
+  const { default: App } = await import("./App.js");
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  root.render(React.createElement(App));
+
+  const until = async (check: () => boolean, what: string, timeoutMs = 8000): Promise<void> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (check()) return;
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}. Body: ${dom.window.document.body.textContent}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+  const buttons = (): HTMLButtonElement[] => Array.from(dom.window.document.querySelectorAll("button"));
+  const click = (el: Element): void => void el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  return {
+    dom,
+    body: () => dom.window.document.body.textContent ?? "",
+    bodyContains: (needle: string) => until(() => (dom.window.document.body.textContent ?? "").includes(needle), `"${needle}"`),
+    until,
+    clickText: (text: string) => {
+      const button = buttons().find((b) => b.textContent === text);
+      if (!button) throw new Error(`no button "${text}" — body: ${dom.window.document.body.textContent}`);
+      click(button);
+    },
+    toggle: (agent: string) => {
+      const button = buttons().find((b) => b.getAttribute("aria-pressed") !== null && b.textContent === agent);
+      if (!button) throw new Error(`no toggle for "${agent}"`);
+      click(button);
+    },
+    pressed: (agent: string) => buttons().find((b) => b.getAttribute("aria-pressed") !== null && b.textContent === agent)?.getAttribute("aria-pressed"),
+    modalGone: () => until(() => !dom.window.document.querySelector(".modal-backdrop"), "the modal to close"),
+    close: async () => {
+      root.unmount();
+      await sidecar.close();
+    },
+  };
+}
+
+test("App: a skill's agent scope is edited by toggling, staged until Save, confirmed through the plan, and really written", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "trellis-gui-smoke-scope-"));
+  cli(homeDir, ["init"]);
+  cli(homeDir, ["manage", "add", "claude-code"]);
+  cli(homeDir, ["manage", "add", "codex"]);
+  const source = join(homeDir, "source-skill");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "SKILL.md"), "---\nname: review\ndescription: a skill for the scope editor smoke test\n---\n\n# Review\n");
+  cli(homeDir, ["skill", "add", "review", "--from", source, "--json"]);
+  const { readFileSync, existsSync } = await import("node:fs");
+  const scopePath = join(homeDir, ".trellis", "scope.yaml");
+  const scopeText = (): string => (existsSync(scopePath) ? readFileSync(scopePath, "utf-8") : "");
+
+  const app = await mountApp(homeDir);
+  try {
+    await app.bodyContains("Trellis");
+    app.clickText("Skills");
+    await app.until(() => app.pressed("codex") === "true" && app.pressed("claude-code") === "true", "both managed agents shown as on");
+
+    // Only managed agents are offered — no toggle for an agent that is not managed.
+    assert.equal(app.pressed("kiro"), undefined);
+
+    app.toggle("codex");
+    await app.until(() => app.pressed("codex") === "false", "codex staged off");
+    assert.doesNotMatch(scopeText(), /review/, "toggling alone writes nothing");
+
+    app.clickText("Save scope");
+    await app.bodyContains('"action": "updated"');
+    assert.doesNotMatch(scopeText(), /review/, "the plan step alone writes nothing either");
+
+    app.clickText("Apply");
+    await app.modalGone();
+    assert.match(scopeText(), /review:\s*\n\s*- claude-code/, "a confirmed Apply records exactly the remaining agent");
+    assert.doesNotMatch(scopeText(), /codex/);
+
+    // The refetch after the write resets the draft to what is now in effect.
+    await app.until(() => app.pressed("codex") === "false" && app.pressed("claude-code") === "true", "the card reflecting the saved scope");
+  } finally {
+    await app.close();
+  }
+});
+
+test("App: an MCP server shows its credential state as credential state, never a token, with the command to authorize", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "trellis-gui-smoke-cred-"));
+  cli(homeDir, ["init"]);
+  writeFileSync(
+    join(homeDir, ".trellis", "mcp", "servers.yaml"),
+    'servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n    auth:\n      kind: oauth\n      client_id: published-id-should-not-render\n  sentry:\n    transport: http\n    url: https://mcp.sentry.dev/mcp\n    auth: oauth\n',
+  );
+  mkdirSync(join(homeDir, ".trellis", "mcp", "oauth"), { recursive: true });
+  writeFileSync(
+    join(homeDir, ".trellis", "mcp", "oauth", "sentry.json"),
+    JSON.stringify({ accessToken: "AT-MUST-NOT-RENDER", refreshToken: "RT-MUST-NOT-RENDER", expiresAt: Date.now() + 3_600_000 }),
+  );
+
+  const app = await mountApp(homeDir);
+  try {
+    await app.bodyContains("Trellis");
+    app.clickText("MCP");
+    await app.bodyContains("Credential: authorized");
+    await app.bodyContains("Credential: not authorized");
+
+    // The remedy is shown, not a hidden flow — and only for the server that needs it.
+    await app.bodyContains("trellis mcp auth figma");
+    assert.equal(app.body().includes("trellis mcp auth sentry"), false);
+    await app.bodyContains("pre-registered client");
+
+    for (const secret of ["AT-MUST-NOT-RENDER", "RT-MUST-NOT-RENDER", "published-id-should-not-render"]) {
+      assert.equal(app.body().includes(secret), false, `${secret} must never reach the DOM`);
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("App: doctor findings are tagged with the agent they belong to, so identical messages are not mistaken for duplicates", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "trellis-gui-smoke-findings-"));
+  cli(homeDir, ["init"]);
+  // The same server is statically configured in two agents and is also a name
+  // a host injects: doctor reports the identical collision once per agent.
+  writeFileSync(join(homeDir, ".claude.json"), JSON.stringify({ mcpServers: { sentry: { command: "x" } } }));
+  mkdirSync(join(homeDir, ".kiro", "settings"), { recursive: true });
+  writeFileSync(join(homeDir, ".kiro", "settings", "mcp.json"), JSON.stringify({ mcpServers: { sentry: { command: "x" } } }));
+  writeFileSync(join(homeDir, ".trellis", "mcp", "servers.yaml"), "servers: {}\nknown_host_injected: [sentry]\n");
+
+  const app = await mountApp(homeDir);
+  try {
+    await app.bodyContains("Trellis");
+    await app.bodyContains("Findings");
+    const collisionCards = (): Element[] =>
+      Array.from(app.dom.window.document.querySelectorAll(".card")).filter((card) => (card.textContent ?? "").includes("known_host_injected"));
+    await app.until(() => collisionCards().length >= 2, "one collision card per agent");
+
+    const tagsOf = (card: Element): string[] => Array.from(card.querySelectorAll(".tag")).map((tag) => tag.textContent ?? "");
+    const cards = collisionCards();
+    const messages = new Set(cards.map((card) => card.querySelector("span")?.textContent));
+    assert.equal(messages.size, 1, "precondition: the message itself is identical across the cards — which is the whole problem");
+
+    const agentTags = cards.map((card) => tagsOf(card).find((tag) => tag === "claude-code" || tag === "kiro"));
+    assert.deepEqual([...agentTags].sort(), ["claude-code", "kiro"], "each card names its own agent");
+    assert.ok(cards.every((card) => tagsOf(card).includes("collision")), "the finding kind is still shown");
+  } finally {
+    await app.close();
+  }
+});

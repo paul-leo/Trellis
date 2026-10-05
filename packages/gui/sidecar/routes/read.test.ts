@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { request } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -69,6 +69,49 @@ test("read routes: secrets-audit response never carries a resolved secret value,
     for (const finding of body.findings) {
       assert.deepEqual(Object.keys(finding).sort(), ["agent", "detail", "file", "kind"], "a finding must only ever carry these four fields — no room for a fifth, value-bearing field to sneak in");
     }
+  } finally {
+    server.close();
+  }
+});
+
+test("read routes: /managed lists exactly the managed agents — the only choices a scope editor may offer", async () => {
+  const homeDir = home();
+  cli(homeDir, ["init"]);
+  cli(homeDir, ["manage", "add", "pi"]);
+  cli(homeDir, ["manage", "add", "codex"]);
+
+  const server = createSidecarServer(createReadRoutes(homeDir));
+  const port = await listenOnEphemeralLoopbackPort(server);
+  try {
+    const { managedAgents } = (await get(port, "/managed")) as { managedAgents: string[] };
+    assert.deepEqual([...managedAgents].sort(), ["codex", "pi"]);
+  } finally {
+    server.close();
+  }
+});
+
+test("read routes: /mcp/list carries the credential state exactly as the CLI does, and never a token", async () => {
+  const homeDir = home();
+  cli(homeDir, ["init"]);
+  writeFileSync(
+    join(homeDir, ".trellis", "mcp", "servers.yaml"),
+    'servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n    auth: oauth\n  other:\n    transport: http\n    url: https://other.example/mcp\n    auth: oauth\n',
+  );
+  mkdirSync(join(homeDir, ".trellis", "mcp", "oauth"), { recursive: true });
+  writeFileSync(
+    join(homeDir, ".trellis", "mcp", "oauth", "figma.json"),
+    JSON.stringify({ accessToken: "AT-NEVER-SHOWN", refreshToken: "RT-NEVER-SHOWN", expiresAt: Date.now() + 3_600_000 }),
+  );
+
+  const cliMcpList = JSON.parse(cli(homeDir, ["mcp", "list", "--json"])) as Array<{ name: string; authStatus?: string }>;
+  const server = createSidecarServer(createReadRoutes(homeDir));
+  const port = await listenOnEphemeralLoopbackPort(server);
+  try {
+    const viaSidecar = (await get(port, "/mcp/list")) as Array<{ name: string; authStatus?: string }>;
+    assert.deepEqual(viaSidecar, cliMcpList, "the GUI must show what the CLI reports, not a second opinion");
+    assert.equal(viaSidecar.find((e) => e.name === "figma")?.authStatus, "authorized");
+    assert.equal(viaSidecar.find((e) => e.name === "other")?.authStatus, "not-authorized");
+    assert.equal(JSON.stringify(viaSidecar).includes("NEVER-SHOWN"), false);
   } finally {
     server.close();
   }

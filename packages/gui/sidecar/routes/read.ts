@@ -7,6 +7,7 @@
  * report object as-is; `mcp list`/`skill list` print their array as-is —
  * matched here field-for-field, not wrapped in an extra envelope.
  */
+import { loadCanonicalSource } from "../../../../src/core/canonical.js";
 import { collectDoctorReport } from "../../../../src/commands/doctor.js";
 import { collectMcpListPlan } from "../../../../src/commands/mcp.js";
 import { collectSkillList } from "../../../../src/commands/skill.js";
@@ -17,6 +18,14 @@ import { sendJson, type Route } from "../server.js";
 
 export function createReadRoutes(homeDir: string): Route[] {
   return [
+    {
+      // The choices a scope editor may offer: only managed agents can ever
+      // receive a skill or MCP server, so only they are listed
+      // (trellis-scope-editing-and-auth-status design.md D7).
+      method: "GET",
+      pattern: /^\/managed$/,
+      handler: (_req, res) => sendJson(res, 200, { managedAgents: loadCanonicalSource(homeDir).managedAgents }),
+    },
     {
       method: "GET",
       pattern: /^\/doctor$/,

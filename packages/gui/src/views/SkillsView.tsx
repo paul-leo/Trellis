@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useFetch } from "../lib/useFetch";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { ScopeEditor, scopeSelection } from "../components/ScopeEditor";
 import { useI18n } from "../lib/i18n";
 
 interface SkillListEntry {
@@ -12,6 +13,7 @@ type PendingAction = { operation: string; title: string; body?: Record<string, u
 
 export function SkillsView() {
   const { data, error, loading } = useFetch<SkillListEntry[]>("/skill/list");
+  const managed = useFetch<{ managedAgents: string[] }>("/managed").data?.managedAgents ?? [];
   const { t } = useI18n();
   const [pending, setPending] = useState<PendingAction>();
   const [addName, setAddName] = useState("");
@@ -43,9 +45,14 @@ export function SkillsView() {
             <span className="card-title">{entry.name}</span>
             <button onClick={() => setPending({ operation: "skill-remove", title: t("skills.removeTitle", { name: entry.name }), body: { name: entry.name } })}>{t("common.remove")}</button>
           </div>
-          <p className="subtitle" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
-            {entry.scope.length > 0 ? entry.scope.join(", ") : t("common.noAgentReaches")}
-          </p>
+          <ScopeEditor
+            key={`${entry.name}:${entry.scope.join(",")}`}
+            managed={managed}
+            current={entry.scope}
+            onSave={(selected) =>
+              setPending({ operation: "skill-scope", title: t("scope.skillTitle", { name: entry.name }), body: { name: entry.name, selection: scopeSelection(selected) } })
+            }
+          />
         </div>
       ))}
 
