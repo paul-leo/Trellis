@@ -49,11 +49,30 @@ so a cancelled grant cannot overwrite a concurrent refresh.
 The gateway can silently refresh its own hosted credentials; it never opens a
 browser. Agents with native connections continue using their own flows.
 
+## Browser callback feedback
+
+The local callback page shows a compact Trellis/service label, one status message,
+one short instruction and a close action, with Chinese or English copy based on
+the browser's preferred language. Receiving an
+authorization response is an intermediate step: validation, token exchange and
+credential storage still determine the final result shown in Trellis or the
+terminal. Cancellation, provider errors and incomplete responses have separate
+messages and guidance for starting again.
+
+The page uses no external assets and does not display authorization parameters
+or raw provider descriptions. Responses disable caching and referrer disclosure;
+when JavaScript is available, the page also removes the query and fragment from
+the current browser history entry. The close action offers manual-close guidance
+when a browser blocks it, and manual guidance remains visible without JavaScript.
+
 ## Verification
 
 Run core tests and typecheck, GUI sidecar tests/typecheck and GUI smoke tests.
 `npm run test:oauth-browser --workspace @trellis/gui` additionally uses installed
-Google Chrome headlessly with a local authorization-server fixture. It exercises
-real browser CORS, PKCE callback, progress, cancellation, retry and owner
-confirmation without contacting a real provider or using personal credentials.
+Google Chrome headlessly with a local authorization-server fixture. Set
+`TRELLIS_OAUTH_BROWSER_EXECUTABLE` to use a compatible Chromium executable instead.
+It exercises real browser CORS, PKCE callback, progress, cancellation, retry,
+owner confirmation and callback feedback without contacting a real provider or
+using personal credentials. Set `TRELLIS_OAUTH_SCREENSHOTS` to an output directory
+to save callback desktop/mobile previews during that run.
 Desktop packaging and installed-app acceptance happen after these checks.
