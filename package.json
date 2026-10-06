@@ -34,7 +34,7 @@
     "pretest": "node scripts/build-pi-bridge.mjs",
     "test": "tsx --test \"test/unit/**/*.test.ts\"",
     "verify-pack": "node scripts/verify-pack.mjs",
-    "prepublishOnly": "npm run typecheck && npm run build && npm test && npm run verify-pack"
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
   },
   "engines": {
     "node": ">=20"

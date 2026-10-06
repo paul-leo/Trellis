@@ -21,7 +21,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,16 +43,44 @@ const SMOKE_COMMANDS = [[], ["doctor", "--json"], ["onboard", "--json"]];
 const CRASH_SIGNATURE = /ERR_MODULE_NOT_FOUND|Cannot find package|Cannot find module|ERR_UNSUPPORTED_ESM_URL_SCHEME/;
 
 console.log("[verify-pack] packing the real publishable tarball...");
-const packOutput = run("npm", ["pack", "--silent"]);
-const tarballName = packOutput.trim().split("\n").pop();
-const tarballPath = join(repoRoot, tarballName);
+// Constraints that shaped this block — do NOT simplify without keeping all:
+// - The scratch tarball lives in a tmpdir, never the project root, so a
+//   stray filename here can never be mistaken for the artifact under
+//   test. (This repo's original bug.)
+// - `--foreground-scripts=false` AND `stdio: "ignore"` on stdout: when
+//   this script runs under npm's prepublishOnly (stdio: inherit), our
+//   child's tarball filename would leak into the parent's stdout;
+//   libnpmpack JSON.parses that stream, fails, and falls back to
+//   treating the stray name as the file to upload — already deleted by
+//   then (ENOENT). We therefore never read the name from stdout at all:
+//   we glob the (empty-before) tmpdir for the one *.tgz our pack wrote.
+const packDest = mkdtempSync(join(tmpdir(), "trellis-verify-pack-tgz-"));
+const packOutput = run("npm", [
+  "pack",
+  "--foreground-scripts=false",
+  "--pack-destination",
+  packDest,
+], { stdio: ["ignore", "ignore", "pipe"] });
+const tarballs = readdirSync(packDest).filter((f) => f.endsWith(".tgz"));
+if (tarballs.length !== 1) {
+  throw new Error(
+    `verify-pack: expected exactly one .tgz in ${packDest}, got ${tarballs.length} (pack output swallowed: ${packOutput === undefined ? "stdio ignored" : String(packOutput)})`,
+  );
+}
+const tarballPath = join(packDest, tarballs[0]);
 
 const installDir = mkdtempSync(join(tmpdir(), "trellis-verify-pack-"));
 const scratchHome = mkdtempSync(join(tmpdir(), "trellis-verify-pack-home-"));
 
 let failed = false;
 try {
-  console.log(`[verify-pack] installing ${tarballName} into an isolated dir (no devDependencies, same as a real consumer)...`);
+  console.log(`[verify-pack] installing ${tarballs[0]} into an isolated dir (no devDependencies, same as a real consumer)...`);
+  // Never let a line ending in the tarball filename be this script's
+  // FINAL stdout line: when we run under prepublishOnly, npm's publish
+  // flow re-parses the last stdout line of its lifecycle scripts as
+  // "the tarball to publish" and then tries to open it — after our
+  // finally block has already deleted it (ENOENT). The pack-destination
+  // tmpdir above keeps that confusion from ever touching the project.
   run("npm", ["install", "--no-save", "--no-audit", "--no-fund", "--prefix", installDir, tarballPath]);
 
   const cliPath = join(installDir, "node_modules", "agent-trellis", "dist", "cli.js");
@@ -87,7 +115,7 @@ try {
   }
   console.log("[verify-pack] ✅ the real tarball installs and runs cleanly with devDependencies excluded.");
 } finally {
-  rmSync(tarballPath, { force: true });
+  rmSync(packDest, { recursive: true, force: true });
   rmSync(installDir, { recursive: true, force: true });
   rmSync(scratchHome, { recursive: true, force: true });
 }
