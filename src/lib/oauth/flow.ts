@@ -16,6 +16,7 @@
 
 import { createServer, type Server as HttpServer } from "node:http";
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { AddressInfo } from "node:net";
 import { createPkcePair } from "./pkce.js";
 import type { AuthorizationServerMetadata, FetchLike } from "./discovery.js";
@@ -322,7 +323,6 @@ export function abortable<T>(value: T | Promise<T>, signal?: AbortSignal): Promi
 }
 
 async function defaultOpenBrowser(url: string): Promise<void> {
-  const { spawn } = await import("node:child_process");
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   // Detached and fully ignored: a browser that outlives this command is
   // correct, and its stdio must not be inherited onto ours.

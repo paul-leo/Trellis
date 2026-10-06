@@ -13,3 +13,8 @@ OAuth fixture. It verifies native/hosted credential separation, real browser
 CORS, PKCE callback, cancellation, retry and ownership confirmation. No personal
 credential is used. Run this before desktop packaging alongside `test:smoke`,
 `sidecar:test` and the frontend/sidecar typechecks.
+
+After `npm run sidecar:build`, run `npm run sidecar:verify`. This exercises the
+actual executable, including the default browser opener, against a disposable
+local OAuth server. Browser seams in source tests do not exercise pkg's bytecode
+loader: runtime built-ins used by this flow must be imported statically.

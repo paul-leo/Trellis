@@ -1,7 +1,7 @@
 {
   "name": "@trellis/gui",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.12.0",
   "description": "Trellis desktop GUI (Tauri v2 + React) — read-write control surface over the agent-trellis canonical source.",
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
     "sidecar:typecheck": "tsc --noEmit -p sidecar/tsconfig.json",
     "sidecar:test": "tsx --test \"sidecar/**/*.test.ts\"",
     "sidecar:build": "node scripts/build-sidecar.mjs",
+    "sidecar:verify": "tsx scripts/verify-sidecar.ts",
     "test:smoke": "node --import tsx --experimental-loader ./src/testCssLoader.mjs --test src/App.smoke.test.tsx",
     "test:oauth-browser": "playwright test --config playwright.oauth.config.ts"
   },

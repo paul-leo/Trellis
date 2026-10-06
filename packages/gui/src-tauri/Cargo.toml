@@ -1,6 +1,6 @@
 [package]
 name = "trellis-gui"
-version = "0.1.0"
+version = "0.12.0"
 description = "Trellis desktop GUI (Tauri v2 + React)"
 authors = ["you"]
 edition = "2021"
