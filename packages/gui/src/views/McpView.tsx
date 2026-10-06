@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useFetch } from "../lib/useFetch";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { ScopeEditor, scopeSelection } from "../components/ScopeEditor";
 import { useI18n } from "../lib/i18n";
 
 interface McpListEntry {
@@ -8,6 +9,11 @@ interface McpListEntry {
   transport: string;
   enabled: boolean;
   agents: string[];
+  auth?: "oauth";
+  preRegisteredClient?: true;
+  /** Credential state for OAuth-classified servers — not connection health. */
+  authStatus?: "authorized" | "refreshable" | "expired" | "not-authorized";
+  authExpiresAt?: number;
   command?: string;
   url?: string;
 }
@@ -16,6 +22,7 @@ type PendingAction = { operation: string; title: string; body?: Record<string, u
 
 export function McpView() {
   const { data, error, loading } = useFetch<McpListEntry[]>("/mcp/list");
+  const managed = useFetch<{ managedAgents: string[] }>("/managed").data?.managedAgents ?? [];
   const { t } = useI18n();
   const [pending, setPending] = useState<PendingAction>();
   const [addName, setAddName] = useState("");
@@ -64,12 +71,31 @@ export function McpView() {
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <span className="tag">{entry.transport}</span>
               {!entry.enabled && <span className="tag warn">{t("mcp.disabled")}</span>}
+              {entry.preRegisteredClient && <span className="tag">{t("mcp.preRegistered")}</span>}
+              {entry.authStatus && (
+                <span className={`tag ${entry.authStatus === "authorized" ? "ok" : entry.authStatus === "refreshable" ? "" : "warn"}`} title={t("mcp.credentialNote")}>
+                  {t("mcp.credential")}: {t(`mcp.credential.${entry.authStatus}`)}
+                  {entry.authStatus === "authorized" && entry.authExpiresAt
+                    ? ` · ${t("mcp.credential.expires", { date: new Date(entry.authExpiresAt).toLocaleString() })}`
+                    : ""}
+                </span>
+              )}
               <button onClick={() => setPending({ operation: "mcp-remove", title: t("mcp.removeTitle", { name: entry.name }), body: { name: entry.name } })}>{t("common.remove")}</button>
             </div>
           </div>
-          <p className="subtitle" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
-            {entry.agents.length > 0 ? entry.agents.join(", ") : t("common.noAgentReaches")}
-          </p>
+          {(entry.authStatus === "not-authorized" || entry.authStatus === "expired") && (
+            <p className="subtitle" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+              {t("mcp.credential.runHint")} <code>trellis mcp auth {entry.name}</code>
+            </p>
+          )}
+          <ScopeEditor
+            key={`${entry.name}:${entry.agents.join(",")}`}
+            managed={managed}
+            current={entry.agents}
+            onSave={(selected) =>
+              setPending({ operation: "mcp-scope", title: t("scope.mcpTitle", { name: entry.name }), body: { name: entry.name, selection: scopeSelection(selected) } })
+            }
+          />
         </div>
       ))}
 

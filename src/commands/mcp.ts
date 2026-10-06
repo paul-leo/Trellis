@@ -21,6 +21,8 @@ import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
 import { ALL_AGENTS, isOAuthAuth, oauthClientMetadata, resolveScope } from "../core/types.js";
 import type { AgentId, McpAuthMode, McpConfig, McpServerDef, Transport } from "../core/types.js";
 import { isValidSecretVarName } from "../lib/secretEnv.js";
+import { isExpired, readToken } from "../lib/oauth/store.js";
+import { describeScope, resolveScopeSelection, sameScope, type ScopeSelectorRaw } from "../lib/scopeSelection.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
@@ -169,6 +171,12 @@ export interface McpListEntry {
    * ever changes and there is one less place a future secret-looking field
    * could leak through. */
   preRegisteredClient?: true;
+  /** State of the stored OAuth credential, for OAuth-classified servers only
+   * (trellis-scope-editing-and-auth-status design.md D6). It describes the
+   * credential, not the connection: an `authorized` server can still be down. */
+  authStatus?: McpAuthStatus;
+  /** Epoch ms, when the stored token advertises an expiry. */
+  authExpiresAt?: number;
   enabled: boolean;
   agents: readonly AgentId[];
   command?: string;
@@ -185,6 +193,28 @@ export interface McpListEntry {
   staticEnv?: Record<string, string>;
 }
 
+export type McpAuthStatus = "not-authorized" | "authorized" | "refreshable" | "expired";
+
+/**
+ * Reads only the per-server token store and returns the state, never a
+ * token. Classification stays explicit — the caller only asks for servers
+ * already declared OAuth, so a stray token file never makes one. A server
+ * name that cannot be a token filename, or an unreadable file, simply has no
+ * credential: one odd entry must not take down the whole listing.
+ */
+export function mcpCredentialState(homeDir: string, serverName: string): { authStatus: McpAuthStatus; authExpiresAt?: number } {
+  let token;
+  try {
+    token = readToken(homeDir, serverName);
+  } catch {
+    return { authStatus: "not-authorized" };
+  }
+  if (!token?.accessToken) return { authStatus: "not-authorized" };
+  const expiry = token.expiresAt !== undefined ? { authExpiresAt: token.expiresAt } : {};
+  if (!isExpired(token)) return { authStatus: "authorized", ...expiry };
+  return { authStatus: token.refreshToken ? "refreshable" : "expired", ...expiry };
+}
+
 export function collectMcpListPlan(homeDir: string = homedir()): McpListEntry[] {
   const canonical = loadCanonicalSource(homeDir);
   return Object.entries(canonical.mcp.servers).map(([name, def]) => ({
@@ -192,6 +222,7 @@ export function collectMcpListPlan(homeDir: string = homedir()): McpListEntry[] 
     transport: def.transport,
     auth: isOAuthAuth(def.auth) ? ("oauth" as const) : undefined,
     preRegisteredClient: oauthClientMetadata(def.auth).clientId !== undefined ? (true as const) : undefined,
+    ...(isOAuthAuth(def.auth) ? mcpCredentialState(homeDir, name) : {}),
     enabled: def.enabled ?? true,
     agents: resolveScope(def.agents, canonical.managedAgents),
     command: def.command,
@@ -220,7 +251,7 @@ export function runMcpList(opts: { homeDir?: string; json?: boolean } = {}): { e
   } else {
     for (const e of entries) {
       const scope = e.agents.length > 0 ? e.agents.join(", ") : "(no managed agent reaches it)";
-      console.log(`${e.name} (${e.transport}${e.auth === "oauth" ? ", oauth" : ""}${e.preRegisteredClient ? ", pre-registered client" : ""})${e.enabled ? "" : " [disabled]"} — ${scope}`);
+      console.log(`${e.name} (${e.transport}${e.auth === "oauth" ? ", oauth" : ""}${e.preRegisteredClient ? ", pre-registered client" : ""}${e.authStatus ? `, credential: ${e.authStatus}` : ""})${e.enabled ? "" : " [disabled]"} — ${scope}`);
       if (e.env && e.env.length > 0) console.log(`   env: ${e.env.join(", ")} (values never read/printed)`);
       if (e.staticEnv) console.log(`   static_env: ${Object.entries(e.staticEnv).map(([k, v]) => `${k}=${v}`).join(", ")}`);
     }
@@ -525,6 +556,106 @@ export function runMcpSetAuth(name: string | undefined, raw: McpSetAuthRawArgs, 
     if (writeError) console.error(`  write failed: ${writeError}`);
   }
   return { exitCode: ["invalid-input", "not-found"].includes(plan.action) || Boolean(writeError) ? 1 : 0 };
+}
+
+export type McpScopeAction = "updated" | "already-set" | "not-found" | "invalid-input";
+
+export interface McpScopePlan {
+  name: string;
+  action: McpScopeAction;
+  detail: string;
+  /** Recorded as `agents:` on the entry; `undefined` removes the key so the
+   * server reaches every managed agent. */
+  scope?: AgentId[];
+  mode?: "all" | "none" | "explicit";
+  normalizedFromFull?: boolean;
+  effective?: readonly AgentId[];
+  /** Only set when action === "updated"; consumed by applyMcpScopeWithSync. */
+  def?: McpServerDef;
+}
+
+/**
+ * `mcp scope <name> --agents a,b | --all | --none`
+ * (trellis-scope-editing-and-auth-status tasks.md 1.2). Same selector rules as
+ * `skill scope`, which is why both go through `resolveScopeSelection`.
+ */
+export function collectMcpScopePlan(name: string | undefined, raw: ScopeSelectorRaw, homeDir: string = homedir()): McpScopePlan {
+  if (!name) return { name: "(none)", action: "invalid-input", detail: "usage: trellis mcp scope <name> --agents <ids> | --all | --none" };
+
+  const canonical = loadCanonicalSource(homeDir);
+  const selection = resolveScopeSelection(raw, canonical.managedAgents);
+  if (!selection.ok) return { name, action: "invalid-input", detail: selection.detail };
+
+  const current = canonical.mcp.servers[name];
+  if (!current) return { name, action: "not-found", detail: `no canonical MCP server named "${name}"` };
+
+  const base = {
+    name,
+    scope: selection.scope,
+    mode: selection.mode,
+    normalizedFromFull: selection.normalizedFromFull,
+    effective: resolveScope(selection.scope, canonical.managedAgents),
+  };
+  const summary = describeScope(selection.scope, canonical.managedAgents);
+  if (sameScope(current.agents, selection.scope)) {
+    return { ...base, action: "already-set", detail: `scope is already ${summary}` };
+  }
+
+  const { agents: _agents, ...withoutAgents } = current;
+  const def: McpServerDef = selection.scope === undefined ? withoutAgents : { ...withoutAgents, agents: selection.scope };
+  const normalized = selection.normalizedFromFull ? " (every managed agent selected — recorded as the default, so a newly managed agent is included)" : "";
+  return { ...base, action: "updated", detail: `set scope to ${summary}${normalized}`, def };
+}
+
+export interface McpScopeOutcome {
+  plan: McpScopePlan;
+  writeError?: string;
+  sync?: McpSyncReport;
+}
+
+/** Write inside a backup session, then the same `mcp sync` `add` / `remove`
+ * run. Removal of an entry from an agent narrowed away stays gated by the
+ * ownership ledger, so an entry Trellis did not write is never deleted
+ * (design.md D5). */
+export async function applyMcpScopeWithSync(plan: McpScopePlan, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<McpScopeOutcome> {
+  const homeDir = opts.homeDir ?? homedir();
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "updated" ? openBackupSession(homeDir, "mcp-scope") : undefined;
+  const session = opts.backupSession ?? ownSession;
+  let writeError: string | undefined;
+  if (!opts.dryRun && plan.action === "updated" && plan.def) {
+    const result = upsertServerYaml(serversYamlPath(homeDir), plan.name, plan.def, session);
+    if (!result.ok) writeError = result.error;
+  }
+  ownSession?.finalize();
+  let syncReport: McpSyncReport | undefined;
+  if (!writeError && plan.action === "updated" && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectMcpSyncReport({ homeDir, dryRun: opts.dryRun });
+  }
+  return { plan, ...(writeError ? { writeError } : {}), ...(syncReport ? { sync: syncReport } : {}) };
+}
+
+export async function runMcpScope(name: string | undefined, raw: ScopeSelectorRaw, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+  const homeDir = opts.homeDir ?? homedir();
+  let outcome: McpScopeOutcome;
+  try {
+    outcome = await applyMcpScopeWithSync(collectMcpScopePlan(name, raw, homeDir), { homeDir, dryRun: opts.dryRun });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return { exitCode: 1 };
+  }
+  const { plan, writeError, sync: syncReport } = outcome;
+  if (opts.json) {
+    const payload = writeError ? { ...plan, writeError } : plan;
+    console.log(JSON.stringify(syncReport ? { ...payload, sync: syncReport } : payload, null, 2));
+  } else {
+    console.log(`${opts.dryRun ? "[dry run] " : ""}mcp scope ${plan.name}`);
+    console.log(`  [${plan.action}] ${plan.detail}`);
+    if (writeError) console.error(`  write failed: ${writeError}`);
+    if (syncReport) printReport(syncReport, opts.dryRun ?? false);
+  }
+  const failed = plan.action === "invalid-input" || plan.action === "not-found" || Boolean(writeError);
+  const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+  return { exitCode: failed || syncConflict ? 1 : 0 };
 }
 
 export function applyMcpAddPlan(plan: McpAddPlan, homeDir: string = homedir(), backup?: BackupSession): ServersYamlWriteResult {

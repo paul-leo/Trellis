@@ -8,6 +8,7 @@ import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveScope } from "../core/types.js";
 import type { AgentId, CanonicalSource, SkillRef } from "../core/types.js";
 import type { RuntimeContext, TrellisProvider } from "./mcpRuntime.js";
+import { buildSkillEntry, parseSkillUri, readSkillFileBytes, toResourceContent, type SkillEntry } from "./skillManifest.js";
 
 const MAX_FILE_BYTES = 256 * 1024;
 const SKILL_RESOURCE_PREFIX = "trellis://skills/";
@@ -112,6 +113,44 @@ function skillMetadata(skill: SkillRef, canonical: CanonicalSource, agentId: Age
 
 export class SkillProvider implements TrellisProvider {
   readonly id = "skills";
+  /** Each omitted skill is reported once per process, not on every request. */
+  private readonly reported = new Set<string>();
+
+  constructor(private readonly onDiagnostic: (message: string) => void = (message) => console.error(message)) {}
+
+  /**
+   * The skills this agent may be served under `skill://`, each with a manifest
+   * computed from the bytes it would read (trellis-skills-over-mcp D2/D3). A
+   * skill that cannot be served validly is omitted and reported, never served
+   * under a URI the specification calls invalid.
+   */
+  private catalog(canonical: CanonicalSource, agentId: AgentId): Array<{ skill: SkillRef; entry: SkillEntry }> {
+    const out: Array<{ skill: SkillRef; entry: SkillEntry }> = [];
+    for (const skill of canonical.skills) {
+      if (!hasSkillDocument(skill) || !isInScope(agentId, skill.scope, canonical.managedAgents)) continue;
+      const built = buildSkillEntry(skill.name, skill.dir);
+      if (built.ok) {
+        out.push({ skill, entry: built.entry });
+      } else if (!this.reported.has(built.reason)) {
+        this.reported.add(built.reason);
+        this.onDiagnostic(`trellis-mcp-runtime: skill not served under skill://: ${built.reason}`);
+      }
+    }
+    return out;
+  }
+
+  /** `skills/list` — one entry per servable, in-scope skill. */
+  listSkillEntries(context: RuntimeContext): SkillEntry[] {
+    return this.catalog(loadCanonicalSource(context.homeDir), context.agentId).map(({ entry }) => entry);
+  }
+
+  /** `skills/get` — lookup by URI, independent of listing. Out-of-scope and
+   * unknown URIs are indistinguishable by design. */
+  getSkillEntry(uri: string, context: RuntimeContext): SkillEntry | undefined {
+    const parsed = parseSkillUri(uri);
+    if (!parsed || parsed.path !== "SKILL.md") return undefined;
+    return this.listSkillEntries(context).find((entry) => entry.uri === uri);
+  }
 
   listTools(): Tool[] {
     return [SEARCH_TOOL, READ_TOOL, READ_FILE_TOOL];
@@ -128,7 +167,7 @@ export class SkillProvider implements TrellisProvider {
 
   listResources(context: RuntimeContext): Resource[] {
     const canonical = loadCanonicalSource(context.homeDir);
-    return canonical.skills
+    const legacy: Resource[] = canonical.skills
       .filter((skill) => hasSkillDocument(skill) && isInScope(context.agentId, skill.scope, canonical.managedAgents))
       .map((skill) => ({
         uri: skillUri(skill.name),
@@ -136,9 +175,17 @@ export class SkillProvider implements TrellisProvider {
         description: `Instructions for the ${skill.name} skill`,
         mimeType: "text/markdown",
       }));
+    // The convention's view of the same data, additive to the above
+    // (design.md D1): every manifest file, so a host that lists resources
+    // sees exactly what skills/list advertises.
+    const conventional: Resource[] = this.catalog(canonical, context.agentId).flatMap(({ entry }) =>
+      entry.resources.map((file) => ({ uri: file.uri, name: file.uri.slice("skill://".length), mimeType: file.uri.endsWith(".md") ? "text/markdown" : "text/plain", size: file.size })),
+    );
+    return [...legacy, ...conventional];
   }
 
   readResource(uri: URL, context: RuntimeContext): ReadResourceResult {
+    if (uri.protocol === "skill:") return this.readConventionalResource(uri.toString(), context);
     if (uri.protocol !== "trellis:" || uri.hostname !== "skills") {
       throw new Error(`unsupported skill resource URI "${uri.toString()}"`);
     }
@@ -151,6 +198,19 @@ export class SkillProvider implements TrellisProvider {
     if (!skill) throw new Error(`skill "${segments[0]}" is not available to ${context.agentId}`);
     const content = this.readBoundedFile(resolve(skill.dir, "SKILL.md"), skill.dir);
     return { contents: [{ uri: uri.toString(), mimeType: "text/markdown", text: content }] };
+  }
+
+  /** Serves only what the manifest advertises, from the same reader that
+   * computed its digests — the two cannot disagree. */
+  private readConventionalResource(uri: string, context: RuntimeContext): ReadResourceResult {
+    const parsed = parseSkillUri(uri);
+    const canonical = loadCanonicalSource(context.homeDir);
+    const skill = parsed ? skillFor(canonical, context.agentId, parsed.name) : undefined;
+    const served = skill && parsed ? this.catalog(canonical, context.agentId).find(({ entry }) => entry.uri === `skill://${parsed.name}/SKILL.md`) : undefined;
+    if (!parsed || !skill || !served || !served.entry.resources.some((file) => file.uri === uri)) {
+      throw new Error(`skill resource "${uri}" is not available to ${context.agentId}`);
+    }
+    return { contents: [toResourceContent(uri, parsed.path, readSkillFileBytes(skill.dir, parsed.path))] };
   }
 
   private search(canonical: CanonicalSource, agentId: AgentId, input: Record<string, unknown>): CallToolResult {

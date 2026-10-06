@@ -45,6 +45,11 @@ function zcodeChatHome(): { homeDir: string; bin: string } {
   const bin = join(homeDir, "zcode-public");
   writeFileSync(bin, `#!${process.execPath}\nrequire(${JSON.stringify(STUB_ZCODE)});\n`);
   chmodSync(bin, 0o755);
+  // `resolveZcodeProfile` deliberately refuses to report ZCode for a home with
+  // no local `.zcode` state, so a machine-wide `zcode` binary cannot make an
+  // empty sandbox look configured (src/probes/zcode.ts). The fixture has to
+  // be a home that really has ZCode state.
+  mkdirSync(join(homeDir, ".zcode"), { recursive: true });
   const mcpDir = join(homeDir, ".trellis", "mcp");
   mkdirSync(mcpDir, { recursive: true });
   writeFileSync(

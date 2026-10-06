@@ -16,16 +16,21 @@ import {
   applyMcpAddWithSync,
   applyMcpRemoveWithSync,
   collectMcpAddPlan,
+  applyMcpScopeWithSync,
   collectMcpRemovePlan,
+  collectMcpScopePlan,
   collectMcpSyncReport,
   type McpAddRawArgs,
 } from "../../../../src/commands/mcp.js";
 import {
   applySkillAddWithSync,
   applySkillRemoveWithSync,
+  applySkillScopeWithSync,
   collectSkillAddPlan,
   collectSkillRemovePlan,
+  collectSkillScopePlan,
 } from "../../../../src/commands/skill.js";
+import type { ScopeSelectorRaw } from "../../../../src/lib/scopeSelection.js";
 import { applyMcpImportWithSync, collectMcpImportPlan } from "../../../../src/commands/mcpImport.js";
 import { applyRollbackPlan, collectRollbackPlan, loadManifest, type RollbackReport } from "../../../../src/commands/rollback.js";
 import { collectOnboardPlan, type RunOnboardOptions } from "../../../../src/commands/onboard.js";
@@ -193,6 +198,25 @@ export function createPlanApplyRoutes(homeDir: string, planStore: PlanStore): Ro
       homeDir,
       (home, body) => collectSkillRemovePlan(body.name as string, home),
       (plan, home) => applySkillRemoveWithSync(plan as Parameters<typeof applySkillRemoveWithSync>[0], { homeDir: home, dryRun: false }),
+    ),
+
+    // mcp-scope / skill-scope — the same collect/apply pair the CLI's
+    // `mcp scope` / `skill scope` use, so the GUI adds no scope logic the
+    // CLI lacks. `selection` is the CLI's own `--agents`/`--all`/`--none`
+    // triple (trellis-scope-editing-and-auth-status design.md D7).
+    ...planApplyRoute(
+      "mcp-scope",
+      planStore,
+      homeDir,
+      (home, body) => collectMcpScopePlan(body.name as string | undefined, (body.selection ?? {}) as ScopeSelectorRaw, home),
+      (plan, home) => applyMcpScopeWithSync(plan as Parameters<typeof applyMcpScopeWithSync>[0], { homeDir: home, dryRun: false }),
+    ),
+    ...planApplyRoute(
+      "skill-scope",
+      planStore,
+      homeDir,
+      (home, body) => collectSkillScopePlan(body.name as string | undefined, (body.selection ?? {}) as ScopeSelectorRaw, home),
+      (plan, home) => applySkillScopeWithSync(plan as Parameters<typeof applySkillScopeWithSync>[0], { homeDir: home, dryRun: false }),
     ),
 
     // onboard — collectOnboardPlan itself both plans (dryRun: true) and

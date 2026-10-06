@@ -62,7 +62,10 @@ export function AgentsView() {
             <div className="card" key={i}>
               <div className="card-row">
                 <span>{f.message}</span>
-                <span className="tag warn">{f.kind}</span>
+                <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  {f.agent && <span className="tag">{f.agent}</span>}
+                  <span className="tag warn">{f.kind}</span>
+                </div>
               </div>
             </div>
           ))}
