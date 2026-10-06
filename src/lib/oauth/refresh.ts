@@ -15,6 +15,7 @@ import type { FetchLike } from "./discovery.js";
 
 export interface RefreshOptions {
   fetchImpl?: FetchLike;
+  timeoutMs?: number;
   /** Test seam; also lets a caller widen the early-refresh skew. */
   now?: () => number;
   skewMs?: number;
@@ -64,7 +65,7 @@ export async function ensureFreshToken(homeDir: string, serverName: string, opts
 }
 
 export async function performRefresh(serverName: string, token: StoredToken, opts: RefreshOptions = {}): Promise<StoredToken> {
-  const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const fetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000) }));
   const now = opts.now ?? Date.now;
   if (!token.tokenEndpoint) {
     throw new RefreshError(`OAuth token for "${serverName}" has no recorded token endpoint — run \`trellis mcp auth ${serverName}\``);
@@ -73,6 +74,7 @@ export async function performRefresh(serverName: string, token: StoredToken, opt
   const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: token.refreshToken! });
   if (token.clientId) body.set("client_id", token.clientId);
   if (token.clientSecret) body.set("client_secret", token.clientSecret);
+  if (token.resourceUrl) body.set("resource", token.resourceUrl);
 
   const response = await fetchImpl(token.tokenEndpoint, {
     method: "POST",

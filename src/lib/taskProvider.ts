@@ -1,4 +1,4 @@
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 import type { AgentId } from "../core/types.js";
 import { claimTask, createTask, handoffTask, listTasks, readTask, updateTask, type TaskStatus } from "./taskStore.js";
 import type { RuntimeContext, TrellisProvider } from "./mcpRuntime.js";

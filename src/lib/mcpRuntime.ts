@@ -1,10 +1,11 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ErrorCode, McpError, GetPromptRequestSchema, ListPromptsRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { CallToolResult, GetPromptResult, Implementation, Prompt, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { Server, ProtocolErrorCode, ProtocolError } from "@modelcontextprotocol/server";
+import { z } from "zod/v4";
+import type { CallToolResult, GetPromptResult, Implementation, Prompt, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/server";
 import type { AgentId } from "../core/types.js";
 import type { GatewayBackend } from "./gatewayBackend.js";
 import type { SkillEntry } from "./skillManifest.js";
 import { allocateExposedToolNames } from "./mcpToolRegistry.js";
+import { withoutUpstreamServerInfo } from "./upstreamResources.js";
 
 function compactBuiltinToolName(name: string): string {
   return name.startsWith("trellis.") ? name.slice("trellis.".length).replaceAll(".", "_") : name;
@@ -120,6 +121,8 @@ export class BuiltinRegistry {
       await this.listResources(context);
       provider = this.resourceOwners.get(key);
     }
+    // A manifest can introduce supporting files not returned by resources/list.
+    if (!provider && uri.protocol === "trellis-upstream:") provider = this.providers.find((candidate) => candidate.id === "upstream");
     if (!provider?.readResource) throw new Error(`unknown Trellis resource "${key}"`);
     return provider.readResource(uri, context);
   }
@@ -204,8 +207,16 @@ export class UpstreamProvider implements TrellisProvider {
   }
 
   async callTool(name: string, args: unknown): Promise<CallToolResult> {
-    return (await this.backend.callTool(name, args as Record<string, unknown> | undefined)) as CallToolResult;
+    return withoutUpstreamServerInfo((await this.backend.callTool(name, args as Record<string, unknown> | undefined)) as CallToolResult);
   }
+
+  async listResources(): Promise<Resource[]> { return await this.backend.listResources?.() ?? []; }
+  async readResource(uri: URL): Promise<ReadResourceResult> {
+    if (!this.backend.readResource) throw new Error("upstream resources unavailable");
+    return this.backend.readResource(uri.toString());
+  }
+  async listSkillEntries(): Promise<SkillEntry[]> { return await this.backend.listSkills?.() ?? []; }
+  async getSkillEntry(uri: string): Promise<SkillEntry | undefined> { return this.backend.getSkill?.(uri); }
 
   async close(): Promise<void> {
     await this.backend.close();
@@ -218,35 +229,31 @@ export function createRuntimeServer(serverInfo: Implementation, context: Runtime
       tools: { listChanged: true },
       resources: { listChanged: true },
       prompts: { listChanged: true },
+      extensions: { "io.modelcontextprotocol/skills": {} },
     },
   });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await registry.listTools(context) }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => registry.callTool(request.params.name, request.params.arguments, context));
-  server.setRequestHandler(ListResourcesRequestSchema, async () => ({ resources: await registry.listResources(context) }));
-  server.setRequestHandler(ReadResourceRequestSchema, async (request) => registry.readResource(new URL(request.params.uri), context));
-  server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: await registry.listPrompts(context) }));
-  server.setRequestHandler(GetPromptRequestSchema, async (request) => registry.getPrompt(request.params.name, request.params.arguments, context));
+  server.setRequestHandler("tools/list", async () => ({ tools: await registry.listTools(context) }));
+  server.setRequestHandler("tools/call", async ({ params }) => registry.callTool(params.name, params.arguments, context));
+  server.setRequestHandler("resources/list", async () => ({ resources: await registry.listResources(context) }));
+  server.setRequestHandler("resources/read", async ({ params }) => {
+    try { return await registry.readResource(new URL(params.uri), context); }
+    catch (err) {
+      if (err instanceof TypeError || (err instanceof Error && /unknown|not found|not allowed|outside|secret-like|invalid.*uri/i.test(err.message))) {
+        throw new ProtocolError(ProtocolErrorCode.InvalidParams, "unknown or unreadable resource");
+      }
+      throw err;
+    }
+  });
+  server.setRequestHandler("prompts/list", async () => ({ prompts: await registry.listPrompts(context) }));
+  server.setRequestHandler("prompts/get", async ({ params }) => registry.getPrompt(params.name, params.arguments, context));
 
-  // `skills/list` and `skills/get` are not in this SDK's schema set (it speaks
-  // at most 2025-11-25), so they are answered through the SDK's fallback for
-  // methods with no registered handler, which keeps the extension free of a new
-  // direct zod dependency. The extension itself is deliberately NOT declared in
-  // the capabilities above: the specification declares it only through
-  // `server/discover`, which this revision lacks, and inventing another field
-  // would claim a protocol nobody defined (trellis-skills-over-mcp D4). Any
-  // other unknown method keeps the SDK's usual "method not found".
-  server.fallbackRequestHandler = async (request) => {
-    const cache = { resultType: "complete" as const, ttlMs: 0, cacheScope: "private" as const };
-    if (request.method === "skills/list") {
-      return { ...cache, skills: await registry.listSkills(context) };
-    }
-    if (request.method === "skills/get") {
-      const uri = (request.params as { uri?: unknown } | undefined)?.uri;
-      const entry = typeof uri === "string" ? await registry.getSkill(uri, context) : undefined;
-      if (!entry) throw new McpError(ErrorCode.InvalidParams, "unknown skill");
-      return { ...cache, skill: entry };
-    }
-    throw new McpError(ErrorCode.MethodNotFound, `Method not found: ${request.method}`);
-  };
+  const result = z.looseObject({});
+  const cache = { ttlMs: 0, cacheScope: "private" as const };
+  server.setRequestHandler("skills/list", { params: z.object({ cursor: z.string().optional() }), result }, async () => ({ ...cache, skills: await registry.listSkills(context) }));
+  server.setRequestHandler("skills/get", { params: z.object({ uri: z.string() }), result }, async ({ uri }) => {
+    const entry = await registry.getSkill(uri, context);
+    if (!entry) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "unknown skill");
+    return { ...cache, skill: entry };
+  });
   return server;
 }

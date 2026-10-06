@@ -1,4 +1,4 @@
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 import type { AgentId } from "../core/types.js";
 import { DEFAULT_MAX_DELEGATION_DEPTH, loadAgentBridgeConfig, readDelegationDepth, runDelegatedCall, type AgentBridgeTargetConfig } from "./agentBridge.js";
 import { resolveZcodeProfile } from "../probes/zcode.js";

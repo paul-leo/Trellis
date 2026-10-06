@@ -17,10 +17,15 @@
  */
 
 import type { McpServerDef, SecretsPolicy } from "../core/types.js";
+import { isOAuthAuth, oauthOwner } from "../core/types.js";
 import { connectServer, type McpClientInfo } from "./mcpConnect.js";
 import { withTimeout } from "./mcpConnect.js";
 import { ensureFreshToken } from "./oauth/refresh.js";
+import { readToken } from "./oauth/store.js";
 import { McpToolRegistry, type AggregatedTool, type ToolUpstream } from "./mcpToolRegistry.js";
+import type { Client, Resource, ReadResourceResult } from "@modelcontextprotocol/client";
+import type { SkillEntry } from "./skillManifest.js";
+import { UpstreamResources } from "./upstreamResources.js";
 
 export interface GatewayBackend {
   /** Every tool available through this backend, under its aggregated name. */
@@ -29,6 +34,10 @@ export interface GatewayBackend {
   callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
   /** Sanitized connection state for user/Agent remediation. */
   listStatus?(): readonly UpstreamStatus[];
+  listResources?(): Promise<Resource[]>;
+  readResource?(uri: string): Promise<ReadResourceResult>;
+  listSkills?(): Promise<SkillEntry[]>;
+  getSkill?(uri: string): Promise<SkillEntry | undefined>;
   /** Release everything this backend holds. Must be safe to call twice. */
   close(): Promise<void>;
 }
@@ -73,9 +82,7 @@ export interface LocalBackendOptions {
   homeDir?: string;
 }
 
-interface ConnectedUpstream extends ToolUpstream {
-  close(): Promise<void>;
-}
+type ConnectedUpstream = Client;
 
 /**
  * v1's backend: connects each upstream itself and aggregates the result.
@@ -91,12 +98,15 @@ export class LocalBackend implements GatewayBackend {
   private readonly connected = new Set<ConnectedUpstream>();
   private readonly statuses = new Map<string, UpstreamStatus>();
   private closed = false;
+  private readonly resources: UpstreamResources;
 
-  private constructor(private readonly warn: (message: string) => void) {}
+  private constructor(private readonly warn: (message: string) => void, timeoutMs: number) {
+    this.resources = new UpstreamResources(timeoutMs, warn);
+  }
 
   static async connect(upstreams: readonly UpstreamSpec[], options: LocalBackendOptions): Promise<LocalBackend> {
     const warn = options.onWarning ?? ((message: string) => console.error(message));
-    const backend = new LocalBackend(warn);
+    const backend = new LocalBackend(warn, options.connectTimeoutMs);
     await Promise.all(upstreams.map((upstream) => backend.addUpstream(upstream, options)));
     return backend;
   }
@@ -120,7 +130,7 @@ export class LocalBackend implements GatewayBackend {
 
     let client: ConnectedUpstream;
     try {
-      client = (await connectServer(effectiveDef, options.secretsPolicy, options.connectTimeoutMs, options.clientInfo)) as unknown as ConnectedUpstream;
+      client = await connectServer(effectiveDef, options.secretsPolicy, options.connectTimeoutMs, options.clientInfo);
     } catch (err) {
       this.warn(`trellis-mcp-gateway: failed to connect to MCP server "${name}": ${errorText(err)}`);
       this.statuses.set(name, failureStatus(name, def, err));
@@ -130,7 +140,9 @@ export class LocalBackend implements GatewayBackend {
 
     let tools: AggregatedTool[];
     try {
-      const result = await withTimeout(client.listTools(), options.connectTimeoutMs, `listTools timed out after ${options.connectTimeoutMs}ms`);
+      const result = client.getServerCapabilities()?.tools
+        ? await withTimeout(client.listTools(), options.connectTimeoutMs, `listTools timed out after ${options.connectTimeoutMs}ms`)
+        : { tools: [] };
       tools = result.tools;
     } catch (err) {
       this.warn(`trellis-mcp-gateway: failed to list tools for MCP server "${name}": ${errorText(err)}`);
@@ -140,6 +152,7 @@ export class LocalBackend implements GatewayBackend {
     }
 
     const { skipped } = this.registry.add(name, client, tools);
+    this.resources.add(name, client);
     for (const collided of skipped) {
       this.warn(`trellis-mcp-gateway: tool "${collided}" from server "${name}" collides with an already-registered tool and was skipped`);
     }
@@ -166,6 +179,11 @@ export class LocalBackend implements GatewayBackend {
   async callTool(name: string, args?: Record<string, unknown>): Promise<unknown> {
     return this.registry.callTool(name, args);
   }
+
+  listResources(): Promise<Resource[]> { return this.resources.listResources(); }
+  readResource(uri: string): Promise<ReadResourceResult> { return this.resources.readResource(uri); }
+  listSkills(): Promise<SkillEntry[]> { return this.resources.listSkills(); }
+  getSkill(uri: string): Promise<SkillEntry | undefined> { return this.resources.getSkill(uri); }
 
   listStatus(): readonly UpstreamStatus[] {
     return [...this.statuses.values()];
@@ -251,8 +269,14 @@ function failureStatus(name: string, def: McpServerDef, error: unknown): Upstrea
  * the kind of invisible precedence that is impossible to debug.
  */
 export async function withOAuthHeader(name: string, def: McpServerDef, homeDir: string): Promise<McpServerDef> {
+  if (!isOAuthAuth(def.auth) || oauthOwner(def.auth) !== "trellis") return def;
   const hasExplicitAuth = Object.keys(def.headers ?? {}).some((key) => key.toLowerCase() === "authorization");
   if (hasExplicitAuth) return def;
+
+  const stored = readToken(homeDir, name);
+  const resource = new URL(def.url!);
+  resource.hash = "";
+  if (stored?.resourceUrl && stored.resourceUrl !== resource.toString()) throw new Error("OAuth authorization required: saved credential targets another MCP resource");
 
   const token = await ensureFreshToken(homeDir, name);
   if (!token) return def;

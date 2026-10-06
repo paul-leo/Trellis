@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadCanonicalSource, upsertServerYaml, removeServerYaml, type ServersYamlWriteResult } from "../core/canonical.js";
 import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
-import { ALL_AGENTS, isOAuthAuth, oauthClientMetadata, resolveScope } from "../core/types.js";
+import { ALL_AGENTS, isOAuthAuth, oauthClientMetadata, oauthOwner, resolveScope } from "../core/types.js";
 import type { AgentId, McpAuthMode, McpConfig, McpServerDef, Transport } from "../core/types.js";
 import { isValidSecretVarName } from "../lib/secretEnv.js";
 import { isExpired, readToken } from "../lib/oauth/store.js";
@@ -164,6 +164,8 @@ export interface McpListEntry {
   /** Normalized: `oauth` in either the scalar or the object form reports as
    * the scalar here — the listing reports classification, not metadata. */
   auth?: McpAuthMode;
+  authOwner?: "agent" | "trellis";
+  agentAuthorization?: Array<{ agent: AgentId; status: "unknown"; instruction: string }>;
   /** Presence of pre-registered client metadata
    * (trellis-mcp-oauth-static-client task 3.2) — `true` when the object form
    * carries a `client_id`. A presence flag, deliberately not the id itself:
@@ -193,7 +195,7 @@ export interface McpListEntry {
   staticEnv?: Record<string, string>;
 }
 
-export type McpAuthStatus = "not-authorized" | "authorized" | "refreshable" | "expired";
+export type McpAuthStatus = "not-authorized" | "authorized" | "refreshable" | "expired" | "unknown";
 
 /**
  * Reads only the per-server token store and returns the state, never a
@@ -202,7 +204,7 @@ export type McpAuthStatus = "not-authorized" | "authorized" | "refreshable" | "e
  * name that cannot be a token filename, or an unreadable file, simply has no
  * credential: one odd entry must not take down the whole listing.
  */
-export function mcpCredentialState(homeDir: string, serverName: string): { authStatus: McpAuthStatus; authExpiresAt?: number } {
+export function mcpCredentialState(homeDir: string, serverName: string, resourceUrl?: string): { authStatus: McpAuthStatus; authExpiresAt?: number } {
   let token;
   try {
     token = readToken(homeDir, serverName);
@@ -210,6 +212,10 @@ export function mcpCredentialState(homeDir: string, serverName: string): { authS
     return { authStatus: "not-authorized" };
   }
   if (!token?.accessToken) return { authStatus: "not-authorized" };
+  if (resourceUrl && token.resourceUrl) {
+    const resource = new URL(resourceUrl); resource.hash = "";
+    if (token.resourceUrl !== resource.toString()) return { authStatus: "not-authorized" };
+  }
   const expiry = token.expiresAt !== undefined ? { authExpiresAt: token.expiresAt } : {};
   if (!isExpired(token)) return { authStatus: "authorized", ...expiry };
   return { authStatus: token.refreshToken ? "refreshable" : "expired", ...expiry };
@@ -222,7 +228,16 @@ export function collectMcpListPlan(homeDir: string = homedir()): McpListEntry[] 
     transport: def.transport,
     auth: isOAuthAuth(def.auth) ? ("oauth" as const) : undefined,
     preRegisteredClient: oauthClientMetadata(def.auth).clientId !== undefined ? (true as const) : undefined,
-    ...(isOAuthAuth(def.auth) ? mcpCredentialState(homeDir, name) : {}),
+    ...(isOAuthAuth(def.auth) ? {
+      authOwner: oauthOwner(def.auth),
+      ...(oauthOwner(def.auth) === "trellis" ? mcpCredentialState(homeDir, name, def.url) : {
+        authStatus: "unknown" as const,
+        agentAuthorization: resolveScope(def.agents, canonical.managedAgents).map((agent) => ({
+          agent, status: "unknown" as const,
+          instruction: agent === "codex" ? `codex mcp login ${name}` : agent === "claude-code" ? "Open Claude Code and use /mcp to authorize this server" : "Authorize this server in the Agent's MCP settings",
+        })),
+      }),
+    } : {}),
     enabled: def.enabled ?? true,
     agents: resolveScope(def.agents, canonical.managedAgents),
     command: def.command,
@@ -310,6 +325,7 @@ export function parseMcpSetArgs(argv: readonly string[]): McpSetAuthRawArgs {
     auth: flag("--auth"),
     clientId: flag("--client-id"),
     clientSecretEnv: flag("--client-secret-env"),
+    authOwner: flag("--auth-owner"),
   };
 }
 
@@ -423,6 +439,7 @@ export interface McpSetAuthPlan {
  * plan collector. */
 export interface McpSetAuthRawArgs {
   auth?: string;
+  authOwner?: string;
   /** Public literal by design (design.md D2) — the one field it is fine to
    * pass on a command line. Never echoed back in output or errors. */
   clientId?: string;
@@ -452,8 +469,10 @@ export function collectMcpSetAuthPlan(name: string | undefined, raw: McpSetAuthR
   const mode = raw.auth === "oauth" || raw.auth === "none" ? raw.auth : undefined;
   if (!name) return { name: "(none)", auth: (mode ?? "none"), action: "invalid-input", detail: "usage: trellis mcp set <name> --auth oauth|none [--client-id <id>] [--client-secret-env <NAME>]" };
 
-  const hasClientFlags = raw.clientId !== undefined || raw.clientSecretEnv !== undefined;
-  const clientFlagsDetail = "--client-id / --client-secret-env require an explicit --auth oauth in the same command";
+  const hasClientFlags = raw.clientId !== undefined || raw.clientSecretEnv !== undefined || raw.authOwner !== undefined;
+  const clientFlagsDetail = raw.authOwner !== undefined
+    ? "--auth-owner requires an explicit --auth oauth in the same command"
+    : "--client-id / --client-secret-env require an explicit --auth oauth in the same command";
   if (mode === undefined) {
     // Naming the missing --auth is the actionable error when that is what
     // the user was reaching for; otherwise report the invalid value itself.
@@ -465,6 +484,9 @@ export function collectMcpSetAuthPlan(name: string | undefined, raw: McpSetAuthR
   }
   if (raw.clientId === "") {
     return { name, auth: mode, action: "invalid-input", detail: "--client-id must not be empty" };
+  }
+  if (raw.authOwner !== undefined && raw.authOwner !== "agent" && raw.authOwner !== "trellis") {
+    return { name, auth: mode, action: "invalid-input", detail: "--auth-owner must be agent or trellis" };
   }
   if (raw.clientSecretEnv !== undefined && !isValidSecretVarName(raw.clientSecretEnv)) {
     // The value is deliberately not echoed: a name-shaped field failing
@@ -523,6 +545,7 @@ export function collectMcpSetAuthPlan(name: string | undefined, raw: McpSetAuthR
       ...current,
       auth: {
         kind: "oauth",
+        ...(raw.authOwner !== undefined ? { owner: raw.authOwner as "agent" | "trellis" } : typeof current.auth === "object" && current.auth.owner !== undefined ? { owner: current.auth.owner } : {}),
         ...(clientId !== undefined ? { clientId } : {}),
         ...(clientSecretEnv !== undefined ? { clientSecretEnv } : {}),
       },
@@ -556,6 +579,17 @@ export function runMcpSetAuth(name: string | undefined, raw: McpSetAuthRawArgs, 
     if (writeError) console.error(`  write failed: ${writeError}`);
   }
   return { exitCode: ["invalid-input", "not-found"].includes(plan.action) || Boolean(writeError) ? 1 : 0 };
+}
+
+export async function applyMcpSetAuthWithSync(plan: McpSetAuthPlan, homeDir: string): Promise<{ plan: McpSetAuthPlan; sync?: McpSyncReport }> {
+  if (plan.action !== "updated" || !plan.def) return { plan };
+  const backup = openBackupSession(homeDir, "mcp-auth-owner");
+  try {
+    const path = serversYamlPath(homeDir);
+    const result = upsertServerYaml(path, plan.name, plan.def, backup);
+    if (!result.ok) throw new Error(result.error);
+    return { plan, sync: await collectMcpSyncReport({ homeDir, backupSession: backup }) };
+  } finally { backup.finalize(); }
 }
 
 export type McpScopeAction = "updated" | "already-set" | "not-found" | "invalid-input";

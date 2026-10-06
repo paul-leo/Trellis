@@ -23,6 +23,8 @@ import { createLiveUpdates } from "./liveUpdates.js";
 import { createChatSessionStore } from "./chatSessionStore.js";
 import { PlanStore } from "./planStore.js";
 import { applyLoginShellPath } from "./shellPath.js";
+import { OAuthJobs } from "./oauthJobs.js";
+import { createOAuthRoutes } from "./routes/oauth.js";
 
 export async function proveInternalImportsWork(homeDir: string = homedir()): Promise<{ doctorOk: boolean; syncOk: boolean }> {
   const doctorReport = await collectDoctorReport(homeDir);
@@ -48,8 +50,10 @@ async function main(): Promise<void> {
   // `liveUpdates.broadcast` — chat streams over the same `/events` socket
   // the file watcher already uses (liveUpdates.ts's own doc comment).
   const liveUpdates = createLiveUpdates(homeDir);
+  const oauthJobs = new OAuthJobs(homeDir, { onChanged: () => liveUpdates.broadcast({ type: "change", path: "mcp/oauth" }) });
   const server = createSidecarServer([
     ...createReadRoutes(homeDir),
+    ...createOAuthRoutes(oauthJobs),
     ...createPlanApplyRoutes(homeDir, planStore),
     ...createChatRoutes(homeDir, chatSessionStore, (message) => liveUpdates.broadcast(message)),
   ]);
@@ -63,6 +67,7 @@ async function main(): Promise<void> {
   console.log(`TRELLIS_SIDECAR_PORT=${port}`);
 
   const shutdown = (): void => {
+    oauthJobs.close();
     liveUpdates.close();
     server.close(() => process.exit(0));
   };

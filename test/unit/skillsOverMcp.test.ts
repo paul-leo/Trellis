@@ -218,7 +218,7 @@ test("skills/list: entries carry the verbatim frontmatter, the full manifest, an
   const c = await connect(home);
   try {
     const result = await c.raw("skills/list");
-    assert.equal(result.resultType, "complete");
+    assert.equal(result.resultType, undefined, "legacy results do not carry modern wire discrimination");
     assert.equal(typeof result.ttlMs, "number");
     assert.ok(result.ttlMs >= 0);
     assert.equal(result.cacheScope, "private", "the list varies by agent, so it must not be shareable");
@@ -239,7 +239,7 @@ test("skills/get: returns the same entry by URI, and -32602 for unknown or malfo
     const listed = (await c.raw("skills/list")).skills[0];
     const got = await c.raw("skills/get", { uri: "skill://review/SKILL.md" });
     assert.deepEqual(got.skill, listed);
-    assert.equal(got.resultType, "complete");
+    assert.equal(got.resultType, undefined, "legacy results do not carry modern wire discrimination");
     assert.equal(got.cacheScope, "private");
 
     for (const uri of ["skill://nope/SKILL.md", "skill://review/other.md", "https://example.com/SKILL.md", 42]) {
@@ -275,14 +275,13 @@ test("scope: a skill scoped away from the agent is invisible everywhere, includi
   }
 });
 
-test("declaration: the extension is not declared, and unknown methods still get method-not-found", async () => {
+test("declaration: extension metadata is available and unknown methods still get method-not-found", async () => {
   const { home, skills } = fixtureHome();
   addSkill(skills, "review", "name: review\ndescription: review code");
   const c = await connect(home);
   try {
     const caps = c.client.getServerCapabilities() as Record<string, unknown>;
-    assert.equal(JSON.stringify(caps).includes("io.modelcontextprotocol/skills"), false, "no declaration on a revision that cannot carry one");
-    assert.equal("extensions" in caps, false);
+    assert.deepEqual((caps.extensions as Record<string, unknown>)["io.modelcontextprotocol/skills"], {});
     assert.equal("experimental" in caps, false, "and nothing smuggled into another field");
 
     await assert.rejects(() => c.raw("totally/unknown"), (err: any) => err.code === -32601);

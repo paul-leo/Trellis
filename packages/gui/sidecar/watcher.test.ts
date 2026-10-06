@@ -16,7 +16,7 @@ function cli(homeDir: string, args: string[]): string {
 
 function waitForPath(events: string[], suffix: string, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms waiting for an event matching "${suffix}" — saw: ${JSON.stringify(events)}`)), timeoutMs);
+    const timer = setTimeout(() => { clearInterval(interval); reject(new Error(`timed out after ${timeoutMs}ms waiting for an event matching "${suffix}" — saw: ${JSON.stringify(events)}`)); }, timeoutMs);
     const interval = setInterval(() => {
       const match = events.find((path) => path.endsWith(suffix));
       if (match) {
@@ -70,7 +70,10 @@ test("watchTrellisHome: rapid repeated writes to the same path collapse into one
     writeFileSync(targetFile, `${original}# rev 2\n`);
     writeFileSync(targetFile, `${original}# rev 3\n`);
 
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Wait for actual delivery before measuring the quiet debounce window;
+    // fs.watch scheduling is not bounded by a fixed wall-clock sleep.
+    await waitForPath(events, "servers.yaml");
+    await new Promise((resolve) => setTimeout(resolve, 200));
     const serversYamlEvents = events.filter((path) => path.endsWith("servers.yaml"));
     assert.equal(serversYamlEvents.length, 1, `expected exactly one debounced event for servers.yaml, got ${serversYamlEvents.length}`);
   } finally {

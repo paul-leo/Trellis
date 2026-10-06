@@ -736,25 +736,34 @@ const OAUTH_SERVERS = `servers:
   fresh:
     transport: http
     url: https://a.example/mcp
-    auth: oauth
+    auth:
+      kind: oauth
+      owner: trellis
   renewable:
     transport: http
     url: https://b.example/mcp
-    auth: oauth
+    auth:
+      kind: oauth
+      owner: trellis
   dead:
     transport: http
     url: https://c.example/mcp
-    auth: oauth
+    auth:
+      kind: oauth
+      owner: trellis
   never:
     transport: http
     url: https://d.example/mcp
     auth:
       kind: oauth
+      owner: trellis
       client_id: published-client-id
   forever:
     transport: http
     url: https://e.example/mcp
-    auth: oauth
+    auth:
+      kind: oauth
+      owner: trellis
   plain:
     transport: http
     url: https://f.example/mcp
@@ -824,7 +833,7 @@ test("mcp list: no credential material reaches the JSON or the text listing", ()
 
 test("mcp list: a server name that cannot be a token filename does not take the whole listing down", () => {
   const home = scratchHome();
-  initCanonical(home, 'servers:\n  ".hidden":\n    transport: http\n    url: https://x.example/mcp\n    auth: oauth\n  ok:\n    transport: stdio\n    command: node\n');
+  initCanonical(home, 'servers:\n  ".hidden":\n    transport: http\n    url: https://x.example/mcp\n    auth:\n      kind: oauth\n      owner: trellis\n  ok:\n    transport: stdio\n    command: node\n');
 
   const entries = collectMcpListPlan(home);
 

@@ -21,6 +21,8 @@ import type { AddressInfo } from "node:net";
 import { verifyChallenge } from "../../src/lib/oauth/pkce.js";
 
 export interface FakeAuthServerOptions {
+  requireResource?: boolean;
+  issuerResponse?: "valid" | "wrong";
   /** Omit the registration endpoint from metadata, to exercise the
    * "AS offers no DCR" path. */
   noRegistration?: boolean;
@@ -96,6 +98,7 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
       scopes_supported: ["mcp.read", "mcp.write"],
       code_challenge_methods_supported: ["S256"],
       response_types_supported: ["code"],
+      ...(options.issuerResponse ? { authorization_response_iss_parameter_supported: true } : {}),
     };
 
     // --- discovery ---------------------------------------------------
@@ -135,6 +138,7 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
 
     // --- authorization endpoint --------------------------------------
     if (url.pathname === "/authorize") {
+      if (options.requireResource && url.searchParams.get("resource") !== `${base}/mcp`) return json(400, { error: "invalid_target" });
       const clientId = url.searchParams.get("client_id") ?? "";
       const challenge = url.searchParams.get("code_challenge") ?? "";
       const method = url.searchParams.get("code_challenge_method");
@@ -153,6 +157,7 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
       const location = new URL(redirectUri);
       location.searchParams.set("code", code);
       location.searchParams.set("state", state);
+      if (options.issuerResponse) location.searchParams.set("iss", options.issuerResponse === "valid" ? base : "https://wrong-issuer.example");
       res.writeHead(302, { location: location.toString() });
       return res.end();
     }
@@ -162,6 +167,7 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
       const body = await readBody(req);
       const params = new URLSearchParams(body);
       const grantType = params.get("grant_type") ?? "";
+      if (options.requireResource && params.get("resource") !== `${base}/mcp`) return json(400, { error: "invalid_target" });
       grants.push({ grantType, at: Date.now() });
       const presentedSecret = params.get("client_secret");
       if (presentedSecret) clientSecretsSeen.push(presentedSecret);

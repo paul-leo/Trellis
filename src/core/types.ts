@@ -17,6 +17,8 @@ export type McpAuthMode = "oauth";
  */
 export interface McpAuthConfig {
   kind: McpAuthMode;
+  /** Omitted preserves each Agent's native authorization. */
+  owner?: "agent" | "trellis";
   clientId?: string;
   clientSecretEnv?: string;
 }
@@ -27,6 +29,10 @@ export interface McpAuthConfig {
  * OAuth routing from metadata-bearing servers. */
 export function isOAuthAuth(auth: McpAuthMode | McpAuthConfig | undefined): boolean {
   return auth === "oauth" || (typeof auth === "object" && auth !== null && auth.kind === "oauth");
+}
+
+export function oauthOwner(auth: McpAuthMode | McpAuthConfig | undefined): "agent" | "trellis" {
+  return typeof auth === "object" && auth?.owner === "trellis" ? "trellis" : "agent";
 }
 
 /** The pre-registered client metadata a classification carries. A scalar
@@ -77,7 +83,7 @@ export interface McpServerDef {
   /** Explicit authorization classification. Absence means ordinary MCP;
    * Trellis never infers OAuth from a URL or a transient 401. The scalar
    * form and a metadata-less object are equivalent — metadata extends the
-   * authorization flow, it never changes routing
+   * authorization flow; only explicit `owner: trellis` changes routing
    * (trellis-mcp-oauth-static-client design.md D1). */
   auth?: McpAuthMode | McpAuthConfig;
   /** stdio only */

@@ -8,11 +8,12 @@ import { getJson } from "./sidecar";
  * subscribe-and-rerender-without-a-manual-reload contract every read
  * view needs (trellis-gui tasks.md 6.2).
  */
-export function useFetch<T>(path: string): { data: T | undefined; error: string | undefined; loading: boolean } {
+export function useFetch<T>(path: string): { data: T | undefined; error: string | undefined; loading: boolean; refresh: () => void } {
   const { port, liveVersion } = useSidecar();
   const [data, setData] = useState<T>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     if (port === undefined) return;
@@ -34,7 +35,7 @@ export function useFetch<T>(path: string): { data: T | undefined; error: string 
     return () => {
       cancelled = true;
     };
-  }, [port, path, liveVersion]);
+  }, [port, path, liveVersion, revision]);
 
-  return { data, error, loading };
+  return { data, error, loading, refresh: () => setRevision((v) => v + 1) };
 }

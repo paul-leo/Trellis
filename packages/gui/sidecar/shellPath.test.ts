@@ -17,7 +17,9 @@ function makeFakeShell(dir: string, path: string): string {
 test("resolveLoginShellPath: returns the shell's PATH when the shell succeeds", () => {
   const dir = mkdtempSync(join(tmpdir(), "trellis-shellpath-"));
   const shell = makeFakeShell(dir, "/fake/bin:/fake/usr/bin");
-  const path = resolveLoginShellPath({ shell });
+  // Fresh executable fixtures can have slow OS startup under suite load. The
+  // deadline behavior itself is exercised separately with a pinned 200ms limit.
+  const path = resolveLoginShellPath({ shell, timeoutMs: 15000 });
   assert.equal(path, "/fake/bin:/fake/usr/bin");
 });
 
@@ -39,7 +41,7 @@ test("applyLoginShellPath: merges the shell PATH ahead of the existing PATH, ded
   const dir = mkdtempSync(join(tmpdir(), "trellis-shellpath-"));
   const shell = makeFakeShell(dir, "/fake/volta/bin:/usr/bin");
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin" };
-  const changed = applyLoginShellPath({ shell }, env);
+  const changed = applyLoginShellPath({ shell, timeoutMs: 15000 }, env);
   assert.equal(changed, true);
   assert.equal(env.PATH, "/fake/volta/bin:/usr/bin:/bin");
 });

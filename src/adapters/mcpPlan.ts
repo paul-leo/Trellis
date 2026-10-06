@@ -19,7 +19,7 @@
 
 import { isInScope } from "../core/adapter.js";
 import { capabilityDeliveryForAgent } from "../core/types.js";
-import { isOAuthAuth } from "../core/types.js";
+import { isOAuthAuth, oauthOwner } from "../core/types.js";
 import type { AgentId, McpConfig, McpRoute, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
@@ -44,6 +44,10 @@ export const RUNTIME_COMMAND = "trellis";
  * D1). */
 export function isOAuthMcpServer(def: McpServerDef): boolean {
   return isOAuthAuth(def.auth);
+}
+
+export function isAgentOwnedOAuth(def: McpServerDef): boolean {
+  return isOAuthMcpServer(def) && oauthOwner(def.auth) === "agent";
 }
 
 /**
@@ -201,7 +205,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
         conflicts: [{ name: entryName, message: collisionMessage(entryName, agentId), remediation: collisionRemediation(entryName) }],
       };
     }
-    const oauth = planDirectServers(agentId, mcp, managedAgents, policy, route, isOAuthMcpServer);
+    const oauth = planDirectServers(agentId, mcp, managedAgents, policy, route, isAgentOwnedOAuth);
     // Every ordinary per-server check (enabled, scope, literal secrets,
     // unresolved env names, Codex's header shape) still runs at gateway
     // startup. OAuth servers are the deliberate exception: they are written
@@ -279,16 +283,22 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
     // Runtime mode owns the agent-facing MCP edge. It resolves the same
     // direct/gateway-compatible upstream route at startup, so native
     // per-server entries are not duplicated here.
+    const oauth = planDirectServers(agentId, mcp, managedAgents, policy, route, isAgentOwnedOAuth);
     return {
       desired: [{
         name: RUNTIME_ENTRY_NAME,
         def: { transport: "stdio", command: RUNTIME_COMMAND, args: ["mcp-runtime", "--agent", agentId] },
-      }],
-      conflicts: [],
+      }, ...oauth.desired],
+      conflicts: oauth.conflicts,
     };
   }
 
-  return planDirectServers(agentId, mcp, managedAgents, policy, route);
+  const native = planDirectServers(agentId, mcp, managedAgents, policy, route);
+  const hosted = native.desired.filter(({ def }) => isOAuthMcpServer(def) && oauthOwner(def.auth) === "trellis");
+  return {
+    desired: native.desired.filter(({ def }) => !isOAuthMcpServer(def) || oauthOwner(def.auth) === "agent"),
+    conflicts: [...native.conflicts, ...hosted.map(({ name }) => ({ name, message: `Trellis-owned OAuth server "${name}" requires gateway or runtime delivery for ${agentId}`, remediation: "enable gateway/runtime delivery or set auth.owner to agent" }))],
+  };
 }
 
 function planDirectServers(

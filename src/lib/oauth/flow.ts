@@ -37,6 +37,9 @@ export interface AuthorizeOptions {
    * is actually bound, so a fixed one is never required. */
   callbackPort?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  resourceUrl?: string;
+  onProgress?: (phase: "registering" | "waiting" | "exchanging") => void;
 }
 
 interface RegistrationResponse {
@@ -118,6 +121,7 @@ interface CallbackResult {
   state?: string;
   error?: string;
   errorDescription?: string;
+  issuer?: string;
 }
 
 /** A one-shot loopback listener for the redirect. Bound to 127.0.0.1
@@ -132,12 +136,15 @@ function listenForCallback(port: number): Promise<{ server: HttpServer; port: nu
 
     const server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method !== "GET" || url.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
       const result: CallbackResult = {};
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
       const error = url.searchParams.get("error");
       if (code) result.code = code;
       if (state) result.state = state;
+      const issuer = url.searchParams.get("iss");
+      if (issuer) result.issuer = issuer;
       if (error) {
         result.error = error;
         const description = url.searchParams.get("error_description");
@@ -147,7 +154,7 @@ function listenForCallback(port: number): Promise<{ server: HttpServer; port: nu
       res.end(
         result.error
           ? `<html><body><h1>Authorization failed</h1><p>${escapeHtml(result.errorDescription ?? result.error)}</p></body></html>`
-          : "<html><body><h1>Authorized</h1><p>You can close this tab and return to your terminal.</p></body></html>",
+          : "<html><body><h1>Authorization response received</h1><p>You can close this tab and return to Trellis.</p></body></html>",
       );
       settle(result);
     });
@@ -173,7 +180,8 @@ export async function authorize(
   metadata: AuthorizationServerMetadata,
   opts: AuthorizeOptions = {},
 ): Promise<StoredToken> {
-  const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  opts.signal?.throwIfAborted();
+  const fetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: opts.signal }));
   const now = opts.now ?? Date.now;
   const timeoutMs = opts.timeoutMs ?? 300_000;
 
@@ -184,13 +192,14 @@ export async function authorize(
     let clientId = opts.clientId;
     let clientSecret = opts.clientSecret;
     if (!clientId) {
+      opts.onProgress?.("registering");
       // The AS cannot register us AND canonical carries no client_id — the
       // one dead end a person has to resolve by hand, so it is reported as
       // such rather than as a generic registration failure
       // (trellis-mcp-oauth-static-client design.md D3, task 2.3).
       let registered: { clientId: string; clientSecret?: string } | undefined;
       try {
-        registered = await registerClient(metadata, redirectUri, { fetchImpl, scope: opts.scope });
+        registered = await abortable(registerClient(metadata, redirectUri, { fetchImpl, scope: opts.scope }), opts.signal);
       } catch (err) {
         if (err instanceof AuthorizationError) {
           throw new AuthorizationError(`"${serverName}": ${err.message} — ${STATIC_CLIENT_REMEDIATION}`);
@@ -217,10 +226,13 @@ export async function authorize(
     authUrl.searchParams.set("code_challenge_method", pkce.method);
     authUrl.searchParams.set("state", state);
     if (opts.scope) authUrl.searchParams.set("scope", opts.scope);
+    if (opts.resourceUrl) authUrl.searchParams.set("resource", opts.resourceUrl);
 
-    await (opts.openBrowser ?? defaultOpenBrowser)(authUrl.toString());
+    opts.signal?.throwIfAborted();
+    opts.onProgress?.("waiting");
+    await abortable((opts.openBrowser ?? defaultOpenBrowser)(authUrl.toString()), opts.signal);
 
-    const callback = await withTimeout(received, timeoutMs, `timed out waiting for the authorization callback for "${serverName}"`);
+    const callback = await withTimeout(received, timeoutMs, `timed out waiting for the authorization callback for "${serverName}"`, opts.signal);
     if (callback.error) {
       throw new AuthorizationError(`authorization for "${serverName}" was refused: ${callback.errorDescription ?? callback.error}`);
     }
@@ -232,7 +244,12 @@ export async function authorize(
     if (callback.state !== state) {
       throw new AuthorizationError(`authorization callback for "${serverName}" carried an unexpected state parameter`);
     }
+    if ((callback.issuer && callback.issuer !== metadata.issuer) || (metadata.issuerParameterSupported && !callback.issuer)) {
+      throw new AuthorizationError("authorization callback issuer does not match the discovered authorization server");
+    }
 
+    opts.signal?.throwIfAborted();
+    opts.onProgress?.("exchanging");
     const body = new URLSearchParams({
       grant_type: "authorization_code",
       code: callback.code,
@@ -241,12 +258,13 @@ export async function authorize(
       code_verifier: pkce.verifier,
     });
     if (clientSecret) body.set("client_secret", clientSecret);
+    if (opts.resourceUrl) body.set("resource", opts.resourceUrl);
 
-    const response = await fetchImpl(metadata.tokenEndpoint, {
+    const response = await abortable(fetchImpl(metadata.tokenEndpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body: body.toString(),
-    });
+    }), opts.signal);
     if (!response.ok) {
       throw new AuthorizationError(`token exchange for "${serverName}" failed with HTTP ${response.status}`);
     }
@@ -264,6 +282,8 @@ export async function authorize(
       accessToken: payload.access_token,
       tokenEndpoint: metadata.tokenEndpoint,
       clientId,
+      issuer: metadata.issuer,
+      ...(opts.resourceUrl ? { resourceUrl: opts.resourceUrl } : {}),
     };
     if (payload.refresh_token) token.refreshToken = payload.refresh_token;
     if (payload.expires_in !== undefined) token.expiresAt = now() + payload.expires_in * 1000;
@@ -271,24 +291,34 @@ export async function authorize(
     if (payload.scope ?? opts.scope) token.scope = payload.scope ?? opts.scope;
     return token;
   } finally {
+    server.closeAllConnections();
     server.close();
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new AuthorizationError(message)), timeoutMs);
+    const abort = (): void => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal?.reason ?? new Error("authorization cancelled")); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); reject(new AuthorizationError(message)); }, timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
     promise.then(
       (value) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
         resolve(value);
       },
       (err) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
         reject(err);
       },
     );
   });
+}
+
+export function abortable<T>(value: T | Promise<T>, signal?: AbortSignal): Promise<T> {
+  return withTimeout(Promise.resolve(value), 300_000, "authorization timed out", signal);
 }
 
 async function defaultOpenBrowser(url: string): Promise<void> {
@@ -296,5 +326,9 @@ async function defaultOpenBrowser(url: string): Promise<void> {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   // Detached and fully ignored: a browser that outlives this command is
   // correct, and its stdio must not be inherited onto ours.
-  spawn(command, [url], { detached: true, stdio: "ignore" }).unref();
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, [url], { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => { child.unref(); resolve(); });
+  });
 }

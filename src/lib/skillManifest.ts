@@ -36,6 +36,7 @@ export interface SkillEntry {
   uri: string;
   frontmatter: Record<string, unknown>;
   resources: SkillManifestFile[];
+  _meta?: Record<string, unknown>;
 }
 
 export type SkillBuild = { ok: true; entry: SkillEntry } | { ok: false; reason: string };
@@ -107,7 +108,7 @@ export function mimeTypeFor(path: string): string {
  * base64 blob, or the bytes a host verifies would not be the bytes we hashed. */
 export function toResourceContent(uri: string, path: string, bytes: Buffer): { uri: string; mimeType: string; text: string } | { uri: string; mimeType: string; blob: string } {
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     return { uri, mimeType: mimeTypeFor(path), text };
   } catch {
     return { uri, mimeType: "application/octet-stream", blob: bytes.toString("base64") };
