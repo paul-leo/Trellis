@@ -18,4 +18,4 @@
 ## 4. Completion
 
 - [x] 4.1 Document ownership/migration and validate this change.
-- [ ] 4.2 Run root and GUI typechecks, relevant/full tests and core build; retain logs and submit a reviewable MR. Desktop packaging remains deferred.
+- [x] 4.2 Run root and GUI typechecks, relevant/full tests and core build; retain logs and submit a reviewable MR. Desktop packaging remains deferred.

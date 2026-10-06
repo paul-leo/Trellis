@@ -46,3 +46,5 @@ Logs retained locally:
 - `/tmp/trellis-mr-9-smoke.log`
 - `/tmp/trellis-desktop-final-closure.log`
 - `/tmp/trellis-mr-verify-pack.log`
+
+MR: https://github.com/paul-leo/Trellis/pull/2
