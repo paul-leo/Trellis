@@ -21,6 +21,7 @@ import { AddressInfo } from "node:net";
 import { createPkcePair } from "./pkce.js";
 import type { AuthorizationServerMetadata, FetchLike } from "./discovery.js";
 import type { StoredToken } from "./store.js";
+import { renderCallbackPage } from "./callbackPage.js";
 
 export class AuthorizationError extends Error {}
 
@@ -128,7 +129,7 @@ interface CallbackResult {
 /** A one-shot loopback listener for the redirect. Bound to 127.0.0.1
  * explicitly, never 0.0.0.0: the authorization code arrives in this URL,
  * and a listener on all interfaces would accept it from the network. */
-function listenForCallback(port: number): Promise<{ server: HttpServer; port: number; received: Promise<CallbackResult> }> {
+function listenForCallback(port: number, serverName: string): Promise<{ server: HttpServer; port: number; received: Promise<CallbackResult> }> {
   return new Promise((resolve, reject) => {
     let settle: (result: CallbackResult) => void;
     const received = new Promise<CallbackResult>((r) => {
@@ -151,12 +152,15 @@ function listenForCallback(port: number): Promise<{ server: HttpServer; port: nu
         const description = url.searchParams.get("error_description");
         if (description) result.errorDescription = description;
       }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(
-        result.error
-          ? `<html><body><h1>Authorization failed</h1><p>${escapeHtml(result.errorDescription ?? result.error)}</p></body></html>`
-          : "<html><body><h1>Authorization response received</h1><p>You can close this tab and return to Trellis.</p></body></html>",
-      );
+      const page = renderCallbackPage({ serverName, hasCode: Boolean(result.code), error: result.error, acceptLanguage: req.headers["accept-language"] });
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": page.contentSecurityPolicy,
+      });
+      res.end(page.html);
       settle(result);
     });
 
@@ -165,10 +169,6 @@ function listenForCallback(port: number): Promise<{ server: HttpServer; port: nu
       resolve({ server, port: (server.address() as AddressInfo).port, received });
     });
   });
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 }
 
 /**
@@ -186,7 +186,7 @@ export async function authorize(
   const now = opts.now ?? Date.now;
   const timeoutMs = opts.timeoutMs ?? 300_000;
 
-  const { server, port, received } = await listenForCallback(opts.callbackPort ?? 0);
+  const { server, port, received } = await listenForCallback(opts.callbackPort ?? 0, serverName);
   const redirectUri = `http://127.0.0.1:${port}/callback`;
 
   try {
