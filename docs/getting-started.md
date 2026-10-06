@@ -310,8 +310,10 @@ Use it as a checklist for the operator-assisted migration flow:
 4. Apply only after reviewing the dry-run. `onboard` performs migration,
    native/runtime sync, Memory sync, secrets audit, and health verification in
    one transaction.
-5. Resolve OAuth interactively with `trellis mcp auth <server>`. Never place a
-   token in this Skill, `servers.yaml`, tests, or demonstration configuration.
+5. Resolve Agent-owned OAuth through that Agent's supported login flow. For
+   explicitly Trellis-owned connections, use desktop Authorize or
+   `trellis mcp auth <server>`. Never place a token in this Skill,
+   `servers.yaml`, tests, or demonstration configuration.
 6. If the verdict blocks, follow its remediation. Do not delete an unknown
    file or bypass ownership protection; every real write has a backup and can
    be inspected with `trellis rollback --list`.
@@ -727,12 +729,16 @@ env_aliases:
 The actual value is never printed in the plan, JSON report, canonical YAML, or
 shell arguments. Re-importing is idempotent; an existing local secret with a
 different value is a conflict and is never overwritten. OAuth sessions are not
-imported — authorize the resulting remote MCP explicitly with
+imported — authorize through the owning Agent, or explicitly select Trellis
+ownership and a compatible gateway/runtime route before using
 `trellis mcp auth <name>`.
 
 Use `trellis mcp set <name> --auth oauth` to keep a known OAuth MCP direct
 when its Agent uses gateway mode; use `--auth none` to clear the marker.
 Trellis does not infer OAuth from a URL or an authentication failure.
+`auth: oauth` defaults to Agent ownership. Explicit hosting uses
+`--auth oauth --auth-owner trellis` and requires gateway/runtime delivery for
+every receiver. See [MCP authorization ownership](mcp-authorization-ownership.md).
 
 `mcp remove` changes canonical state only. The next `trellis mcp sync` removes
 the old native entry when the ownership ledger proves Trellis still owns it;
@@ -842,19 +848,19 @@ this field existed.
 
 ## Gateway mode — one entry per agent instead of N
 
-Add this to `servers.yaml` and every managed agent's config collapses to
-a single MCP entry:
+Add this to `servers.yaml` to converge ordinary MCP connections behind one
+Trellis entry per managed Agent:
 
 ```yaml
 gateway:
   enabled: true
 ```
 
-Then re-run `trellis mcp sync`. Instead of one native entry per server,
-each agent gets one stdio entry pointing at `trellis mcp-gateway`. The
-agent spawns it like any other stdio MCP server; it connects out to your
-servers, and exits when the session ends. There is nothing to start,
-stop, or monitor.
+Then re-run `trellis mcp sync`. Each Agent gets a stdio entry pointing at
+`trellis mcp-gateway`, plus direct entries for eligible Agent-owned OAuth.
+Explicitly Trellis-owned OAuth stays inside the gateway. Each Agent session
+spawns its own gateway, connects to the selected upstreams, and releases them
+when it exits. This does not introduce a machine-wide daemon.
 
 Long unambiguous upstream tools stay compact. Generic short names such as
 `search` receive source context even when unique; if both GitHub and GitLab
@@ -872,14 +878,31 @@ be set, and gateway wins for any agent it covers.
 Two things stop being problems in gateway mode. Codex can normally only
 express a single `Authorization: Bearer ${VAR}` header, so a server
 needing more than one was refused for Codex — in gateway mode Codex never
-sees any ordinary server's headers, so it just works. OAuth-marked servers
-stay direct while ordinary remote servers remain shared through the gateway.
+sees any ordinary server's headers, so it just works. Agent-owned OAuth stays
+direct; explicitly Trellis-owned OAuth and ordinary servers use the gateway.
+Unowned native entries remain protected by the ownership ledger.
+See [MCP hosting and governance](mcp-hosting-governance.md) for consolidation.
 
 ### `trellis mcp auth <server-name>`
 
-For a remote (`http`/`sse`) server marked `auth: oauth`, native Agents should
-use their own login command. Pi's direct bridge path can be authorized once
-through Trellis:
+For a remote (`http`/`sse`) server marked `auth: oauth`, authorization defaults
+to the Agent. Use its supported login flow; Trellis does not copy or refresh
+its credentials. This also applies to Pi's Agent-owned connections: an old
+token in Trellis's store does not transfer ownership.
+
+For a provider that accepts Trellis registration, explicitly select hosting
+and ensure every receiver has gateway/runtime delivery before sync:
+
+```sh
+trellis mcp set notion-remote --auth oauth --auth-owner trellis
+trellis mcp sync --dry-run --json
+trellis mcp sync
+trellis mcp auth notion-remote --force
+```
+
+This assumes the server and compatible routes already exist. Registration and
+the human grant must succeed; a registration endpoint alone is not a guarantee.
+A successful grant reports:
 
 ```
 $ trellis mcp auth notion-remote
@@ -891,22 +914,23 @@ This opens your browser, completes the flow, and stores the result 0600
 under `~/.trellis/mcp/oauth/` — never in `servers.yaml`, so canonical
 stays safe to read, diff, and commit.
 
-Run it once per server when Pi's direct bridge owns the OAuth connection.
-After that the bridge refreshes the token silently whenever it expires; it
-never opens a browser and never prompts, because it is spawned by an agent
-with no terminal attached. Re-running
-this command when the stored token is still valid does nothing (`--force`
-overrides); when it has expired but is renewable, it refreshes without a
-browser.
+Run it for each explicitly hosted identity. Use a fresh grant when migrating
+from older unbound credentials. The gateway refreshes its hosted tokens
+silently; it never opens a browser or prompts. Re-running with a still-valid
+matching token is a no-op (`--force` overrides); an expired renewable token
+can refresh without a browser.
 
-If a Pi direct OAuth server has no stored credential, the bridge skips that
-one server and keeps serving every other — it does not fail to start. Native
-Agents report the same direct entry as requiring their own authorization.
+If a hosted server has no usable credential, the gateway reports it as
+unavailable or requiring authorization and keeps serving the others. Native
+OAuth continues using the Agent's own authorization state.
 
 An Agent can call the read-only `trellis.mcp.status` Runtime tool to explain
 this partial state to the user. It reports unavailable or authorization-
-required servers and gives the next safe action, such as `trellis mcp auth
-figma`, without exposing tokens or opening a browser from the Agent process.
+required hosted servers and gives the next safe action without exposing
+tokens or opening a browser. Agent-owned state remains unknown when no official
+Agent status is available; a Trellis token does not establish native
+authorization. Desktop Authorize supports explicitly hosted connections with
+progress, cancellation, and retry.
 
 This command only applies to `http`/`sse` servers. stdio servers get
 their credentials from `env`/`env_aliases` as described above; running

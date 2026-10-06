@@ -63,6 +63,9 @@ draft rather than inventing another standard.
 - [Overview](docs/overview.md) ([中文](docs/overview.zh-CN.md)) — what it is and why
 - [Getting started](docs/getting-started.md) — every command, with example output
 - [Architecture](docs/architecture.md) — what we build vs. deliberately reuse
+- [MCP hosting and governance](docs/mcp-hosting-governance.md) — duplicate cleanup, mixed OAuth ownership, pilots, and rollback
+- [MCP authorization ownership](docs/mcp-authorization-ownership.md) — native and hosted desktop authorization
+- [Skills over MCP](docs/skills-over-mcp.md) — extension discovery and upstream relay
 - [Research](docs/research.md) — the full competitive landscape
 
 ## Status

@@ -12,6 +12,13 @@ which covers the *other* shape — a long-lived bearer token or API key in a
 
 ## The two families
 
+Authorization ownership is independent of provider registration policy.
+`auth: oauth` defaults to the Agent's own connection. Trellis hosting requires
+explicit `auth.owner: trellis` and compatible gateway/runtime delivery for
+every receiving Agent. A token in Trellis's store does not authorize a native
+connection. See [MCP authorization ownership](mcp-authorization-ownership.md)
+and the [hosting migration runbook](mcp-hosting-governance.md).
+
 **DCR-open.** The provider implements RFC 7591 Dynamic Client Registration.
 Trellis POSTs its own metadata, receives a `client_id`, and holds its own
 identity per installation. Nothing a user has to supply; nothing Trellis has
@@ -98,10 +105,11 @@ auth.client_secret_env if the provider requires a secret) under this server in
 ~/.trellis/mcp/servers.yaml
 ```
 
-The fix is then two commands:
+If the provider approves the user's client and all receiving routes support
+hosting, select that identity explicitly and authorize it:
 
 ```sh
-trellis mcp set figma --auth oauth --client-id <provider-published-id>
+trellis mcp set figma --auth oauth --auth-owner trellis --client-id <approved-client-id>
 trellis mcp auth figma
 ```
 
