@@ -33,6 +33,8 @@ export interface StoredToken {
    * metadata — the gateway's refresh path should be one request. */
   tokenEndpoint?: string;
   scope?: string;
+  resourceUrl?: string;
+  issuer?: string;
 }
 
 export function oauthDir(homeDir: string): string {

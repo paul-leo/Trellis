@@ -13,11 +13,8 @@
  * failures in whatever way suits them.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { Client, StreamableHTTPClientTransport, SSEClientTransport } from "@modelcontextprotocol/client";
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { resolveSecretEnv } from "./secretEnv.js";
 import { extractTemplateVarNames } from "./envVarNames.js";
 import type { McpServerDef, SecretsPolicy } from "../core/types.js";
@@ -65,7 +62,7 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
  * on close, but the original connect failure is what the caller needs
  * to see, not a secondary cleanup error.
  */
-export async function connectWithCleanup(client: Client, transport: Transport, timeoutMs: number, message: string): Promise<Client> {
+export async function connectWithCleanup<T, TTransport extends { close(): Promise<void> }>(client: T & { connect(transport: TTransport): Promise<unknown> }, transport: TTransport, timeoutMs: number, message: string): Promise<T> {
   try {
     await withTimeout(client.connect(transport), timeoutMs, message);
     return client;
@@ -92,7 +89,7 @@ export async function connectStdio(
   timeoutMs: number,
   clientInfo: McpClientInfo,
 ): Promise<Client> {
-  const client = new Client(clientInfo, { capabilities: {} });
+  const client = new Client(clientInfo, { capabilities: {}, versionNegotiation: { mode: "auto", probe: { timeoutMs: Math.min(3000, timeoutMs / 2) } } });
   const envAliases = def.envAliases ?? {};
   // `envAliases`' values are source variable names — resolved through the
   // exact same call as `env`'s own names, never delivered as the raw
@@ -105,6 +102,9 @@ export async function connectStdio(
   const transport = new StdioClientTransport({
     command: def.command!,
     args: def.args,
+    // A 16 MiB skill file can expand sixfold when JSON escapes control bytes.
+    // Keep framing bounded without rejecting a valid Skills-extension file.
+    maxBufferSize: 128 * 1024 * 1024,
     // staticEnv merges last: a literal, intentionally-plain value (an
     // email, an environment tag) always wins over an unresolved name-only
     // entry's empty-string fallback for the same key — though in practice
@@ -112,7 +112,7 @@ export async function connectStdio(
     // this point at all (trellis-mcp-static-env-and-disabled-servers).
     env: { ...getDefaultEnvironment(), ...namedEnv, ...aliasEnv, ...(def.staticEnv ?? {}) },
   });
-  return connectWithCleanup(client, transport as Transport, timeoutMs, `connect timed out after ${timeoutMs}ms`);
+  return connectWithCleanup(client, transport, timeoutMs, `connect timed out after ${timeoutMs}ms`);
 }
 
 export function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Record<string, string> | undefined {
@@ -132,12 +132,12 @@ export async function connectHttp(
   timeoutMs: number,
   clientInfo: McpClientInfo,
 ): Promise<Client> {
-  const client = new Client(clientInfo, { capabilities: {} });
+  const client = new Client(clientInfo, { capabilities: {}, versionNegotiation: { mode: "auto", probe: { timeoutMs } } });
   const headers = resolveHeaders(def, secretsPolicy);
   const opts = headers ? { requestInit: { headers } } : undefined;
   return connectWithCleanup(
     client,
-    new StreamableHTTPClientTransport(new URL(def.url!), opts) as Transport,
+    new StreamableHTTPClientTransport(new URL(def.url!), opts),
     timeoutMs,
     `connect timed out after ${timeoutMs}ms`,
   );
@@ -149,12 +149,13 @@ export async function connectSse(
   timeoutMs: number,
   clientInfo: McpClientInfo,
 ): Promise<Client> {
+  // HTTP+SSE is a legacy transport; it cannot carry modern discovery.
   const client = new Client(clientInfo, { capabilities: {} });
   const headers = resolveHeaders(def, secretsPolicy);
   const opts = headers ? { requestInit: { headers } } : undefined;
   return connectWithCleanup(
     client,
-    new SSEClientTransport(new URL(def.url!), opts) as Transport,
+    new SSEClientTransport(new URL(def.url!), opts),
     timeoutMs,
     `connect timed out after ${timeoutMs}ms`,
   );

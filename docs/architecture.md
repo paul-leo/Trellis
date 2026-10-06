@@ -261,9 +261,9 @@ reach such a server at all.
 
 Gateway mode does not automatically take ownership of OAuth servers. Mark a
 server explicitly with `auth: oauth` (or `trellis mcp set <name> --auth oauth`)
-and gateway planning keeps it direct. This preserves the native Agent OAuth
-flow for Claude Code/Codex/Kiro; Pi's bridge is the client for its direct OAuth
-connection and may use Trellis's own OAuth store. Trellis never infers this
+and gateway/runtime planning keeps it native. This preserves each Agent's own
+OAuth identity. Only `auth: { kind: oauth, owner: trellis }` explicitly opts into
+Trellis hosting, with a gateway/runtime route required. Trellis never infers this
 classification from a URL or a transient 401.
 
 The classification optionally carries pre-registered client metadata, for
@@ -288,18 +288,19 @@ be pre-filled.
 Trellis still implements the client half itself — discovery (RFC 8414 /
 RFC 9728), dynamic client registration (RFC 7591), authorization code with
 PKCE S256 (RFC 7636), and the refresh grant — in `src/lib/oauth/`, but that
-path is currently used for Pi/direct bridge connections rather than silently
-replacing native Agent authorization.
+path is used for explicitly hosted connections. It never imports or silently
+replaces native Agent authorization. See
+[MCP authorization ownership](mcp-authorization-ownership.md).
 
 Two rules shape it, both from the constraint that the gateway is spawned
 silently by an agent with no terminal attached:
 
-- **Only an explicit human authorization command opens a browser.** Native
-  clients use their own login command for direct OAuth entries. Pi's direct
-  bridge uses `trellis mcp auth <server>`. The gateway never initiates an
-  interactive flow and never connects an OAuth-marked server.
+- **Only an explicit human action opens a browser.** Native clients use their
+  own authorization entry. Trellis-hosted connections can use the desktop
+  Authorize action or `trellis mcp auth <server>`. The gateway never initiates
+  an interactive flow and excludes Agent-owned OAuth servers.
 - **Refreshing is silent, and serialized by a lock.** A `refresh_token`
-  grant needs neither a browser nor a callback, so the Pi direct bridge can
+  grant needs neither a browser nor a callback, so the hosted gateway can
   do it at connect time. The lock (`~/.trellis/mcp/oauth/<name>.lock`) exists
   because most authorization servers rotate the refresh token and
   invalidate its predecessor — two concurrent refreshes would leave one
@@ -312,8 +313,8 @@ non-interactive, no-GUI-session context the gateway runs in — measured,
 not assumed).
 
 In direct mode nothing here changes: each agent keeps using its own native
-OAuth flow. In gateway mode, an OAuth-marked server is also kept direct; only
-ordinary MCP servers enter the gateway.
+OAuth flow. Gateway/runtime mode retains native entries for Agent-owned OAuth;
+ordinary and explicitly Trellis-owned servers enter the gateway.
 
 ## MCP gateway mode
 
@@ -362,7 +363,7 @@ could reach disk.
 **What it changes for the agents:** Codex's single-`bearer_token_env_var`
 limitation stops applying, because Codex no longer receives any server's
 `headers` — the gateway holds them. OAuth-marked servers are intentionally
-kept direct; ordinary remote servers remain shared through the gateway. An
+kept native by default; explicit Trellis ownership enables hosted OAuth. An
 upstream tool keeps its original name when that name is unique and longer than
 the short-name threshold; generic short names receive a compact
 `<server>__<tool>` prefix even when unique. A tool already carrying its source

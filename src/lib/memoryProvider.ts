@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import type { CallToolResult, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/server";
 import { isInScope } from "../core/adapter.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import type { AgentId, Scope } from "../core/types.js";

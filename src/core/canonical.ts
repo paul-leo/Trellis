@@ -38,7 +38,7 @@ type McpServerDefYaml = Omit<McpServerDef, "staticEnv" | "envAliases" | "auth"> 
  * form whose keys are snake_case like every other multi-word key in
  * `.trellis/*.yaml`. Values are `unknown` until `fromAuthYaml` validates
  * them — a YAML cast is optimistic, validation is this module's job. */
-type McpAuthYaml = string | { kind?: unknown; client_id?: unknown; client_secret_env?: unknown };
+type McpAuthYaml = string | { kind?: unknown; owner?: unknown; client_id?: unknown; client_secret_env?: unknown };
 
 interface ServersYaml {
   servers?: Record<string, McpServerDefYaml>;
@@ -62,7 +62,7 @@ function fromServerDefYaml(serverName: string, def: McpServerDefYaml): McpServer
  * `auth` translation and shape validation
  * (trellis-mcp-oauth-static-client tasks 1.1/1.3): the scalar and the
  * object form share one discriminator — `kind: oauth` — and the object
- * accepts exactly `kind`, `client_id`, `client_secret_env`. Everything
+ * accepts exactly `kind`, `owner`, `client_id`, `client_secret_env`. Everything
  * else is refused here at load, naming the field but never echoing the
  * value: an invalid `client_secret_env` is at best a typo, at worst a
  * pasted secret.
@@ -72,10 +72,10 @@ function fromAuthYaml(serverName: string, auth: McpAuthYaml): McpAuthMode | McpA
   if (typeof auth !== "object" || auth === null) {
     throw new Error(`mcp/servers.yaml: "${serverName}" auth must be the scalar "oauth" or { kind: oauth, client_id?, client_secret_env? }`);
   }
-  const { kind, client_id, client_secret_env, ...extra } = auth;
+  const { kind, owner, client_id, client_secret_env, ...extra } = auth;
   const unknownKey = Object.keys(extra)[0];
   if (unknownKey !== undefined) {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth has unrecognized key "${unknownKey}" — expected kind, client_id, client_secret_env`);
+    throw new Error(`mcp/servers.yaml: "${serverName}" auth has unrecognized key "${unknownKey}" — expected kind, owner, client_id, client_secret_env`);
   }
   if (kind !== "oauth") {
     throw new Error(`mcp/servers.yaml: "${serverName}" auth.kind must be "oauth" — kind is the only recognized discriminator`);
@@ -87,6 +87,8 @@ function fromAuthYaml(serverName: string, auth: McpAuthYaml): McpAuthMode | McpA
     throw new Error(`mcp/servers.yaml: "${serverName}" auth.client_secret_env must be a variable NAME (e.g. FIGMA_CLIENT_SECRET), never a secret value`);
   }
   const out: McpAuthConfig = { kind: "oauth" };
+  if (owner !== undefined && owner !== "agent" && owner !== "trellis") throw new Error(`mcp/servers.yaml: "${serverName}" auth.owner must be agent or trellis`);
+  if (owner !== undefined) out.owner = owner;
   if (typeof client_id === "string") out.clientId = client_id;
   if (typeof client_secret_env === "string") out.clientSecretEnv = client_secret_env;
   return out;
@@ -106,6 +108,7 @@ export function toServerDefYaml(def: McpServerDef): McpServerDefYaml {
         ? auth
         : {
             kind: auth.kind,
+            ...(auth.owner !== undefined ? { owner: auth.owner } : {}),
             ...(auth.clientId !== undefined ? { client_id: auth.clientId } : {}),
             ...(auth.clientSecretEnv !== undefined ? { client_secret_env: auth.clientSecretEnv } : {}),
           };

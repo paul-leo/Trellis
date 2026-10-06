@@ -95,7 +95,7 @@ test("read routes: /mcp/list carries the credential state exactly as the CLI doe
   cli(homeDir, ["init"]);
   writeFileSync(
     join(homeDir, ".trellis", "mcp", "servers.yaml"),
-    'servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n    auth: oauth\n  other:\n    transport: http\n    url: https://other.example/mcp\n    auth: oauth\n',
+    'servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n    auth:\n      kind: oauth\n      owner: trellis\n  other:\n    transport: http\n    url: https://other.example/mcp\n    auth:\n      kind: oauth\n      owner: trellis\n',
   );
   mkdirSync(join(homeDir, ".trellis", "mcp", "oauth"), { recursive: true });
   writeFileSync(

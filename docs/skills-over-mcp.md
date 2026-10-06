@@ -24,8 +24,9 @@ The existing surface is unchanged: `trellis.skills.search|read|read_file` and
 ## The manifest is computed from the bytes served
 
 `digest` is `sha256:` plus 64 lowercase hex characters of the raw bytes;
-`size` is their length. The same reader produces the manifest and the
-`resources/read` response, so they cannot disagree. Invalid UTF-8 is returned as
+`size` is their length. The manifest and `resources/read` use the same bounded
+byte reader. Hosts still verify the retained manifest: a file can change between
+listing and reading. Invalid UTF-8 is returned as
 a base64 `blob` rather than lossy `text`, so the bytes a host verifies are the
 bytes that were hashed.
 
@@ -48,32 +49,43 @@ rewrite entry and content together. A matching digest tells a host the bytes
 match the manifest; it says nothing about whether the content is safe. Nothing in
 Trellis treats a match as an authorization.
 
-## The extension is not declared yet
+## Discovery and protocol compatibility
 
-The extension is declared through `server/discover`, introduced with protocol
-revision 2026-07-28. The MCP SDK Trellis uses speaks at most 2025-11-25 and has
-neither `server/discover` nor `skills/*`, and the specification defines no
-declaration for the `initialize` handshake. Declaring it in another field would
-invent a protocol, and a conforming client only issues `skills/list` after
-observing a declaration anyway.
+The runtime uses the official TypeScript SDK v2 serving entry. Modern clients
+discover resources and the `io.modelcontextprotocol/skills` extension through
+`server/discover`; legacy clients can still initialize and call existing tools
+and resources. Merely constructing a v2 Server is not sufficient: the runtime
+explicitly uses `serveStdio` to select modern or legacy behavior.
 
-So on today's SDK the runtime declares nothing, answers `skills/list` and
-`skills/get` through the SDK's fallback for unregistered methods, and serves
-`skill://` as ordinary resources — which the specification expressly allows. Once
-the SDK exposes `server/discover`, the declaration is a one-place change. Any other
-unknown method still gets JSON-RPC `-32601`.
+Skills list/get are registered custom methods with parameter/result schemas.
+The SDK handles modern request metadata, result discrimination and server
+identity. Unknown methods still return JSON-RPC `-32601`. A legacy host can use
+ordinary resources/tools even if it does not understand the Skills extension.
 
-## Relaying skills from upstream servers is not implemented
+## Upstream resources and skills
 
-Today an upstream server's skills are not relayed — the gateway backend
-aggregates tools only. When a change adds that, it must:
+The gateway negotiates modern or legacy upstream behavior. Legacy HTTP+SSE uses
+its existing transport. An upstream with resources but no tools remains valid.
+Declared modern Skills catalogs are paginated, validated and relayed:
 
-- identify a skill by (upstream label, URI) together, never by URI alone, with a
-  namespace per upstream;
-- never let an upstream skill shadow a canonical skill or another upstream's;
-- bind reads to the originating upstream, with no cross-upstream reads;
-- pass the upstream manifest through unchanged or re-derive it from the relayed
-  bytes — never pair an upstream digest with different bytes;
-- not write an upstream skill into `~/.trellis/skills` automatically. The
-  specification requires per-skill user approval before such content is used, and
-  materializing it would bypass that.
+- URIs use a reversible `trellis-upstream://` namespace per source, preserving
+  final path segments and relative references. Provenance records the original
+  server label and URI. Canonical and equal-named upstream skills stay distinct.
+- Listing does not fetch file content. Supporting files become readable from a
+  complete manifest, even when absent from `resources/list`; direct `skills/get`
+  also works for unlisted skills.
+- Reads go back to the registered source and preserve exact bytes, digest and
+  size. Skill content is rejected if digest, size or SKILL.md frontmatter differ
+  from the entry. Refresh the entry before reading changed content.
+- Dynamic skill manifests are currently declined with a diagnostic. Manifests
+  are bounded to 512 files and 16 MiB per skill; unsupported or malformed entries
+  do not remove other skills.
+- No upstream skill is installed into `~/.trellis/skills`, activated, or given
+  execution permissions by the relay. The consuming host retains its own approval
+  and integrity checks.
+
+Authorization ownership and the desktop flow are documented in
+[MCP authorization ownership](mcp-authorization-ownership.md).
+
+Protocol references: [SDK v2 migration](https://ts.sdk.modelcontextprotocol.io/v2/migration/support-2026-07-28)
+and [Skills extension](https://modelcontextprotocol.io/extensions/skills/overview).

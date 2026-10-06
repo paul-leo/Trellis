@@ -683,12 +683,12 @@ test("App: a skill's agent scope is edited by toggling, staged until Save, confi
   }
 });
 
-test("App: an MCP server shows its credential state as credential state, never a token, with the command to authorize", async () => {
+test("App: hosted MCP credentials are separate from native Agent authorization and never render secrets", async () => {
   const homeDir = mkdtempSync(join(tmpdir(), "trellis-gui-smoke-cred-"));
   cli(homeDir, ["init"]);
   writeFileSync(
     join(homeDir, ".trellis", "mcp", "servers.yaml"),
-    'servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n    auth:\n      kind: oauth\n      client_id: published-id-should-not-render\n  sentry:\n    transport: http\n    url: https://mcp.sentry.dev/mcp\n    auth: oauth\n',
+    'servers:\n  figma:\n    transport: http\n    url: https://mcp.figma.com/mcp\n    auth:\n      kind: oauth\n      client_id: published-id-should-not-render\n  sentry:\n    transport: http\n    url: https://mcp.sentry.dev/mcp\n    auth:\n      kind: oauth\n      owner: trellis\n',
   );
   mkdirSync(join(homeDir, ".trellis", "mcp", "oauth"), { recursive: true });
   writeFileSync(
@@ -701,10 +701,11 @@ test("App: an MCP server shows its credential state as credential state, never a
     await app.bodyContains("Trellis");
     app.clickText("MCP");
     await app.bodyContains("Credential: authorized");
-    await app.bodyContains("Credential: not authorized");
+    await app.bodyContains("Credential: unknown");
 
     // The remedy is shown, not a hidden flow — and only for the server that needs it.
-    await app.bodyContains("trellis mcp auth figma");
+    await app.bodyContains("Each Agent");
+    assert.equal(app.body().includes("trellis mcp auth figma"), false);
     assert.equal(app.body().includes("trellis mcp auth sentry"), false);
     await app.bodyContains("pre-registered client");
 

@@ -136,7 +136,7 @@ Commands:
             --json       machine-readable output, no report text
   mcp set <name> --auth oauth|none
             Set or clear explicit OAuth classification; canonical only.
-            --auth oauth [--client-id <id>] [--client-secret-env <NAME>]
+            --auth oauth [--auth-owner agent|trellis] [--client-id <id>] [--client-secret-env <NAME>]
                          pre-register a client for a provider that refuses
                          dynamic registration. --client-id is the PROVIDER's
                          published identifier (public by design);

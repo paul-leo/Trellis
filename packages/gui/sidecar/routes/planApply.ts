@@ -16,6 +16,9 @@ import {
   applyMcpAddWithSync,
   applyMcpRemoveWithSync,
   collectMcpAddPlan,
+  collectMcpSetAuthPlan,
+  applyMcpSetAuthWithSync,
+  type McpSetAuthRawArgs,
   applyMcpScopeWithSync,
   collectMcpRemovePlan,
   collectMcpScopePlan,
@@ -36,6 +39,8 @@ import { applyRollbackPlan, collectRollbackPlan, loadManifest, type RollbackRepo
 import { collectOnboardPlan, type RunOnboardOptions } from "../../../../src/commands/onboard.js";
 import { readJsonBody, sendJson, type Route } from "../server.js";
 import { PlanStore } from "../planStore.js";
+import { requireDesktopOrigin } from "./oauth.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 /**
  * The wizard-submittable subset of `RunOnboardOptions` (trellis-gui
@@ -68,12 +73,14 @@ function planApplyRoute<TPlan>(
   homeDir: string,
   compute: (homeDir: string, body: Record<string, unknown>) => Promise<TPlan> | TPlan,
   apply: (plan: TPlan, homeDir: string) => Promise<unknown>,
+  guard?: (req: IncomingMessage, res: ServerResponse) => boolean,
 ): Route[] {
   return [
     {
       method: "POST",
       pattern: new RegExp(`^/plan/${operation}$`),
       handler: async (req, res) => {
+        if (guard && !guard(req, res)) return;
         const body = (await readJsonBody<Record<string, unknown>>(req)) ?? {};
         const plan = await compute(homeDir, body);
         const planId = planStore.store(operation, plan);
@@ -84,6 +91,7 @@ function planApplyRoute<TPlan>(
       method: "POST",
       pattern: new RegExp(`^/apply/${operation}$`),
       handler: async (req, res) => {
+        if (guard && !guard(req, res)) return;
         const body = (await readJsonBody<{ planId?: string }>(req)) ?? {};
         const stored = body.planId ? planStore.take(body.planId, operation) : undefined;
         if (!stored) {
@@ -162,6 +170,15 @@ export function createPlanApplyRoutes(homeDir: string, planStore: PlanStore): Ro
     ),
 
     // mcp-remove
+    ...planApplyRoute(
+      "mcp-auth-owner", planStore, homeDir,
+      (home, body) => {
+        const owner = typeof body.owner === "string" ? body.owner : "";
+        return collectMcpSetAuthPlan(body.name as string | undefined, { auth: owner === "none" ? "none" : "oauth", authOwner: owner === "none" ? undefined : owner } satisfies McpSetAuthRawArgs, home);
+      },
+      (plan, home) => applyMcpSetAuthWithSync(plan, home),
+      requireDesktopOrigin,
+    ),
     ...planApplyRoute(
       "mcp-remove",
       planStore,

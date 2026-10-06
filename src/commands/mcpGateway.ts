@@ -15,10 +15,10 @@
  * changing.
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
-import { isGatewayAgent, isOAuthMcpServer, resolveMcpPlan } from "../adapters/mcpPlan.js";
+import { isGatewayAgent, isAgentOwnedOAuth, resolveMcpPlan } from "../adapters/mcpPlan.js";
 import { LocalBackend, type GatewayBackend, type UpstreamSpec } from "../lib/gatewayBackend.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
 import { BuiltinRegistry, createRuntimeServer, UpstreamProvider } from "../lib/mcpRuntime.js";
@@ -83,7 +83,9 @@ export function resolveGatewayUpstreams(
   const directRoutes = canonical.mcp.routes && route
     ? { ...canonical.mcp.routes, [agentId]: { mode: "direct" as const, ...(route.servers ? { servers: route.servers } : {}) } }
     : canonical.mcp.routes;
-  const ordinaryServers = Object.fromEntries(Object.entries(canonical.mcp.servers).filter(([, def]) => !isOAuthMcpServer(def)));
+  const ordinaryServers = Object.fromEntries(Object.entries(canonical.mcp.servers)
+    .filter(([, def]) => !isAgentOwnedOAuth(def))
+    .map(([name, def]) => { const { auth: _auth, ...ordinary } = def; return [name, ordinary]; }));
   const direct = { ...canonical.mcp, servers: ordinaryServers, gateway: undefined, hub: undefined, routes: directRoutes, runtime: undefined };
   // The managed set is passed through unchanged, so an unmanaged agent
   // reaches nothing. Being spawned is NOT treated as consent here, which
@@ -98,7 +100,7 @@ export function resolveGatewayUpstreams(
   // user just said to stop involving.
   const { desired, conflicts } = resolveMcpPlan(agentId, direct, canonical.managedAgents, canonical.secretsPolicy);
   return {
-    upstreams: desired.map(({ name, def }) => ({ name, def })),
+    upstreams: desired.map(({ name }) => ({ name, def: canonical.mcp.servers[name]! })),
     conflicts: conflicts.map((conflict) => conflict.message),
   };
 }
@@ -151,10 +153,7 @@ async function runMcpEdge(
       });
 
   const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
-  const server = createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry);
-
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const server = serveStdio(() => createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry));
 
   await waitForShutdown(registry, server);
   return { exitCode: 0 };
@@ -170,7 +169,7 @@ async function runMcpEdge(
  * Without this, each agent session would permanently leak a gateway plus
  * its entire upstream process set (design.md D13).
  */
-function waitForShutdown(registry: BuiltinRegistry, server: Awaited<ReturnType<typeof createRuntimeServer>>): Promise<void> {
+function waitForShutdown(registry: BuiltinRegistry, server: { close(): Promise<void> }): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
     const shutdown = async (): Promise<void> => {

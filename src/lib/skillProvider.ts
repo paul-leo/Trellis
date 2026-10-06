@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { Resource, ReadResourceResult, Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { Resource, ReadResourceResult, Tool, CallToolResult } from "@modelcontextprotocol/server";
 import { isInScope } from "../core/adapter.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { resolveScope } from "../core/types.js";

@@ -12,7 +12,7 @@
  * this bridge actually uses are declared here.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client } from "@modelcontextprotocol/client";
 import type { TSchema } from "typebox";
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";

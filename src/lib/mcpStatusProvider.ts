@@ -1,4 +1,4 @@
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 import type { GatewayBackend } from "./gatewayBackend.js";
 import type { RuntimeContext, TrellisProvider } from "./mcpRuntime.js";
 

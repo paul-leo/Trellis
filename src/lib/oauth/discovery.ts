@@ -28,6 +28,7 @@ export interface AuthorizationServerMetadata {
   registrationEndpoint?: string;
   scopesSupported?: string[];
   codeChallengeMethodsSupported?: string[];
+  issuerParameterSupported?: boolean;
 }
 
 export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
@@ -45,6 +46,7 @@ interface RawMetadata {
   registration_endpoint?: string;
   scopes_supported?: string[];
   code_challenge_methods_supported?: string[];
+  authorization_response_iss_parameter_supported?: boolean;
 }
 
 interface RawProtectedResource {
@@ -64,6 +66,7 @@ function toMetadata(raw: RawMetadata): AuthorizationServerMetadata | undefined {
   if (raw.registration_endpoint) out.registrationEndpoint = raw.registration_endpoint;
   if (raw.scopes_supported) out.scopesSupported = raw.scopes_supported;
   if (raw.code_challenge_methods_supported) out.codeChallengeMethodsSupported = raw.code_challenge_methods_supported;
+  if (raw.authorization_response_iss_parameter_supported) out.issuerParameterSupported = true;
   return out;
 }
 

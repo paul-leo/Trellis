@@ -196,7 +196,7 @@ test("gateway: an expired stored token is refreshed silently before connecting, 
     writeToken(home, "remote", { ...stale, expiresAt: Date.now() - 1000 });
 
     const warnings: string[] = [];
-    const backend = await LocalBackend.connect([{ name: "remote", def: { transport: "http", url: as.resourceUrl } }], {
+    const backend = await LocalBackend.connect([{ name: "remote", def: { transport: "http", url: as.resourceUrl, auth: { kind: "oauth", owner: "trellis" } } }], {
       secretsPolicy: { allowedVars: [], rejectPatterns: [] },
       clientInfo: { name: "test", version: "0" },
       connectTimeoutMs: 3000,

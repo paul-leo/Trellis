@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import type { CallToolResult, Prompt, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Prompt, ReadResourceResult, Resource, Tool } from "@modelcontextprotocol/server";
 import { ALL_AGENTS, capabilityDeliveryForAgent, type AgentId, type AgentSnapshot, type CanonicalSource, type McpRouteMode } from "../core/types.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { isGatewayAgent } from "../adapters/mcpPlan.js";
