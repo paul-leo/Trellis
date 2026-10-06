@@ -9,4 +9,4 @@
 ## 2. Validate and deliver
 
 - [x] 2.1 Extend focused callback and browser coverage with synthetic local grants; verify core OAuth tests, typecheck/build, and desktop browser grant/cancel/retry acceptance.
-- [ ] 2.2 Inspect desktop/mobile screenshots and update callback behavior documentation; verify strict OpenSpec and clean diff, then submit the product change for review.
+- [x] 2.2 Inspect desktop/mobile screenshots and update callback behavior documentation; verify strict OpenSpec and clean diff, then submit the product change for review.
