@@ -291,6 +291,28 @@ that advertises `--prompt`, `--resume`, and `--output-format`. A desktop-only
 profile can still receive managed configuration; Trellis never launches the
 desktop application's private helper or bundled runtime path.
 
+## pi native MCP (pi ≥ 1.1.0)
+
+pi 1.1.0 added a native MCP client, and Trellis delivers to it the same way
+as every other JSON-config agent: `trellis mcp sync` merges Trellis-managed
+entries into `~/.pi/agent/mcp.json` — the single `trellis` edge entry in
+gateway mode, plus a bare `{url}` entry for each agent-owned OAuth server.
+Servers you added yourself (anything Trellis never wrote) are preserved
+untouched, and the legacy bridge extension (`~/.pi/agent/extensions/
+trellis-mcp-bridge.js`) is removed in the same run, after the config write.
+
+Two pi-specific behaviors to know:
+
+- pi does not watch `mcp.json`: after a sync that changed it, restart pi or
+  run `/reload` in an open session (sync prints this hint).
+- Agent-owned OAuth servers (e.g. `figma`) are authorized by pi itself:
+  run `pi mcp login <name>` once; the grant lives in pi's own token store
+  (`~/.pi/agent/mcp-auth.json`), and `trellis.mcp.status` reports them as
+  `agent-managed`.
+
+On pi older than 1.1.0 nothing changes: the bridge extension remains the
+delivery mechanism and `mcp.json` is never written.
+
 ## Trellis Runtime Skill
 
 `trellis-runtime` is the built-in operating guide that Trellis installs into

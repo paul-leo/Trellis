@@ -1,6 +1,6 @@
 # Scheduled OAuth renewal — `trellis mcp renew`
 
-The gateway and the pi bridge already refresh OAuth tokens silently before
+The gateway/runtime edge already refreshes OAuth tokens silently before
 every upstream call. `trellis mcp renew` moves that renewal *earlier*: run
 on a schedule, it refreshes whatever is expiring and reports — with a
 non-zero exit code — anything that needs a human, before an Agent session
@@ -17,7 +17,8 @@ classification is explicit (mcp-auth-routing-policy), and ownership decides
 whose problem the credential is (trellis-desktop-oauth-ownership): an
 agent-owned server (the default, e.g. scalar `auth: oauth`) is authorized by
 the Agent's own client, never reads Trellis's token store, and is neither
-renewed nor reported here. The command never opens a browser and never
+renewed nor reported here — for pi ≥ 1.1.0 that client-side authorization is
+`pi mcp login <name>`, stored in pi's own `~/.pi/agent/mcp-auth.json`. The command never opens a browser and never
 performs an initial grant; that remains `trellis mcp auth <name>`
 (mcp-gateway-hosting design.md D9). Exit code: `0` when every Trellis-owned
 server is valid or refreshed, `1` when any needs `trellis mcp auth`, has
