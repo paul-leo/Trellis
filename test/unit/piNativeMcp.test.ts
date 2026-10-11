@@ -272,6 +272,27 @@ function scratchHome2(home: string, serversYaml: string): string {
   return home;
 }
 
+test("oauth client_name: the Trellis-written oauth block survives the next plan (no strip-and-drift)", async () => {
+  // Regression for the Figma DCR allowlist fix (oauth-client-name tasks.md
+  // 2.2): without renderer support, jsonMcp's deepEqual would see pi's
+  // `oauth.clientName` as drift and strip it on the next sync.
+  const home = scratchHome(GATEWAY_YAML.replace("    auth: oauth\n", "    auth:\n      kind: oauth\n      client_name: Claude Code\n"));
+  const canonical = loadCanonicalSource(home);
+  const adapter = new PiAdapter(home, NATIVE);
+
+  const backup = openBackupSession(home, "test-pi-client-name");
+  await adapter.apply((await adapter.plan(canonical)).filter((i) => i.kind === "mcp"), backup);
+  backup.finalize();
+
+  assert.deepEqual(readMcpJson(home).mcpServers.figma, {
+    url: "https://mcp.figma.com/mcp",
+    oauth: { clientName: "Claude Code" },
+  });
+  const second = await adapter.plan(canonical);
+  assert.deepEqual(second.filter((i) => i.kind === "mcp"), [], "converged — the oauth block is Trellis-owned content");
+  assert.deepEqual(await adapter.verify(canonical), { ok: true });
+});
+
 test("verify: clean native state is ok; missing entry, stale bridge and drifted config are reported", async () => {
   const home = scratchHome();
   const canonical = loadCanonicalSource(home);

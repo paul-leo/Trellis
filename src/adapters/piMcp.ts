@@ -13,6 +13,7 @@
  */
 
 import type { McpServerDef } from "../core/types.js";
+import { isOAuthAuth } from "../core/types.js";
 import { resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
 
 /** The pi release that introduced the native MCP client (`pi mcp`,
@@ -40,15 +41,21 @@ export function supportsNativeMcp(version: string | undefined): boolean {
  * `pi mcp add` writes (observed 2026-10-11): stdio as
  * `{command, args, env?}`, http as `{url, headers?}`, no `type` field.
  * `env` names render as `${VAR}` references exactly like the other JSON
- * agents; OAuth `auth` metadata is Trellis-side routing information and
- * is never rendered (an agent-owned OAuth server becomes a bare `{url}`
- * entry that `pi mcp login <name>` authorizes into pi's own token store).
+ * agents; OAuth `auth` metadata is Trellis-side routing information and is
+ * never rendered — with one exception: a declared `auth.client_name` becomes
+ * the entry's `oauth.clientName`, the field `pi mcp add --oauth-client-name`
+ * writes, so providers that gate dynamic client registration by client name
+ * (Figma) accept `pi mcp login`'s registration and later syncs compare equal
+ * instead of stripping the block (oauth-client-name design.md D2).
  */
 export function piRenderer(def: McpServerDef, _name: string): Record<string, unknown> {
   if (def.transport === "http" || def.transport === "sse") {
     const entry: Record<string, unknown> = { url: def.url };
     if (def.headers && Object.keys(def.headers).length > 0) {
       entry.headers = def.headers;
+    }
+    if (isOAuthAuth(def.auth) && typeof def.auth === "object" && def.auth.clientName !== undefined) {
+      entry.oauth = { clientName: def.auth.clientName };
     }
     return entry;
   }

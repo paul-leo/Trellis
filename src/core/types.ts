@@ -21,6 +21,10 @@ export interface McpAuthConfig {
   owner?: "agent" | "trellis";
   clientId?: string;
   clientSecretEnv?: string;
+  /** Self-asserted display name an Agent presents at dynamic client
+   * registration — for providers that gate DCR by client name (Figma).
+   * Public metadata, not a credential (oauth-client-name design.md D1). */
+  clientName?: string;
 }
 
 /** True when `auth` classifies the server as OAuth, in either form. Every
