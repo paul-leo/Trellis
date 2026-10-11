@@ -151,6 +151,12 @@ export function printReport(report: McpSyncReport, dryRun: boolean): void {
     for (const item of [...created, ...removed, ...conflicts]) {
       console.log(`   - [${item.action}] ${item.description}`);
     }
+    // pi does not watch mcp.json (verified 2026-10-11): without this hint
+    // a changed config silently only takes effect on the next pi launch
+    // (trellis-pi-native-mcp-migration design.md D5).
+    if (agent === "pi" && (created.length > 0 || removed.length > 0)) {
+      console.log("   pi does not watch mcp.json — restart pi or run /reload to pick up MCP changes");
+    }
   }
 }
 

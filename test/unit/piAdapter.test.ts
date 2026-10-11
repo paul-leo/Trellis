@@ -9,6 +9,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import { PiAdapter } from "../../src/adapters/pi.js";
+
+/** These tests cover the legacy bridge-extension delivery. Pin the
+ * version gate below 1.1.0 so they exercise that branch no matter which
+ * pi version is installed on the machine running the suite
+ * (trellis-pi-native-mcp-migration design.md D2). */
+const legacyPi = (home: string) => new PiAdapter(home, () => "1.0.5");
 import { openBackupSession } from "../../src/lib/backup.js";
 import { applyRollbackPlan, collectRollbackPlan, loadManifest } from "../../src/commands/rollback.js";
 
@@ -29,7 +35,7 @@ test("pi adapter: plan includes exactly one extension item pointing at the real 
   initCanonical(home);
   const canonical = (await import("../../src/core/canonical.js")).loadCanonicalSource(home);
 
-  const adapter = new PiAdapter(home);
+  const adapter = legacyPi(home);
   const plan = await adapter.plan(canonical);
   const extensionItems = plan.filter((i) => i.kind === "extension");
   assert.equal(extensionItems.length, 1);
@@ -47,7 +53,7 @@ test("pi adapter: re-running against an already-synced home produces no extensio
   initCanonical(home);
   const canonical = (await import("../../src/core/canonical.js")).loadCanonicalSource(home);
 
-  const adapter = new PiAdapter(home);
+  const adapter = legacyPi(home);
   await adapter.apply(await adapter.plan(canonical), openBackupSession(home, "test"));
 
   const second = await adapter.plan(canonical);
@@ -61,7 +67,7 @@ test("pi adapter: adopts an equivalent bridge symlink from a previous installati
   const home = scratchHome();
   initCanonical(home);
   const canonical = (await import("../../src/core/canonical.js")).loadCanonicalSource(home);
-  const adapter = new PiAdapter(home);
+  const adapter = legacyPi(home);
   const initial = await adapter.plan(canonical);
   const desired = initial.find((item) => item.kind === "extension")!;
   const symlinkPath = join(home, ".pi", "agent", "extensions", "trellis-mcp-bridge.js");
@@ -99,7 +105,7 @@ test("pi adapter: a changed bundle at the old installation shape remains a confl
   const home = scratchHome();
   initCanonical(home);
   const canonical = (await import("../../src/core/canonical.js")).loadCanonicalSource(home);
-  const adapter = new PiAdapter(home);
+  const adapter = legacyPi(home);
   const symlinkPath = join(home, ".pi", "agent", "extensions", "trellis-mcp-bridge.js");
   const foreignBundle = join(home, "foreign", "dist", "pi-bridge", "bundle.js");
   mkdirSync(join(home, ".pi", "agent", "extensions"), { recursive: true });
@@ -122,7 +128,7 @@ test("pi adapter: equivalent relative previous-installation link is repairable",
   const home = scratchHome();
   initCanonical(home);
   const canonical = (await import("../../src/core/canonical.js")).loadCanonicalSource(home);
-  const adapter = new PiAdapter(home);
+  const adapter = legacyPi(home);
   const desired = (await adapter.plan(canonical)).find((item) => item.kind === "extension")!;
   const legacyBundle = join(home, "previous", "dist", "pi-bridge", "bundle.js");
   const symlinkPath = desired.target;
@@ -138,7 +144,7 @@ for (const targetShape of ["bundle.js", "not-dist/pi-bridge/bundle.js", "missing
     const home = scratchHome();
     initCanonical(home);
     const canonical = (await import("../../src/core/canonical.js")).loadCanonicalSource(home);
-    const adapter = new PiAdapter(home);
+    const adapter = legacyPi(home);
     const desired = (await adapter.plan(canonical)).find((item) => item.kind === "extension")!;
     const foreignBundle = join(home, "foreign", targetShape);
     mkdirSync(dirname(desired.target), { recursive: true });

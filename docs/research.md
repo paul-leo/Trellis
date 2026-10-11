@@ -236,10 +236,13 @@ Reverse-engineered directly from the installed binary
 - pi **natively discovers** `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`
   (in that priority order) — instructions and `SKILL.md`-format skills need
   no adapter work at all.
-- pi has **no native MCP client**. The only `mcpServers` string in its bundle
-  belongs to the Google Gen AI SDK's Vertex tool-schema translator, which
-  explicitly throws `"mcpServers parameter is not supported"` — unrelated to
-  MCP proper.
+- pi **gained a native MCP client in 1.1.0** (`pi mcp add/list/login`,
+  `~/.pi/agent/mcp.json`, stdio + streamable HTTP, `${VAR}` expansion in
+  `env`/`headers`, OAuth into its own `mcp-auth.json` store) — Trellis delivers
+  to it natively (trellis-pi-native-mcp-migration). Before 1.1.0 the only
+  `mcpServers` string in its bundle belonged to the Google Gen AI SDK's Vertex
+  tool-schema translator, which explicitly throws `"mcpServers parameter is
+  not supported"` — that era is why the bridge extension below exists.
 - pi's capability surface is **extensions**: JS modules loaded via
   `--extension`/discovery, with a real API (`createExtension`,
   `registerTool`). Giving pi access to the same MCP servers every other agent

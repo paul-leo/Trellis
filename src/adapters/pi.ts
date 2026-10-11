@@ -3,24 +3,42 @@
  * symlinked to canonical `agents.md` — specifically `AGENTS.md`, not
  * `AGENTS.override.md` (design.md D3, trellis-sync-p1: pi checks the
  * override name first, and Trellis's managed file is the baseline, not an
- * override of something else). pi has no native MCP client (docs/research.md),
- * so MCP access is delivered as a single symlinked bridge extension
- * instead of native config (trellis-pi-mcp-bridge-p4) — a different
- * mechanism from every other agent's config-generation adapter, but the
- * same symlink create/repair/remove machinery as skills/instructions.
+ * override of something else).
+ *
+ * MCP delivery is version-gated (trellis-pi-native-mcp-migration):
+ *
+ * - pi >= 1.1.0 has a native MCP client, so `trellis mcp sync` merges
+ *   Trellis-managed entries into `~/.pi/agent/mcp.json` through the shared
+ *   `planJsonMcp`/`applyJsonMcp` machinery (ownership ledger, conflict
+ *   detection, user entries preserved) with the pi-shaped renderer from
+ *   `piMcp.ts`. Gateway route → the single `trellis` runtime entry;
+ *   agent-owned OAuth servers → bare `{url}` entries the user authorizes
+ *   with `pi mcp login`.
+ * - Older pis (or an unprobeable version) keep the legacy delivery: a
+ *   single symlinked bridge extension (`dist/pi-bridge/bundle.js`,
+ *   trellis-pi-mcp-bridge-p4). The version gate never moves a machine
+ *   FROM the bridge TO native until the mcp.json write succeeds — the
+ *   bridge-removal item rides along in the same plan, ordered after the
+ *   config write, and is withheld entirely when any write conflicts
+ *   (design.md D3: the two deliveries may never be active at once, every
+ *   tool would register twice).
  */
 
+import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { readFileSync } from "node:fs";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
 import { isInScope } from "../core/adapter.js";
 import { usesNativeCapabilityDelivery } from "../core/types.js";
 import type { CanonicalSource } from "../core/types.js";
 import * as piProbe from "../probes/pi.js";
+import { probePiVersion } from "../probes/pi.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
-import type { BackupSession } from "../lib/backup.js";
+import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
+import { piRenderer, supportsNativeMcp } from "./piMcp.js";
+import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
+import { currentLinkTarget, type BackupSession } from "../lib/backup.js";
 
 const BRIDGE_SYMLINK_NAME = "trellis-mcp-bridge.js";
 
@@ -69,7 +87,12 @@ export class PiAdapter implements TrellisAdapter {
   readonly name = "pi";
   readonly id = "pi" as const;
 
-  constructor(private readonly homeDir: string = homedir()) {}
+  constructor(
+    private readonly homeDir: string = homedir(),
+    /** Test seam: the version gate must not depend on whatever pi happens
+     * to be installed on the machine running the tests. */
+    private readonly versionProbe: () => string | undefined = probePiVersion,
+  ) {}
 
   async probe(): Promise<AdapterProbeResult> {
     const snapshot = await piProbe.probe(this.homeDir);
@@ -98,6 +121,10 @@ export class PiAdapter implements TrellisAdapter {
       kind: "instructions",
     });
 
+    if (supportsNativeMcp(this.versionProbe())) {
+      return [...skillItems, ...instructionsItems, ...this.planNativeMcp(canonical)];
+    }
+
     const { file: bridgeFile, symlinkName } = resolveBridgeFile();
     const extensionItems = planSymlinks({
       rootDir: join(agentDir, "extensions"),
@@ -113,8 +140,110 @@ export class PiAdapter implements TrellisAdapter {
     return [...skillItems, ...instructionsItems, ...extensionItems];
   }
 
+  /**
+   * Native-delivery plan (design.md D1/D3). The write items come from the
+   * shared JSON machinery unchanged; the bridge-removal item is appended
+   * last and re-cast to kind "mcp" so it travels through `trellis mcp
+   * sync` — the same command that writes mcp.json — never through bare
+   * `trellis sync`. That is what makes the migration atomic from the
+   * user's point of view: the config lands and the bridge leaves in one
+   * apply, and a bare skills/instructions sync can neither remove the
+   * bridge early nor resurrect it afterwards.
+   */
+  private planNativeMcp(canonical: CanonicalSource): AdapterPlanItem[] {
+    const agentDir = join(this.homeDir, ".pi", "agent");
+    const configPath = join(agentDir, "mcp.json");
+    const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
+    const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
+
+    const items = planJsonMcp({
+      configPath,
+      parsed,
+      mcp: canonical.mcp,
+      agentId: this.id,
+      managedAgents: canonical.managedAgents,
+      policy: canonical.secretsPolicy,
+      ownership,
+      render: piRenderer,
+    }).map((item) => {
+      // pi speaks stdio and streamable HTTP only — an sse server gets an
+      // honest conflict instead of an entry pi could never connect.
+      const write = item.mcpWrite;
+      if (write?.def.transport !== "sse") return item;
+      return {
+        action: "conflict",
+        kind: "mcp",
+        target: item.target,
+        description: `MCP server "${write.name}" uses the sse transport, which pi does not support (stdio and streamable HTTP only) — no entry written to ${item.target}`,
+        remediation: "switch the server to streamable HTTP or stdio, or scope it away from pi",
+      } satisfies AdapterPlanItem;
+    });
+
+    const bridgePath = join(agentDir, "extensions", BRIDGE_SYMLINK_NAME);
+    const hasConflict = items.some((item) => item.action === "conflict");
+    if (!hasConflict && this.isOwnedBridgeSymlink(bridgePath)) {
+      items.push({
+        action: "remove",
+        kind: "mcp",
+        target: bridgePath,
+        description: `remove Trellis MCP bridge extension ${bridgePath} — pi >= 1.1.0 receives MCP natively via mcp.json`,
+      });
+    }
+    return items;
+  }
+
+  /**
+   * Removal ownership for the bridge, mirroring `planSymlinks`' rule: the
+   * raw readlink target must resolve under this installation's
+   * `dist/pi-bridge/` directory, or be a byte-identical bundle at the
+   * Trellis artifact shape left by a previous install root. Anything else
+   * is the user's and stays.
+   */
+  private isOwnedBridgeSymlink(bridgePath: string): boolean {
+    const stat = lstatSync(bridgePath, { throwIfNoEntry: false });
+    if (!stat?.isSymbolicLink()) return false;
+    const rawTarget = readlinkSync(bridgePath);
+    const { file } = resolveBridgeFile();
+    const bridgeRoot = dirname(file);
+    const resolved = rawTarget.startsWith(sep) ? rawTarget : join(dirname(bridgePath), rawTarget);
+    if (resolved === file || resolved.startsWith(bridgeRoot.endsWith(sep) ? bridgeRoot : `${bridgeRoot}${sep}`)) return true;
+    return isEquivalentTrellisBridge(resolved, file);
+  }
+
   async apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
-    await applySymlinkPlan(plan, backup);
+    await applySymlinkPlan(
+      plan.filter((item) => item.kind !== "mcp"),
+      backup,
+    );
+
+    // Real config writes carry mcpWrite/mcpRemove; the bridge-removal
+    // item is the only kind:"mcp" entry without either, and it must run
+    // strictly after the config write (design.md D3).
+    const mcpWrites = plan.filter((item) => item.kind === "mcp" && (item.mcpWrite || item.mcpRemove));
+    const bridgeRemovals = plan.filter((item) => item.kind === "mcp" && item.action === "remove" && !item.mcpWrite && !item.mcpRemove);
+
+    if (mcpWrites.length > 0) {
+      const configPath = mcpWrites[0].target;
+      const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
+      const merged = applyJsonMcp(parsed, mcpWrites, piRenderer);
+      backup.writeFile(configPath, `${JSON.stringify(merged, null, 2)}\n`);
+
+      let ownership = loadMcpOwnership(this.homeDir);
+      for (const item of mcpWrites) {
+        if (item.action === "create" && item.mcpWrite) {
+          ownership = recordOwned(ownership, this.id, item.mcpWrite.name, piRenderer(item.mcpWrite.def, item.mcpWrite.name));
+        } else if (item.action === "remove" && item.mcpRemove) {
+          ownership = forgetOwned(ownership, this.id, item.mcpRemove.name);
+        }
+      }
+      saveMcpOwnership(this.homeDir, ownership);
+    }
+
+    for (const item of bridgeRemovals) {
+      const oldTarget = await currentLinkTarget(item.target);
+      if (oldTarget === undefined) continue; // already gone — nothing to record
+      await backup.removeSymlink(item.target, oldTarget);
+    }
   }
 
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {
@@ -135,6 +264,24 @@ export class PiAdapter implements TrellisAdapter {
     for (const name of actualSkills) {
       if (!desiredNames.has(name)) {
         mismatches.push(`skill "${name}" is present on disk but not in canonical scope for pi`);
+      }
+    }
+
+    if (supportsNativeMcp(this.versionProbe())) {
+      // Native mode drift: anything the plan still wants to change is by
+      // definition drift. The plan only ever names Trellis-owned entries
+      // (the ownership ledger gates removals), so user-authored servers
+      // can never surface here.
+      for (const item of this.planNativeMcp(canonical)) {
+        if (item.action === "create" && item.mcpWrite) {
+          mismatches.push(`mcp.json entry "${item.mcpWrite.name}" is missing or differs from canonical — run trellis mcp sync`);
+        } else if (item.action === "remove" && item.mcpRemove) {
+          mismatches.push(`mcp.json entry "${item.mcpRemove.name}" is Trellis-owned but no longer in canonical — run trellis mcp sync`);
+        } else if (item.action === "remove") {
+          mismatches.push(`the Trellis MCP bridge extension is still installed but pi >= 1.1.0 uses native mcp.json — run trellis mcp sync`);
+        } else if (item.action === "conflict") {
+          mismatches.push(item.description);
+        }
       }
     }
 

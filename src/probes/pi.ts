@@ -5,10 +5,12 @@
  * and `dist/core/resource-loader.js` (`loadContextFileFromDir(resolvedAgentDir)`),
  * not by assumption. See design.md D5 (openspec/changes/trellis-doctor-p0).
  *
- * pi has no native MCP client (docs/research.md) — nothing to read or
- * probe, so `mcpServers` is always empty here. That's real information
- * (this is why P4 has to write a runtime bridge extension instead of
- * generating config), not an omission.
+ * pi >= 1.1.0 has a native MCP client (`~/.pi/agent/mcp.json`), which the
+ * adapter manages (trellis-pi-native-mcp-migration); the probe still
+ * reports `mcpServers: []` because server health is the runtime's job,
+ * not the probe's. `probePiVersion` is split out so the adapter's
+ * native-vs-bridge version gate shares exactly this exec and tests can
+ * inject a seam.
  */
 
 import { execFileSync } from "node:child_process";
@@ -17,6 +19,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathRef, scanSkillRoot } from "../lib/probeCommon.js";
 import type { AgentSnapshot } from "../core/types.js";
+
+export function probePiVersion(): string | undefined {
+  try {
+    return execFileSync("pi", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
+  } catch {
+    return undefined;
+  }
+}
 
 /** Priority order pi itself checks (`loadContextFileFromDir`), first match wins. */
 const INSTRUCTIONS_CANDIDATES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
@@ -31,12 +41,8 @@ export async function probe(homeDir: string = homedir()): Promise<AgentSnapshot>
     return { agent: "pi", present: false, skillRoots: [], mcpServers: [], diagnostics: [] };
   }
 
-  let version: string | undefined;
-  try {
-    version = execFileSync("pi", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
-  } catch {
-    // config exists without the binary on PATH — unusual, still probeable
-  }
+  // config can exist without the binary on PATH — unusual, still probeable
+  const version = probePiVersion();
 
   const skillRoot = scanSkillRoot(skillsPath);
 
