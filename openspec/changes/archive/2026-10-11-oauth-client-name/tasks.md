@@ -25,7 +25,7 @@
 ## 4. Verification
 
 - [x] 4.1 Full suite, typecheck, build
-- [ ] 4.2 Real machine after release: canonical figma gets
+- [x] 4.2 Real machine after release: canonical figma gets
   `auth: { kind: oauth, client_name: Claude Code }`, `trellis mcp sync`
   writes the oauth block, second sync is a no-op, `pi mcp login figma`
   reaches the browser
