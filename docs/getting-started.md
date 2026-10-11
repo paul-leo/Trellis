@@ -907,6 +907,13 @@ An Agent can call the read-only `trellis.mcp.status` Runtime tool to explain
 this partial state to the user. It reports unavailable or authorization-
 required servers and gives the next safe action, such as `trellis mcp auth
 figma`, without exposing tokens or opening a browser from the Agent process.
+Each connected upstream also carries a structured `toolCount`, and an `oauth`
+section reports the stored-credential health of OAuth-classified servers that
+bypass the gateway as direct entries (`valid` / `no-token` /
+`expired-renewable` / `needs-auth` / `unreadable`, with `expiresAt` when
+known) — read-only classification from the token store, the same computation
+`trellis mcp renew` and `trellis doctor` use, so the three can never
+disagree.
 
 This command only applies to `http`/`sse` servers. stdio servers get
 their credentials from `env`/`env_aliases` as described above; running

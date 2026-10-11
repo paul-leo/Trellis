@@ -99,7 +99,12 @@ servers:
 gateway:
   enabled: true
 `));
-  assert.deepEqual(resolveGatewayUpstreams("claude-code", canonical).upstreams.map((u) => u.name), ["ordinary"]);
+  const { upstreams, oauthServers } = resolveGatewayUpstreams("claude-code", canonical);
+  assert.deepEqual(upstreams.map((u) => u.name), ["ordinary"]);
+  // …but they are not invisible: the status tool reports their credential
+  // health from exactly this list (trellis-mcp-status-credential-health
+  // design.md D4).
+  assert.deepEqual(oauthServers, ["figma"]);
 });
 
 test("gateway upstreams: the object form of the classification is excluded too, not just the scalar", () => {
@@ -121,7 +126,39 @@ servers:
 gateway:
   enabled: true
 `));
-  assert.deepEqual(resolveGatewayUpstreams("claude-code", canonical).upstreams.map((u) => u.name), ["ordinary"]);
+  const { upstreams, oauthServers } = resolveGatewayUpstreams("claude-code", canonical);
+  assert.deepEqual(upstreams.map((u) => u.name), ["ordinary"]);
+  assert.deepEqual(oauthServers, ["figma"]);
+});
+
+test("gateway upstreams: scoped-out or disabled OAuth servers surface nowhere", () => {
+  // oauthServers must be exactly the set sync writes as direct entries
+  // (trellis-mcp-status-credential-health design.md D4) — a server this
+  // agent doesn't have must not appear in its status report either.
+  const canonical = loadCanonicalSource(scratchHome(`
+servers:
+  ordinary:
+    transport: stdio
+    command: node
+  figma:
+    transport: http
+    url: https://mcp.figma.com/mcp
+    auth: oauth
+    agents: [codex]
+  sentry:
+    transport: http
+    url: https://mcp.sentry.dev/mcp
+    auth: oauth
+    enabled: false
+gateway:
+  enabled: true
+`));
+  const claude = resolveGatewayUpstreams("claude-code", canonical);
+  assert.deepEqual(claude.upstreams.map((u) => u.name), ["ordinary"]);
+  assert.deepEqual(claude.oauthServers, [], "figma is codex-scoped and sentry is disabled — neither is this agent's");
+
+  const codex = resolveGatewayUpstreams("codex", canonical);
+  assert.deepEqual(codex.oauthServers, ["figma"]);
 });
 
 test("gateway upstreams: an unresolvable env name is reported and its server dropped, not connected with an empty value", () => {

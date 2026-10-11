@@ -74,15 +74,22 @@ export function parseMcpGatewayArgs(argv: readonly string[]): { agentId: AgentId
 export function resolveGatewayUpstreams(
   agentId: AgentId,
   canonical: Pick<ReturnType<typeof loadCanonicalSource>, "mcp" | "managedAgents" | "secretsPolicy">,
-): { upstreams: UpstreamSpec[]; conflicts: string[] } {
+): { upstreams: UpstreamSpec[]; oauthServers: string[]; conflicts: string[] } {
   const route = canonical.mcp.routes?.[agentId];
   const hubActive = route ? route.mode === "hub" : Boolean(canonical.mcp.hub) && !isGatewayAgent(agentId, canonical.mcp, canonical.managedAgents);
   if (hubActive) {
-    return { upstreams: [], conflicts: [] };
+    // Hub mode writes no direct entries at all (mcpPlan's hub branch), so
+    // there are no OAuth servers for the status tool to report either.
+    return { upstreams: [], oauthServers: [], conflicts: [] };
   }
   const directRoutes = canonical.mcp.routes && route
     ? { ...canonical.mcp.routes, [agentId]: { mode: "direct" as const, ...(route.servers ? { servers: route.servers } : {}) } }
     : canonical.mcp.routes;
+  // Trellis-owned OAuth servers stay in the plan as ordinary upstreams
+  // (auth stripped here so the direct-mode plan keeps them; the original
+  // defs are restored below so withOAuthHeader can attach their tokens at
+  // connect). Agent-owned ones are excluded entirely: sync writes those as
+  // direct native entries beside the gateway (trellis-desktop-oauth-ownership).
   const ordinaryServers = Object.fromEntries(Object.entries(canonical.mcp.servers)
     .filter(([, def]) => !isAgentOwnedOAuth(def))
     .map(([name, def]) => { const { auth: _auth, ...ordinary } = def; return [name, ordinary]; }));
@@ -99,8 +106,20 @@ export function resolveGatewayUpstreams(
   // every server, and every secret resolved into it, to the one agent the
   // user just said to stop involving.
   const { desired, conflicts } = resolveMcpPlan(agentId, direct, canonical.managedAgents, canonical.secretsPolicy);
+  // Agent-owned OAuth servers bypass the gateway as direct entries, so no
+  // connection state exists for them here — but Trellis owns the token
+  // store, so `trellis.mcp.status` reports their credential health for
+  // exactly this set. It is resolved through a second direct-mode plan
+  // over just those servers, so scope, `enabled: false` and route
+  // restrictions match what sync writes (the identical planDirectServers
+  // checks; trellis-mcp-status-credential-health design.md D4).
+  const agentOwnedServers = Object.fromEntries(Object.entries(canonical.mcp.servers).filter(([, def]) => isAgentOwnedOAuth(def)));
+  const oauthServers = Object.keys(agentOwnedServers).length === 0
+    ? []
+    : resolveMcpPlan(agentId, { ...direct, servers: agentOwnedServers }, canonical.managedAgents, canonical.secretsPolicy).desired.map(({ name }) => name);
   return {
     upstreams: desired.map(({ name }) => ({ name, def: canonical.mcp.servers[name]! })),
+    oauthServers,
     conflicts: conflicts.map((conflict) => conflict.message),
   };
 }
@@ -135,7 +154,7 @@ async function runMcpEdge(
     return { exitCode: 1 };
   }
 
-  const { upstreams, conflicts } = resolveGatewayUpstreams(opts.agentId, canonical);
+  const { upstreams, oauthServers, conflicts } = resolveGatewayUpstreams(opts.agentId, canonical);
   for (const message of conflicts) {
     console.error(`trellis-mcp-gateway: ${message}`);
   }
@@ -152,7 +171,7 @@ async function runMcpEdge(
         homeDir,
       });
 
-  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
+  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend, { homeDir, oauthServers }), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
   const server = serveStdio(() => createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry));
 
   await waitForShutdown(registry, server);
