@@ -63,7 +63,7 @@
 
 ## 6. Ship
 
-- [ ] 6.1 New branch off `origin/main` (after PR #5 merges), commit, PR
-- [ ] 6.2 `openspec archive pi-native-mcp-migration --yes` after merge
+- [x] 6.1 New branch off `origin/main` (after PR #5 merges), commit, PR
+- [x] 6.2 `openspec archive pi-native-mcp-migration --yes` after merge
 - [ ] 6.3 File the follow-up change: delete `src/pi-bridge/`,
   `scripts/build-pi-bridge.mjs`, fallback gate, `pi-mcp-bridge` spec
