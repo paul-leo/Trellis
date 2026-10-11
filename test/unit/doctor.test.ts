@@ -19,6 +19,7 @@ import {
   detectRuntimeDrift,
   resolveKnownHostInjected,
 } from "../../src/commands/doctor.js";
+import { readToken, writeToken } from "../../src/lib/oauth/store.js";
 import type { AgentSnapshot, AgentSnapshotSkillEntry } from "../../src/core/types.js";
 
 function scratchHome(): string {
@@ -167,4 +168,95 @@ test("collectDoctorReport: homeDir defaults to the real ~ — the same seam ever
   // path, matching every probe's own `homeDir: string = homedir()` default.
   const report = await collectDoctorReport();
   assert.equal(report.snapshots.length, 6);
+});
+
+// trellis-mcp-oauth-renew tasks.md 3.2: doctor's OAuth section — the same
+// classifier `mcp renew` consumes (design.md D2), strictly read-only
+// (design.md D4): no token endpoint exists in these fixtures at all, so
+// any network attempt would fail the test by hanging/erroring.
+
+function canonicalHomeWithOAuth(serversYaml: string): string {
+  const home = scratchHome();
+  mkdirSync(join(home, ".trellis", "mcp", "oauth"), { recursive: true });
+  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
+  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
+  writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [claude-code]\n");
+  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), serversYaml);
+  return home;
+}
+
+const OAUTH_YAML = `servers:
+  remote:
+    transport: http
+    url: "https://example.test/mcp"
+    auth: oauth
+`;
+
+test("doctor oauth: a valid credential yields a valid entry and no finding", async () => {
+  const home = canonicalHomeWithOAuth(OAUTH_YAML);
+  writeToken(home, "remote", { accessToken: "a", expiresAt: Date.now() + 3_600_000 });
+
+  const report = await collectDoctorReport(home);
+
+  assert.deepEqual(report.oauth, [{ server: "remote", status: "valid", expiresAt: report.oauth?.[0]?.expiresAt }]);
+  assert.ok(!report.findings.some((f) => f.kind === "oauth-expired"));
+});
+
+test("doctor oauth: an expired credential yields an oauth-expired finding naming both remediations", async () => {
+  const home = canonicalHomeWithOAuth(OAUTH_YAML);
+  writeToken(home, "remote", { accessToken: "a", refreshToken: "r", expiresAt: Date.now() - 1000 });
+
+  const report = await collectDoctorReport(home);
+
+  assert.equal(report.oauth?.[0]?.status, "expired");
+  const finding = report.findings.find((f) => f.kind === "oauth-expired");
+  assert.ok(finding, "a credential that will 401 on next use is exactly what doctor exists to catch first (design.md D4)");
+  assert.match(finding.message, /remote/);
+  assert.match(finding.message, /trellis mcp renew/);
+  assert.match(finding.message, /trellis mcp auth remote/);
+});
+
+test("doctor oauth: a classified server with no token is absent plus a finding; the token stays unwritten", async () => {
+  const home = canonicalHomeWithOAuth(OAUTH_YAML);
+
+  const report = await collectDoctorReport(home);
+
+  assert.equal(report.oauth?.[0]?.status, "absent");
+  assert.ok(report.findings.some((f) => f.kind === "oauth-expired" && /never been authorized/.test(f.message)));
+  assert.equal(readToken(home, "remote"), undefined, "doctor stays read-only (design.md D4)");
+});
+
+test("doctor oauth: a token file for an unclassified server is ignored — classification is explicit (design.md D5)", async () => {
+  const home = canonicalHomeWithOAuth(`servers:
+  ordinary:
+    transport: http
+    url: "https://example.test/mcp"
+`);
+  writeToken(home, "ordinary", { accessToken: "a", expiresAt: Date.now() - 1000 });
+
+  const report = await collectDoctorReport(home);
+
+  assert.equal(report.oauth, undefined);
+  assert.ok(!report.findings.some((f) => f.kind === "oauth-expired"));
+});
+
+test("doctor oauth: no canonical source — section absent, doctor still works standalone", async () => {
+  const home = scratchHome();
+
+  const report = await collectDoctorReport(home);
+
+  assert.equal(report.oauth, undefined);
+});
+
+test("doctor oauth: oauth-expired fails the run, alongside the other non-zero kinds", async () => {
+  const home = canonicalHomeWithOAuth(OAUTH_YAML);
+  writeToken(home, "remote", { accessToken: "a", expiresAt: Date.now() - 1000 });
+
+  const report = await collectDoctorReport(home);
+  // Mirror runDoctor's own exit computation — the finding kind, not some
+  // parallel flag, is what must drive non-zero (spec: "contributes to a
+  // non-zero doctor exit code").
+  const wouldExitNonZero = report.findings.some((f) => f.kind === "oauth-expired");
+
+  assert.equal(wouldExitNonZero, true);
 });

@@ -15,6 +15,7 @@ import { parseScopeArgs } from "./lib/scopeSelection.js";
 import { runMcpImport } from "./commands/mcpImport.js";
 import { parseMcpGatewayArgs, runMcpGateway, runMcpRuntime } from "./commands/mcpGateway.js";
 import { runMcpAuth } from "./commands/mcpAuth.js";
+import { runMcpRenew } from "./commands/mcpRenew.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
 import { runSkillList, runSkillAdd, runSkillRemove, runSkillScope, runSkillUpdateBuiltin } from "./commands/skill.js";
@@ -162,6 +163,15 @@ Commands:
               refreshes silently on its own and never prompts.
               --force   re-authorize even if the stored token is valid
               --json    machine-readable output, no report text
+  mcp renew
+            Silently refresh every stored OAuth token that needs it —
+              never opens a browser, never performs an initial grant.
+              Reports per-server health and exits non-zero when any
+              classified server needs 'mcp auth'. Safe under a scheduler
+              (launchd): idempotent on valid tokens, refreshes serialized
+              per server, overlapping runs degrade to one refresh.
+              --dry-run  report status without any token-endpoint call
+              --json     machine-readable output, no report text
   mcp-runtime --agent <agent>
             Internal MCP edge exposing Trellis providers and selected
             upstream capabilities; existing mcp-gateway configs remain valid
@@ -482,6 +492,11 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
 
+    if (subcommand === "renew") {
+      const { exitCode } = await runMcpRenew({ json, dryRun });
+      process.exitCode = exitCode;
+      return;
+    }
     if (subcommand === "auth") {
       const [serverName] = mcpRest;
       if (!serverName || serverName.startsWith("--")) {
@@ -494,7 +509,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
 
-    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|set <name>|scope <name>|remove <name>|auth <name>\n`);
+    console.error(`Unknown mcp subcommand: ${subcommand ?? "(none)"}\nUsage: trellis mcp sync|list|add <name>|set <name>|scope <name>|remove <name>|auth <name>|renew\n`);
     process.exitCode = 1;
     return;
   }
