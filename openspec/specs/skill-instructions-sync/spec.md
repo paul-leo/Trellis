@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change trellis-sync-p1. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Scope filtering excludes out-of-scope items from every plan
 
 Every adapter's `plan()` SHALL filter skills and the instructions file
@@ -123,3 +125,14 @@ returning success merely because `apply()` didn't throw.
 - **THEN** `verify()` reports a mismatch, since it re-reads real state
   rather than trusting the prior `apply()` call
 
+### Requirement: ZCode Runtime-only Skill delivery honors canonical scope
+
+The system SHALL not create native ZCode Skill links for canonical Skills when
+ZCode uses Runtime-only delivery. It SHALL expose in-scope Skills through
+Runtime and suppress ZCode's ambient native Skill discovery for the managed
+profile.
+
+#### Scenario: Native ZCode Skill tree is unchanged in Runtime-only mode
+- **WHEN** `trellis sync skills` runs for Runtime-only ZCode
+- **THEN** it does not create or remove user Skill directories under
+  `~/.zcode/skills`, while runtime Skill access reflects canonical scope

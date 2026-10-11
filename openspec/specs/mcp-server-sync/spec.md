@@ -433,3 +433,40 @@ Servers without a declared `client_name` SHALL render unchanged.
 - **WHEN** an agent-owned OAuth server has no `client_name`
 - **THEN** the pi entry remains `{ "url": "..." }` and `pi mcp login`
   registers under pi's default client name
+
+### Requirement: MCP sync supports Kimi's JSON server registry
+
+The system SHALL merge the owned Runtime entry into Kimi's user-level
+`~/.kimi-code/mcp.json` while preserving unrelated top-level fields and
+unowned `mcpServers` entries.
+
+#### Scenario: Kimi receives deferred Runtime configuration
+
+- **WHEN** Kimi Runtime delivery is enabled
+- **THEN** its `trellis-runtime` entry points to
+  `trellis mcp-runtime --agent kimi-code` and uses Kimi's supported deferred
+  loading field without exposing canonical paths or secret values
+
+### Requirement: ZCode nested MCP entries use ownership-safe synchronization
+
+The system SHALL synchronize ZCode MCP declarations inside the selected
+configuration file's `mcp.servers` map. It SHALL create and repair an
+in-scope canonical declaration, and remove one only when the ownership ledger
+proves the current nested value is exactly what Trellis last wrote.
+
+#### Scenario: Hand-edited ZCode MCP entry is retained
+- **WHEN** a previously Trellis-owned ZCode MCP entry was changed by the user
+  and then disappears from canonical source
+- **THEN** MCP sync leaves that nested entry unchanged
+
+### Requirement: ZCode native configuration takes precedence over compatibility fallback
+
+The system SHALL write ZCode's native `mcp.servers` configuration rather than
+`~/.agents/mcp.json`, because ZCode skips that compatibility file whenever a
+native configuration in the same scope has MCP servers.
+
+#### Scenario: Runtime sync remains visible after a user adds a native server
+- **WHEN** a user adds an unrelated ZCode-native MCP server after Runtime
+  sync
+- **THEN** the Trellis Runtime entry remains in the native map and is still
+  loaded by ZCode

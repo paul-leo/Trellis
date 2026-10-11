@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change trellis-doctor-p0. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Cross-agent snapshot comparison
 The system SHALL compare `AgentSnapshot`s from all present agents pairwise
 and report, for each skill name that appears in more than one agent, whether
@@ -128,3 +130,13 @@ cleanly and no cross-agent finding exists.
 - **THEN** the process exit code is non-zero, making `trellis doctor`
   usable as a CI or pre-commit gate
 
+### Requirement: Doctor includes ZCode static state
+
+The system SHALL include a present ZCode snapshot in cross-agent Skill,
+MCP-collision, parse-diagnostic, and canonical-runtime-drift checks, using
+only its static profile configuration.
+
+#### Scenario: ZCode Runtime entry drifts from canonical
+- **WHEN** canonical expects the ZCode Runtime entry and the selected ZCode
+  configuration no longer contains it
+- **THEN** `trellis doctor` reports a ZCode runtime-drift finding

@@ -12,53 +12,47 @@ perceiving a gateway exists.
 ## Requirements
 
 ### Requirement: Gateway mode collapses every server to one native stdio entry per agent
-The system SHALL, when a canonical server set's gateway mode is enabled
-for an agent, write exactly one native stdio MCP entry to that agent's
-config — `command` pointing at the `trellis mcp-gateway` subcommand,
-carrying that agent's own id as an argument — instead of one entry per
-server in `mcp.servers`, and SHALL NOT iterate `mcp.servers` at all when
-producing that agent's plan items.
+When gateway mode is enabled for an Agent, the system SHALL write one native
+stdio entry pointing to the Trellis gateway/runtime with that Agent id. Ordinary
+and explicitly Trellis-owned upstreams SHALL use that entry without duplicate
+per-server native entries. Agent-owned OAuth connections SHALL remain separate
+native entries so each Agent retains its own authorization.
 
 #### Scenario: Gateway mode produces one entry regardless of server count
-- **WHEN** gateway mode is enabled for claude-code and `mcp.servers`
-  defines five servers, three of them scoped to claude-code
-- **THEN** `~/.claude.json` gains exactly one MCP entry, a stdio command
-  pointing at `trellis mcp-gateway --agent claude-code`, not five
-  separate entries
+- **WHEN** gateway mode is enabled and five ordinary servers include three in scope
+- **THEN** one gateway entry is written instead of three native server entries
 
 #### Scenario: Gateway mode is independent per agent
-- **WHEN** gateway mode is enabled for claude-code only, and codex/kiro
-  are left in direct (per-server) mode
-- **THEN** claude-code's config gains the single gateway entry, while
-  codex's and kiro's configs still receive one native entry per in-scope
-  server, exactly as `mcp-server-sync` already does today
+- **WHEN** gateway mode applies to Claude Code only and other Agents remain direct
+- **THEN** Claude Code receives its gateway and native OAuth entries while other
+  Agents retain their eligible native entries
+
+#### Scenario: Native OAuth remains separate from the gateway
+- **WHEN** an Agent-owned OAuth server is in scope for a gateway Agent
+- **THEN** its native entry is retained beside the gateway and its credentials
+  remain owned by that Agent
 
 ### Requirement: The gateway subcommand aggregates in-scope upstream servers behind a standard MCP Server
-
-The system SHALL, on startup, resolve the same in-scope server set an agent's
-ordinary direct-mode plan would have used, excluding every canonical server
-marked `auth: oauth`, connect to each remaining one, and expose the aggregate
-through a standard MCP Server. An OAuth-classified server SHALL NOT be
-connected by the gateway.
+The system SHALL resolve the in-scope server set, excluding Agent-owned OAuth
+servers and including explicitly Trellis-owned OAuth servers. It SHALL connect
+each eligible upstream and preserve disabled-server, scope and failure isolation
+behavior. It SHALL NOT use or import Agent-owned OAuth credentials.
 
 #### Scenario: The gateway only aggregates servers in scope for the requesting agent
-
-- **WHEN** `trellis mcp-gateway` is spawned by claude-code, and one
-  canonical ordinary server is scoped to `agents: [codex]` only
-- **THEN** that codex-only server is not connected to and its tools do
-  not appear in the gateway's `tools/list` response to claude-code
+- **WHEN** an ordinary server is scoped to codex only
+- **THEN** the Claude Code gateway does not connect to that server
 
 #### Scenario: A disabled server is never connected to by the gateway
-
-- **WHEN** a canonical server has `enabled: false`
-- **THEN** the gateway subcommand does not attempt to connect to it,
-  regardless of agent scope
+- **WHEN** a canonical server has enabled false
+- **THEN** no gateway connects to it regardless of ownership
 
 #### Scenario: An OAuth server is excluded from gateway upstreams
+- **WHEN** Figma is OAuth-classified without explicit Trellis ownership
+- **THEN** the gateway excludes it and the Agent handles its native connection
 
-- **WHEN** `figma` is marked `auth: oauth` and Claude Code uses gateway mode
-- **THEN** the gateway does not connect to Figma and Figma's tools do not
-  appear in the gateway's tools list
+#### Scenario: An explicitly hosted OAuth server uses its own credential
+- **WHEN** a server has Trellis ownership and a valid Trellis token
+- **THEN** the gateway attaches that token without reading Agent credentials
 
 ### Requirement: Tools are aggregated with a server-name prefix and routed back to the correct upstream
 
@@ -169,28 +163,22 @@ any other canonical file, or the OS Keychain/credential manager.
   anywhere in the resulting diff
 
 ### Requirement: First-time OAuth authorization is a manual, user-invoked command; the gateway never opens a browser
-The system SHALL perform the authorization-code-plus-PKCE flow (metadata
-discovery, dynamic client registration when available, PKCE challenge,
-opening a browser, running a local callback listener, and exchanging the
-resulting code for tokens) only inside `trellis mcp auth <server-name>`,
-run explicitly by a human. The gateway subcommand itself SHALL NOT open
-a browser, start a callback listener, or otherwise attempt an
-interactive authorization flow under any circumstance.
+Interactive authorization SHALL start only through the human-invoked CLI or an
+explicit desktop action. It SHALL perform discovery, applicable registration,
+PKCE, browser launch, loopback callback and token exchange. The gateway SHALL
+never start interactive authorization, open a browser or wait for user input.
 
 #### Scenario: Running the auth command performs the full interactive flow
-- **WHEN** a user runs `trellis mcp auth <server-name>` for a remote
-  server with no stored token
-- **THEN** the command discovers the server's OAuth metadata, registers
-  a client if dynamic registration is available, generates a PKCE
-  challenge, opens the user's browser at the authorization URL, receives
-  the callback locally, exchanges the code for tokens, and persists the
-  result
+- **WHEN** a human invokes the auth command for a remote server
+- **THEN** the existing OAuth flow runs and successful credentials are saved
 
 #### Scenario: The gateway subcommand never initiates authorization on its own
-- **WHEN** the gateway subcommand starts and finds no stored OAuth token
-  for a server that requires one
-- **THEN** it skips connecting to that server (per the connection-failure
-  requirement above) without opening a browser or blocking on user input
+- **WHEN** the gateway lacks a required hosted credential
+- **THEN** it reports the authorization requirement without opening a browser
+
+#### Scenario: The desktop invokes authorization explicitly
+- **WHEN** the user clicks authorize on a Trellis-owned server
+- **THEN** the desktop task runs the same structured OAuth flow as the CLI
 
 ### Requirement: An expired OAuth token is refreshed silently, without user interaction
 The system SHALL, when a stored OAuth token is expired or about to

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Let built-in Runtime tools become available when slow or unauthorized
+  upstream MCP servers fail

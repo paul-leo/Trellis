@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change trellis-doctor-p0. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: MCP server handshake probing
 The system SHALL determine whether a configured MCP server is reachable by
 spawning it and sending a JSON-RPC `initialize` request over stdio, resolving
@@ -102,3 +104,27 @@ literal configured path
   reported (symlink status, realpath, skill names), with no special-cased
   "not comparable" marker
 
+### Requirement: Kimi Code has a read-only state probe
+
+The system SHALL add Kimi Code to the supported Agent probes, reporting its
+binary version, `~/.kimi-code/mcp.json` servers, Skill roots, and native
+instruction path when present without writing any Kimi state.
+
+#### Scenario: Kimi MCP servers are listed without credential values
+
+- **WHEN** the Kimi probe reads a valid `mcp.json`
+- **THEN** it reports server names and transports while redacting env/header
+  values and preserving probe diagnostics
+
+### Requirement: ZCode has a read-only native-state snapshot
+
+The system SHALL provide a ZCode probe that reports compatible CLI identity,
+selected configuration profile, native Skill roots, MCP server names and
+transports, and the ZCode AGENTS instruction path. The probe SHALL not modify
+configuration, start a model turn, read credential values, or inspect session
+stores.
+
+#### Scenario: ZCode configuration is probeable without model access
+- **WHEN** ZCode config exists but its model provider is not configured
+- **THEN** the probe reports ZCode's static state without attempting login or
+  a model request

@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Trellis — Overview (design sketch)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: oklch(97.3% 0.006 80);
+    --paper-dim: oklch(94.2% 0.008 78);
+    --paper-panel: oklch(99% 0.004 80);
+    --ink: oklch(23% 0.016 265);
+    --ink-soft: oklch(46% 0.02 265);
+    --ink-faint: oklch(63% 0.014 265);
+    --line: oklch(86% 0.01 75);
+    --line-strong: oklch(78% 0.012 75);
+    --accent: oklch(42% 0.15 274);
+    --accent-ink: oklch(97% 0.01 274);
+    --accent-soft: oklch(93.5% 0.025 274);
+    --accent-line: oklch(80% 0.06 274);
+    --good: oklch(46% 0.09 152);
+    --good-soft: oklch(93% 0.03 152);
+    --warn: oklch(52% 0.11 68);
+    --warn-soft: oklch(93% 0.04 80);
+    --bad: oklch(48% 0.13 24);
+    --bad-soft: oklch(93% 0.035 24);
+
+    --font-display: "Space Grotesk", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", "IBM Plex Sans", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "PingFang SC", "Noto Sans SC", monospace;
+  }
+
+  *{ box-sizing: border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell{
+    display: grid;
+    grid-template-columns: 232px 1fr;
+    min-height: 100vh;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    background: var(--paper-dim);
+    border-right: 1px solid var(--line);
+    padding: clamp(20px, 3vw, 32px) 20px;
+    display: flex;
+    flex-direction: column;
+  }
+  .brand{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: clamp(28px, 5vh, 44px);
+  }
+  .brand svg{ width: 22px; height: 22px; flex: none; }
+  .brand-name{
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 16px;
+    letter-spacing: 0.01em;
+  }
+
+  nav.primary{ display:flex; flex-direction:column; gap: 2px; }
+  .nav-label{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: 0 10px;
+    margin: 18px 0 6px;
+  }
+  .nav-label:first-of-type{ margin-top: 0; }
+  .nav-item{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: 13.5px;
+    font-weight: 500;
+    position: relative;
+  }
+  .nav-item .dot{
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--ink-faint);
+    flex: none;
+  }
+  .nav-item:hover{ background: color-mix(in oklch, var(--line) 55%, transparent); color: var(--ink); }
+  .nav-item.active{
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .nav-item.active .dot{ background: var(--accent); }
+
+  .sidebar-footer{
+    margin-top: auto;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+  }
+  .nav-item.onboard{ color: var(--ink-soft); }
+  .nav-item.onboard span.arrow{ margin-left: auto; color: var(--ink-faint); font-family: var(--font-mono); font-size: 12px; }
+
+  /* ---------- Main ---------- */
+  .main{
+    padding: clamp(28px, 4vw, 52px) clamp(28px, 5vw, 64px);
+    max-width: 1180px;
+  }
+
+  .topbar{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: clamp(30px, 5vh, 46px);
+    gap: 24px;
+  }
+  .topbar h1{
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(26px, 3vw, 32px);
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  .topbar .meta{
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .meta .live{
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--good);
+    box-shadow: 0 0 0 2px var(--good-soft);
+  }
+
+  .actions{ display:flex; gap: 10px; flex: none; padding-top: 4px; }
+  .btn{
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 14px;
+    border-radius: 7px;
+    border: 1px solid var(--line-strong);
+    background: var(--paper-panel);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .btn:hover{ border-color: var(--ink-faint); }
+  .btn.primary{
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+  }
+  .btn.primary:hover{ background: color-mix(in oklch, var(--accent) 88%, black); }
+  .btn.ghost{ border-color: transparent; background: transparent; color: var(--ink-soft); }
+  .btn.ghost:hover{ background: var(--paper-dim); color: var(--ink); }
+  .btn:disabled{ opacity: 0.4; cursor: not-allowed; }
+  .btn:disabled:hover{ border-color: var(--line-strong); background: var(--paper-panel); }
+
+  /* ---------- Hero structural panel (the one geometric gesture) ---------- */
+  .hero{
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--paper-panel);
+    padding: clamp(18px, 3vw, 30px) clamp(20px, 4vw, 40px);
+    margin-bottom: clamp(36px, 5vh, 52px);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-eyebrow{
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 4px;
+  }
+  .hero-title{
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    margin-bottom: 18px;
+  }
+  .hero-diagram{ width: 100%; height: auto; display:block; }
+
+  .stat-callout{ font-family: var(--font-mono); }
+  .stat-callout .num{
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 700;
+    fill: var(--ink);
+  }
+  .stat-callout .label{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    fill: var(--ink-faint);
+    letter-spacing: 0.04em;
+  }
+  .stat-callout .label.attn{ fill: var(--warn); }
+
+  /* ---------- Activity ---------- */
+  .section-heading{
+    display:flex; align-items:baseline; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .section-heading h2{
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+  }
+  .section-heading a{
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    text-decoration: none;
+  }
+
+  .activity-list{ position: relative; padding-left: 22px; }
+  .activity-list::before{
+    content: "";
+    position: absolute;
+    left: 4px; top: 6px; bottom: 6px;
+    width: 1px;
+    background: var(--line-strong);
+  }
+  .activity-item{
+    position: relative;
+    padding: 11px 0;
+    display: grid;
+    grid-template-columns: 108px 1fr;
+    gap: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .activity-item:last-child{ border-bottom: none; }
+  .activity-item::before{
+    content: "";
+    position: absolute;
+    left: -22px; top: 18px;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--paper-panel);
+    border: 2px solid var(--ink-faint);
+  }
+  .activity-item.ok::before{ border-color: var(--good); }
+  .activity-time{
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    padding-top: 1px;
+  }
+  .activity-desc{ font-size: 13.5px; color: var(--ink); }
+  .activity-desc b{ font-weight: 600; }
+  .activity-desc code{
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    background: var(--paper-dim);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--ink-soft);
+  }
+
+  /* ---------- Drawer (plan review — not a modal) ---------- */
+  .scrim{
+    position: fixed; inset: 0;
+    background: color-mix(in oklch, var(--ink) 22%, transparent);
+    backdrop-filter: none;
+  }
+  .drawer{
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(420px, 92vw);
+    background: var(--paper-panel);
+    border-left: 1px solid var(--line-strong);
+    box-shadow: -24px 0 48px -24px color-mix(in oklch, var(--ink) 30%, transparent);
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer-head{
+    padding: 22px 26px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .drawer-eyebrow{
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .drawer-head h3{
+    font-family: var(--font-display);
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.005em;
+  }
+  .drawer-head p{
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin: 6px 0 0;
+  }
+
+  .plan-list{ padding: 6px 26px; flex: 1; overflow-y: auto; }
+  .plan-row{
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .plan-row:last-child{ border-bottom: none; }
+  .plan-glyph{
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 14px;
+    text-align: center;
+    padding-top: 1px;
+  }
+  .plan-row.add .plan-glyph{ color: var(--good); }
+  .plan-row.update .plan-glyph{ color: var(--warn); }
+  .plan-row.remove .plan-glyph{ color: var(--bad); }
+  .plan-agent{
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 12.5px;
+    color: var(--ink);
+  }
+  .plan-detail{ color: var(--ink-soft); font-size: 12.5px; margin-top: 2px; }
+  .plan-detail code{ font-family: var(--font-mono); color: var(--ink-soft); }
+
+  .drawer-note{
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 12px 26px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+  .drawer-note svg{ flex: none; margin-top: 2px; width: 13px; height: 13px; }
+
+  .drawer-actions{
+    display: flex;
+    gap: 10px;
+    padding: 18px 26px 22px;
+  }
+  .drawer-actions .btn{ flex: 1; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 48 48" fill="none">
+        <path d="M8 10h32M24 10v28M8 10l6 6M40 10l-6 6M14 26h6M28 26h6" stroke="var(--ink)" stroke-width="3" stroke-linecap="square"/>
+      </svg>
+      <div class="brand-name">Trellis</div>
+    </div>
+
+    <nav class="primary">
+      <div class="nav-label">Runtime</div>
+      <a class="nav-item active"><span class="dot"></span>Overview</a>
+      <a class="nav-item"><span class="dot"></span>Agents</a>
+      <a class="nav-item"><span class="dot"></span>MCP</a>
+      <a class="nav-item"><span class="dot"></span>Skills</a>
+      <a class="nav-item"><span class="dot"></span>Memory</a>
+
+      <div class="nav-label">Trust</div>
+      <a class="nav-item"><span class="dot"></span>Secrets</a>
+      <a class="nav-item"><span class="dot"></span>Backups</a>
+      <a class="nav-item"><span class="dot"></span>Delegation</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <a class="nav-item onboard">Onboard <span class="arrow">→</span></a>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>Overview</h1>
+        <div class="meta"><span class="live"></span> 已连接 · 上次同步 2 分钟前</div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost">Doctor</button>
+        <button class="btn">Sync</button>
+      </div>
+    </div>
+
+    <!-- HERO: the trellis metaphor, annotated with live stats instead of a card grid -->
+    <div class="hero">
+      <div class="hero-eyebrow">Canonical → Agents</div>
+      <div class="hero-title">五个 Agent 的路径收进同一份 canonical，再各自分发出去</div>
+
+      <svg class="hero-diagram" viewBox="-40 0 900 260" xmlns="http://www.w3.org/2000/svg">
+        <!-- left: 5 agent nodes converging. Labels are right-anchored at a
+             fixed x with a generous fixed gap before the node dot, so this
+             never collides regardless of which fallback font actually
+             renders (SVG text does not reflow the way HTML text does). -->
+        <g font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--ink-soft)" text-anchor="end">
+          <text x="72" y="34">CLAUDE-CODE</text>
+          <text x="72" y="84">CODEX</text>
+          <text x="72" y="134">KIRO</text>
+          <text x="72" y="184">PI</text>
+          <text x="72" y="234">KIMI-CODE</text>
+        </g>
+        <g stroke="var(--line-strong)" stroke-width="1.4" fill="none">
+          <path d="M104 30 Q 200 30, 262 128"/>
+          <path d="M104 80 Q 200 80, 262 128"/>
+          <path d="M104 130 L 262 130"/>
+          <path d="M104 180 Q 200 180, 262 132"/>
+          <path d="M104 230 Q 200 230, 262 136"/>
+        </g>
+        <g fill="var(--ink-faint)">
+          <circle cx="104" cy="30" r="3"/>
+          <circle cx="104" cy="80" r="3"/>
+          <circle cx="104" cy="130" r="3"/>
+          <circle cx="104" cy="180" r="3"/>
+          <circle cx="104" cy="230" r="3"/>
+        </g>
+
+        <!-- center: the lattice glyph (canonical source) -->
+        <g transform="translate(262, 106)" stroke="var(--accent)" stroke-width="2" stroke-linecap="round">
+          <line x1="0" y1="0" x2="0" y2="48"/>
+          <line x1="16" y1="0" x2="16" y2="48"/>
+          <line x1="32" y1="0" x2="32" y2="48"/>
+          <line x1="48" y1="0" x2="48" y2="48"/>
+          <line x1="-6" y1="8" x2="54" y2="8"/>
+          <line x1="-6" y1="24" x2="54" y2="24"/>
+          <line x1="-6" y1="40" x2="54" y2="40"/>
+        </g>
+        <text x="255" y="180" font-family="IBM Plex Mono, monospace" font-size="10.5" letter-spacing="0.06em" fill="var(--accent)">~/.trellis</text>
+
+        <!-- right: branching back out, each ending in a stat callout.
+             Labels kept short (Chinese, <=10 chars) so they stay well
+             clear of the viewBox edge even under a wider fallback font. -->
+        <g stroke="var(--line-strong)" stroke-width="1.4" fill="none">
+          <path d="M330 118 Q 480 40, 610 46"/>
+          <path d="M330 128 Q 480 128, 610 128"/>
+          <path d="M330 138 Q 480 220, 610 214"/>
+        </g>
+
+        <g class="stat-callout" text-anchor="start">
+          <text class="num" x="622" y="52">4/5</text>
+          <text class="label" x="622" y="68">已托管 AGENT</text>
+
+          <text class="num" x="622" y="134">7</text>
+          <text class="label" x="622" y="150">MCP 服务器 · 全部健康</text>
+
+          <text class="num" x="622" y="220">1</text>
+          <text class="label attn" x="622" y="236">项待处理发现</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- ACTIVITY -->
+    <div class="section-heading">
+      <h2>最近活动</h2>
+      <a href="#">查看全部</a>
+    </div>
+    <div class="activity-list">
+      <div class="activity-item ok">
+        <div class="activity-time">2分钟前</div>
+        <div class="activity-desc"><b>codex</b> 的 <code>servers.yaml</code> 已同步 — 0 冲突</div>
+      </div>
+      <div class="activity-item ok">
+        <div class="activity-time">15分钟前</div>
+        <div class="activity-desc">Skill <code>trellis-runtime</code> 已添加到 3 个 Agent</div>
+      </div>
+      <div class="activity-item">
+        <div class="activity-time">1小时前</div>
+        <div class="activity-desc"><b>claude-code</b> MCP 探测：7/7 健康</div>
+      </div>
+      <div class="activity-item">
+        <div class="activity-time">3小时前</div>
+        <div class="activity-desc">备份 <code>run-2026-09-20-1</code> 已创建（sync 前自动生成）</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- PLAN REVIEW DRAWER (not a modal — a side panel that keeps Overview visible) -->
+<div class="scrim"></div>
+<aside class="drawer">
+  <div class="drawer-head">
+    <div class="drawer-eyebrow">Sync · 待确认</div>
+    <h3>3 个 Agent 将发生改动</h3>
+    <p>这是即将写入的完整计划，和 CLI 的 <code style="font-family: 'IBM Plex Mono'">--dry-run</code> 完全一致。</p>
+  </div>
+
+  <div class="plan-list">
+    <div class="plan-row add">
+      <div class="plan-glyph">+</div>
+      <div>
+        <div class="plan-agent">claude-code</div>
+        <div class="plan-detail">新增 skill <code>trellis-runtime</code></div>
+      </div>
+    </div>
+    <div class="plan-row update">
+      <div class="plan-glyph">~</div>
+      <div>
+        <div class="plan-agent">codex</div>
+        <div class="plan-detail">更新 <code>code-review</code>（内容变化，12 行）</div>
+      </div>
+    </div>
+    <div class="plan-row remove">
+      <div class="plan-glyph">−</div>
+      <div>
+        <div class="plan-agent">pi</div>
+        <div class="plan-detail">移除 <code>deprecated-skill</code>（已从 canonical 删除）</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawer-note">
+    <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor"/><path d="M8 5.2v3.6M8 10.8h.01" stroke="currentColor" stroke-linecap="round"/></svg>
+    写入前会自动创建备份，可在 Backups 页随时回滚到写入前的状态
+  </div>
+
+  <div class="drawer-actions">
+    <button class="btn ghost">取消</button>
+    <button class="btn primary">确认执行</button>
+  </div>
+</aside>
+
+</body>
+</html>

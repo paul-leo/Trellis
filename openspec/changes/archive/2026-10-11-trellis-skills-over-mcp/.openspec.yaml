@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-10-05
+goal: Trellis serves its canonical Skills in the shape the Skills-over-MCP
+  extension (SEP-2640) defines, without claiming conformance the negotiated
+  protocol revision cannot carry, and records the constraints for relaying
+  upstream skills.

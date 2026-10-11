@@ -45,12 +45,24 @@ not a credential and SHALL NOT be routed through the secrets policy.
 - **WHEN** a server definition contains a non-string `client_name`
 - **THEN** loading fails with an error naming `auth.client_name`
 
+#### Scenario: Pre-registered metadata extends an existing scalar
+
+- **WHEN** a server previously configured with `auth: oauth` is changed to
+  `auth: { kind: oauth, client_id: "abc" }`
+- **THEN** the server's routing is unchanged and the authorization flow uses
+  the supplied client identity instead of registering a new client
+
 ### Requirement: The CLI manages OAuth classification without secrets
 
 The system SHALL support `trellis mcp set <name> --auth oauth` and
 `trellis mcp set <name> --auth none`, with `--dry-run` and `--json` behavior
 matching other canonical MCP commands. The command SHALL change only the
 classification field and SHALL never print or persist credential values.
+`--client-id <value>` SHALL set the pre-registered client identifier (a
+public, non-secret literal) and `--client-secret-env <NAME>` SHALL set the
+variable name under which a client secret is resolved at authorization time;
+the CLI SHALL reject a value that is not a valid variable name in that
+position.
 
 #### Scenario: Marking an existing server as OAuth
 
@@ -64,13 +76,106 @@ classification field and SHALL never print or persist credential values.
 - **THEN** the `auth` field is removed and the server returns to ordinary MCP
   routing on the next sync
 
+#### Scenario: Setting a pre-registered client id
+
+- **WHEN** the user runs `trellis mcp set figma --auth oauth --client-id abc`
+- **THEN** canonical configuration records the object form with
+  `client_id: abc` and no secret value is written anywhere
+
+#### Scenario: A secret-looking value in the client-id position is refused
+
+- **WHEN** a literal value assigned to any OAuth metadata field matches the
+  configured `reject_patterns` or the `client_secret_env` value is not a
+  valid variable name
+- **THEN** the write is refused with an error explaining the accepted shape,
+  and canonical configuration is left unchanged
+
 ### Requirement: MCP listing exposes authorization classification
 
 `trellis mcp list` and its JSON form SHALL report whether each canonical MCP
-server is OAuth-classified, without resolving or printing any secret.
+server is OAuth-classified and whether pre-registered client metadata is
+present, without resolving or printing any secret.
 
 #### Scenario: JSON listing reports OAuth without credentials
 
 - **WHEN** `figma` is marked `auth: oauth` and has a stored OAuth token
 - **THEN** `trellis mcp list --json` includes `auth: oauth` and does not include
   the token value
+
+#### Scenario: JSON listing reports static client presence only
+
+- **WHEN** `figma` carries `auth: { kind: oauth, client_id: "abc" }`
+- **THEN** `trellis mcp list --json` reports that pre-registered metadata is
+  present and does not echo a client secret or token value
+
+### Requirement: OAuth ownership is explicit and defaults to the Agent
+Canonical OAuth metadata SHALL accept `owner: agent|trellis`. Omitted ownership
+SHALL mean Agent-owned. Agent-owned OAuth SHALL retain native connections and
+credentials, including when runtime delivery is enabled. Only explicit Trellis
+ownership SHALL permit hosted OAuth connection and hosted credential reporting.
+
+#### Scenario: Existing OAuth configuration stays native
+- **WHEN** an existing scalar or metadata-bearing OAuth definition has no owner
+- **THEN** each scoped Agent receives its own native OAuth connection
+
+#### Scenario: Hosting is explicitly enabled
+- **WHEN** the user chooses Trellis ownership for a server on a gateway/runtime route
+- **THEN** the gateway connects using Trellis's credential and no duplicate native
+  entry is written for that hosted connection
+
+#### Scenario: Hosting has no gateway/runtime route
+- **WHEN** a Trellis-owned OAuth server is configured for a plain direct route
+- **THEN** sync reports that a hosted route must be enabled instead of silently
+  delegating Trellis's credential to the Agent
+
+### Requirement: Pre-registered client metadata drives the authorization flow
+
+`trellis mcp auth <name>` SHALL use pre-registered `client_id` metadata
+directly — skipping Dynamic Client Registration — when it is present, running
+the same PKCE authorization-code flow. When it is absent, the command SHALL
+attempt Dynamic Client Registration as today. When neither path can produce a
+client identity, the command SHALL fail with a message naming the
+remediation (adding `client_id` under `auth:` in the canonical file). Granted
+credentials SHALL be persisted only to the per-server token file, paired with
+the client identity used to obtain them.
+
+#### Scenario: A static client reaches an allowlist provider
+
+- **WHEN** `figma` carries `auth: { kind: oauth, client_id: "abc" }` and the
+  user runs `trellis mcp auth figma`
+- **THEN** the authorization-code flow runs against the provider using
+  `abc`, no registration request is made, and the resulting grant is stored
+  in the figma token file with `clientId: abc`
+
+#### Scenario: No registration path yields an actionable error
+
+- **WHEN** a provider rejects Dynamic Client Registration
+  (`unauthorized_client`) and no `client_id` is configured
+- **THEN** `trellis mcp auth` exits non-zero with a message that states the
+  provider does not accept new client registrations and points to the
+  `auth.client_id` field as the remediation
+
+### Requirement: OAuth client configuration never carries secret values
+
+The canonical schema SHALL NOT provide any field that stores an OAuth client
+secret, refresh token, or access token as a literal; secrets enter only as
+variable names resolved through the secrets policy, and flow credentials live
+only in the per-server token store. Values supplied for OAuth metadata fields
+SHALL pass the same literal-value scan (`reject_patterns`) as `static_env`.
+Distribution artifacts of the project (schema examples, docs, seed data)
+SHALL NOT ship any client identifier obtained by reverse engineering a
+provider's official client; only provider-published identifiers may be
+pre-filled.
+
+#### Scenario: A pasted secret is refused at load
+
+- **WHEN** canonical configuration contains a value in an OAuth metadata
+  field that matches `reject_patterns`
+- **THEN** loading refuses the file and reports the offending field without
+  printing the value
+
+#### Scenario: Examples ship placeholders only
+
+- **WHEN** the repository's example canonical file demonstrates the object
+  form of `auth`
+- **THEN** it uses placeholder values and no real provider client identifier

@@ -109,3 +109,37 @@ that agent.
 
 - **WHEN** pi is already managed and a later onboard run selects Codex
 - **THEN** both remain managed until an explicit lifecycle command removes pi
+
+### Requirement: Remote Skill target selection cannot authorize an unmanaged Agent
+
+The system SHALL validate `trellis add --agent` values against the current
+managed set, in addition to validating the Agent ids themselves. The `*`
+selector SHALL expand only to current managed Agents.
+
+#### Scenario: Wildcard does not reach an installed but unmanaged Agent
+- **WHEN** Codex is installed but not managed and a user imports a Skill with
+  `--agent '*'`
+- **THEN** the Skill's resolved scope excludes Codex and no Codex native path
+  is written
+
+### Requirement: Kimi Code participates in the managed boundary
+
+The system SHALL accept `kimi-code` anywhere a supported managed Agent id is
+validated, including `trellis manage`, capability selections, scopes, routes,
+and Runtime context.
+
+#### Scenario: Kimi can be explicitly managed
+
+- **WHEN** the user runs `trellis manage add kimi-code`
+- **THEN** Kimi is added to canonical managed agents in stable Agent order
+
+### Requirement: ZCode is a valid managed Agent identity
+
+The system SHALL accept `zcode` everywhere a managed Agent id is accepted,
+including canonical scope, lifecycle commands, MCP routes, runtime delivery,
+and managed-agent reporting.
+
+#### Scenario: Lifecycle commands add ZCode without detaching another Agent
+- **WHEN** the managed set contains `codex` and the user runs
+  `trellis manage add zcode`
+- **THEN** the managed set contains both `codex` and `zcode`

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-09-18
+goal: Give every managed Agent a consistent Trellis control-plane entry without
+  conflating native startup instructions and on-demand Runtime capabilities
