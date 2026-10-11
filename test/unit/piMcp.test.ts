@@ -62,6 +62,27 @@ test("piRenderer: an agent-owned OAuth server renders as a bare url entry — au
   assert.deepEqual(piRenderer(def, "figma"), { url: "https://mcp.figma.com/mcp" });
 });
 
+test("piRenderer: a declared auth.client_name renders as oauth.clientName, exactly what pi mcp add --oauth-client-name writes", () => {
+  // Providers that gate dynamic client registration by client name (Figma,
+  // verified 2026-10-11) need pi to register under an allowlisted name; the
+  // block must be Trellis-written so the next sync converges instead of
+  // stripping it (oauth-client-name design.md D2).
+  const def: McpServerDef = {
+    transport: "http",
+    url: "https://mcp.figma.com/mcp",
+    auth: { kind: "oauth", clientName: "Claude Code" },
+  };
+  assert.deepEqual(piRenderer(def, "figma"), {
+    url: "https://mcp.figma.com/mcp",
+    oauth: { clientName: "Claude Code" },
+  });
+});
+
+test("piRenderer: an object-form OAuth server without client_name stays bare", () => {
+  const def: McpServerDef = { transport: "http", url: "https://mcp.figma.com/mcp", auth: { kind: "oauth", owner: "agent" } };
+  assert.deepEqual(piRenderer(def, "figma"), { url: "https://mcp.figma.com/mcp" });
+});
+
 test("piRenderer: stdio entries without args still render an empty args array", () => {
   assert.deepEqual(piRenderer({ transport: "stdio", command: "node" }, "x"), { command: "node", args: [] });
 });

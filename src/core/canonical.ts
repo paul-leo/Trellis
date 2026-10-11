@@ -24,9 +24,10 @@ interface ScopeYaml {
  * The on-disk shape for one server entry — `static_env`/`env_aliases`
  * (snake_case, like every other multi-word key across `.trellis/*.yaml`)
  * are translated to `McpServerDef.staticEnv`/`envAliases` (camelCase)
- * below, and `auth`'s object form carries `client_id`/`client_secret_env`
- * the same way (trellis-mcp-static-env-and-disabled-servers,
- * trellis-migrate-env-var-alias, trellis-mcp-oauth-static-client).
+ * below, and `auth`'s object form carries `client_id`/`client_secret_env`/
+ * `client_name` the same way (trellis-mcp-static-env-and-disabled-servers,
+ * trellis-migrate-env-var-alias, trellis-mcp-oauth-static-client,
+ * oauth-client-name).
  */
 type McpServerDefYaml = Omit<McpServerDef, "staticEnv" | "envAliases" | "auth"> & {
   static_env?: Record<string, string>;
@@ -38,7 +39,7 @@ type McpServerDefYaml = Omit<McpServerDef, "staticEnv" | "envAliases" | "auth"> 
  * form whose keys are snake_case like every other multi-word key in
  * `.trellis/*.yaml`. Values are `unknown` until `fromAuthYaml` validates
  * them — a YAML cast is optimistic, validation is this module's job. */
-type McpAuthYaml = string | { kind?: unknown; owner?: unknown; client_id?: unknown; client_secret_env?: unknown };
+type McpAuthYaml = string | { kind?: unknown; owner?: unknown; client_id?: unknown; client_secret_env?: unknown; client_name?: unknown };
 
 interface ServersYaml {
   servers?: Record<string, McpServerDefYaml>;
@@ -70,12 +71,12 @@ function fromServerDefYaml(serverName: string, def: McpServerDefYaml): McpServer
 function fromAuthYaml(serverName: string, auth: McpAuthYaml): McpAuthMode | McpAuthConfig {
   if (auth === "oauth") return "oauth";
   if (typeof auth !== "object" || auth === null) {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth must be the scalar "oauth" or { kind: oauth, client_id?, client_secret_env? }`);
+    throw new Error(`mcp/servers.yaml: "${serverName}" auth must be the scalar "oauth" or { kind: oauth, client_id?, client_secret_env?, client_name? }`);
   }
-  const { kind, owner, client_id, client_secret_env, ...extra } = auth;
+  const { kind, owner, client_id, client_secret_env, client_name, ...extra } = auth;
   const unknownKey = Object.keys(extra)[0];
   if (unknownKey !== undefined) {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth has unrecognized key "${unknownKey}" — expected kind, owner, client_id, client_secret_env`);
+    throw new Error(`mcp/servers.yaml: "${serverName}" auth has unrecognized key "${unknownKey}" — expected kind, owner, client_id, client_secret_env, client_name`);
   }
   if (kind !== "oauth") {
     throw new Error(`mcp/servers.yaml: "${serverName}" auth.kind must be "oauth" — kind is the only recognized discriminator`);
@@ -86,11 +87,15 @@ function fromAuthYaml(serverName: string, auth: McpAuthYaml): McpAuthMode | McpA
   if (client_secret_env !== undefined && (typeof client_secret_env !== "string" || !isValidSecretVarName(client_secret_env))) {
     throw new Error(`mcp/servers.yaml: "${serverName}" auth.client_secret_env must be a variable NAME (e.g. FIGMA_CLIENT_SECRET), never a secret value`);
   }
+  if (client_name !== undefined && typeof client_name !== "string") {
+    throw new Error(`mcp/servers.yaml: "${serverName}" auth.client_name must be a string`);
+  }
   const out: McpAuthConfig = { kind: "oauth" };
   if (owner !== undefined && owner !== "agent" && owner !== "trellis") throw new Error(`mcp/servers.yaml: "${serverName}" auth.owner must be agent or trellis`);
   if (owner !== undefined) out.owner = owner;
   if (typeof client_id === "string") out.clientId = client_id;
   if (typeof client_secret_env === "string") out.clientSecretEnv = client_secret_env;
+  if (typeof client_name === "string") out.clientName = client_name;
   return out;
 }
 
@@ -111,6 +116,7 @@ export function toServerDefYaml(def: McpServerDef): McpServerDefYaml {
             ...(auth.owner !== undefined ? { owner: auth.owner } : {}),
             ...(auth.clientId !== undefined ? { client_id: auth.clientId } : {}),
             ...(auth.clientSecretEnv !== undefined ? { client_secret_env: auth.clientSecretEnv } : {}),
+            ...(auth.clientName !== undefined ? { client_name: auth.clientName } : {}),
           };
   }
   for (const key of Object.keys(out)) {

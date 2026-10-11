@@ -113,6 +113,47 @@ test("loadCanonicalSource: env_aliases (snake_case on disk) loads into McpServer
   assert.deepEqual(source.mcp.servers.notion.envAliases, { OPENAPI_MCP_HEADERS: "NOTION_OPENAPI_MCP_HEADERS" });
 });
 
+test("loadCanonicalSource: auth.client_name loads into McpAuthConfig.clientName", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  writeFileSync(
+    join(root, "mcp", "servers.yaml"),
+    ["servers:", "  figma:", "    transport: http", '    url: "https://mcp.figma.com/mcp"', "    auth:", "      kind: oauth", '      client_name: "Claude Code"', ""].join("\n"),
+  );
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp.servers.figma.auth, { kind: "oauth", clientName: "Claude Code" });
+});
+
+test("upsertServerYaml: auth.client_name round-trips as snake_case through loadCanonicalSource", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  const path = join(root, "mcp", "servers.yaml");
+  writeFileSync(path, "servers: {}\n");
+
+  upsertServerYaml(path, "figma", { transport: "http", url: "https://mcp.figma.com/mcp", auth: { kind: "oauth", clientName: "Claude Code" } });
+  const written = readFileSync(path, "utf-8");
+  assert.match(written, /client_name: ['"]?Claude Code/);
+  assert.ok(!written.includes("clientName"), "no camelCase on disk");
+
+  const source = loadCanonicalSource(home);
+  assert.deepEqual(source.mcp.servers.figma.auth, { kind: "oauth", clientName: "Claude Code" });
+});
+
+test("loadCanonicalSource: a non-string auth.client_name is refused, naming the field", () => {
+  const home = tmpHome();
+  const root = join(home, ".trellis");
+  mkdirSync(join(root, "mcp"), { recursive: true });
+  writeFileSync(
+    join(root, "mcp", "servers.yaml"),
+    ["servers:", "  figma:", "    transport: http", '    url: "https://mcp.figma.com/mcp"', "    auth:", "      kind: oauth", "      client_name: 42", ""].join("\n"),
+  );
+
+  assert.throws(() => loadCanonicalSource(home), /auth\.client_name must be a string/);
+});
+
 test("upsertServerYaml: writes envAliases as env_aliases (snake_case), and it round-trips back through loadCanonicalSource", () => {
   const home = tmpHome();
   const root = join(home, ".trellis");

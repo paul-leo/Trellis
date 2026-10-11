@@ -309,6 +309,22 @@ Two pi-specific behaviors to know:
   run `pi mcp login <name>` once; the grant lives in pi's own token store
   (`~/.pi/agent/mcp-auth.json`), and `trellis.mcp.status` reports them as
   `agent-managed`.
+- Some providers (Figma, while in beta) gate OAuth dynamic client
+  registration by an allowlisted `client_name`, which rejects pi's default.
+  Declare the name canonically and pi registers under it:
+
+  ```yaml
+  figma:
+    transport: http
+    url: https://mcp.figma.com/mcp
+    auth:
+      kind: oauth
+      client_name: Claude Code
+  ```
+
+  Trellis then writes `oauth.clientName` into the pi entry — the same field
+  `pi mcp add --oauth-client-name` writes — so syncs converge instead of
+  stripping it.
 
 On pi older than 1.1.0 nothing changes: the bridge extension remains the
 delivery mechanism and `mcp.json` is never written.
