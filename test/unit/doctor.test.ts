@@ -189,7 +189,9 @@ const OAUTH_YAML = `servers:
   remote:
     transport: http
     url: "https://example.test/mcp"
-    auth: oauth
+    auth:
+      kind: oauth
+      owner: trellis
 `;
 
 test("doctor oauth: a valid credential yields a valid entry and no finding", async () => {
@@ -233,6 +235,24 @@ test("doctor oauth: a token file for an unclassified server is ignored — class
     url: "https://example.test/mcp"
 `);
   writeToken(home, "ordinary", { accessToken: "a", expiresAt: Date.now() - 1000 });
+
+  const report = await collectDoctorReport(home);
+
+  assert.equal(report.oauth, undefined);
+  assert.ok(!report.findings.some((f) => f.kind === "oauth-expired"));
+});
+
+test("doctor oauth: an agent-owned server is never a finding — its credential is the Agent client's, not Trellis's", async () => {
+  // trellis-desktop-oauth-ownership: scalar `auth: oauth` defaults to
+  // agent-owned. Without this exclusion doctor would cry wolf on every
+  // healthy native authorization (real machine: figma authorized inside
+  // Claude Code, Trellis's store empty by design).
+  const home = canonicalHomeWithOAuth(`servers:
+  figma:
+    transport: http
+    url: "https://mcp.figma.com/mcp"
+    auth: oauth
+`);
 
   const report = await collectDoctorReport(home);
 

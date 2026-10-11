@@ -22,13 +22,13 @@ import { isGatewayAgent, isAgentOwnedOAuth, resolveMcpPlan } from "../adapters/m
 import { LocalBackend, type GatewayBackend, type UpstreamSpec } from "../lib/gatewayBackend.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
 import { BuiltinRegistry, createRuntimeServer, UpstreamProvider } from "../lib/mcpRuntime.js";
-import { McpStatusProvider } from "../lib/mcpStatusProvider.js";
+import { McpStatusProvider, type OAuthServerRef } from "../lib/mcpStatusProvider.js";
 import { RuntimeControlProvider } from "../lib/runtimeControlProvider.js";
 import { TaskProvider } from "../lib/taskProvider.js";
 import { AgentBridgeProvider } from "../lib/agentBridgeProvider.js";
 import { RuntimeMemoryProvider } from "../lib/memoryProvider.js";
 import { SkillProvider } from "../lib/skillProvider.js";
-import { ALL_AGENTS } from "../core/types.js";
+import { ALL_AGENTS, isOAuthAuth } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 
 const CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-gateway", version: "0.0.0" };
@@ -171,7 +171,16 @@ async function runMcpEdge(
         homeDir,
       });
 
-  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend, { homeDir, oauthServers }), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
+  // The status tool's oauth section covers both ownership kinds
+  // (trellis-desktop-oauth-ownership): trellis-owned servers arrive as
+  // upstreams (auth intact) — their Trellis-store credential health is
+  // what the gateway itself will rely on at connect; agent-owned servers
+  // bypass the gateway as direct entries and are marked agent-managed.
+  const oauthReport: OAuthServerRef[] = [
+    ...upstreams.filter((u) => isOAuthAuth(u.def.auth)).map((u) => ({ name: u.name, owner: "trellis" as const })),
+    ...oauthServers.map((name) => ({ name, owner: "agent" as const })),
+  ];
+  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend, { homeDir, oauthServers: oauthReport }), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
   const server = serveStdio(() => createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry));
 
   await waitForShutdown(registry, server);

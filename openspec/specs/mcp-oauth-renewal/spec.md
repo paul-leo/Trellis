@@ -10,11 +10,14 @@ it as a 401.
 ### Requirement: Batch renewal of classified OAuth servers
 
 The system SHALL provide `trellis mcp renew`, which iterates every canonical
-MCP server carrying an explicit OAuth classification and attempts silent
+MCP server carrying an explicit OAuth classification **owned by Trellis**
+(`owner: trellis`; trellis-desktop-oauth-ownership) and attempts silent
 renewal of its stored token through the same refresh path the gateway uses.
 The command SHALL NOT open a browser, SHALL NOT perform an initial
-authorization grant, and SHALL NOT touch servers without an explicit OAuth
-classification.
+authorization grant, SHALL NOT touch servers without an explicit OAuth
+classification, and SHALL NOT report agent-owned servers — their
+authorization belongs to the Agent's own client, which never reads Trellis's
+token store, so an empty store there is expected and never a failure.
 
 #### Scenario: Valid token is a no-op
 

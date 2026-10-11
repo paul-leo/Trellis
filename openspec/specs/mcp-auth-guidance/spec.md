@@ -1,7 +1,10 @@
 # mcp-auth-guidance Specification
 
 ## Purpose
-TBD - created by archiving change trellis-mcp-status-credential-health. Update Purpose after archive.
+Provide safe, actionable MCP authorization and availability information to
+the user or Agent when the Gateway isolates an unavailable upstream server,
+and ownership-aware OAuth credential health for the servers whose
+authorization Trellis is responsible for.
 
 ## Requirements
 
@@ -28,20 +31,32 @@ existing consumers.
 ### Requirement: Status reports OAuth-classified server credential health
 
 `trellis.mcp.status` SHALL include an `oauth` array with one entry per
-OAuth-classified canonical server in scope for the calling agent — the
-same set that is written as direct native entries — reporting the stored
+OAuth-classified canonical server in scope for the calling agent, each
+carrying an `owner` field (`trellis` or `agent`,
+trellis-desktop-oauth-ownership). Trellis-owned entries report the stored
 credential's health as a `credential` field with the shared classifier's
 status vocabulary, plus `expiresAt` (ISO 8601) when known and a
-`remediation` naming `trellis mcp renew` or `trellis mcp auth <name>`
-when action is needed. The field SHALL NOT be named `status`: the
-gateway cannot observe a direct-routed server's connection state, only
-its stored credential.
+`remediation` naming `trellis mcp renew` or `trellis mcp auth <name>` when
+action is needed. Agent-owned entries SHALL report
+`credential: "agent-managed"` without consulting the token store: their
+authorization belongs to the Agent's own client, and inferring it from
+Trellis's store would misreport a credential the Agent never uses. The
+field SHALL NOT be named `status`: the gateway cannot observe a
+direct-routed server's connection state, only its stored credential.
 
 #### Scenario: Agent asks about a never-authorized OAuth server
 
-- **WHEN** an OAuth-classified server is in scope and no token is stored
+- **WHEN** a Trellis-owned OAuth-classified server is in scope and no
+  token is stored
 - **THEN** the `oauth` entry reports `credential: "no-token"` with a
   remediation naming `trellis mcp auth <name>`
+
+#### Scenario: Agent-owned server is reported without inference
+
+- **WHEN** an agent-owned OAuth-classified server is in scope
+- **THEN** the `oauth` entry reports `owner: "agent"` and
+  `credential: "agent-managed"` regardless of what Trellis's token store
+  contains
 
 #### Scenario: Agent asks about a healthy OAuth server
 

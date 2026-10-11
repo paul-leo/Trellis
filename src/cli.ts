@@ -164,7 +164,8 @@ Commands:
               --force   re-authorize even if the stored token is valid
               --json    machine-readable output, no report text
   mcp renew
-            Silently refresh every stored OAuth token that needs it —
+            Silently refresh every Trellis-owned stored OAuth token that
+              needs it —
               never opens a browser, never performs an initial grant.
               Reports per-server health and exits non-zero when any
               classified server needs 'mcp auth'. Safe under a scheduler

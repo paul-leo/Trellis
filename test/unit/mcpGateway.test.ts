@@ -131,6 +131,35 @@ gateway:
   assert.deepEqual(oauthServers, ["figma"]);
 });
 
+test("gateway upstreams: a Trellis-owned OAuth server stays an upstream, not a credential-health entry", () => {
+  // trellis-desktop-oauth-ownership: `owner: trellis` opts the server
+  // INTO the gateway (the gateway attaches its Trellis-store token via
+  // withOAuthHeader), so it has real connection status like any other
+  // upstream. Only agent-owned servers land in oauthServers.
+  const canonical = loadCanonicalSource(scratchHome(`
+servers:
+  ordinary:
+    transport: stdio
+    command: node
+  sentry:
+    transport: http
+    url: https://mcp.sentry.dev/mcp
+    auth:
+      kind: oauth
+      owner: trellis
+  figma:
+    transport: http
+    url: https://mcp.figma.com/mcp
+    auth: oauth
+gateway:
+  enabled: true
+`));
+  const { upstreams, oauthServers } = resolveGatewayUpstreams("claude-code", canonical);
+  assert.deepEqual(upstreams.map((u) => u.name).sort(), ["ordinary", "sentry"]);
+  assert.equal(upstreams.find((u) => u.name === "sentry")?.def.auth !== undefined, true, "the upstream def keeps its auth so withOAuthHeader can attach the token");
+  assert.deepEqual(oauthServers, ["figma"]);
+});
+
 test("gateway upstreams: scoped-out or disabled OAuth servers surface nowhere", () => {
   // oauthServers must be exactly the set sync writes as direct entries
   // (trellis-mcp-status-credential-health design.md D4) — a server this

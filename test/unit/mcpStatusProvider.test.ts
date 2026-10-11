@@ -57,13 +57,13 @@ test("oauth: a valid token reports valid with expiresAt and no remediation", asy
   const home = scratchHome();
   const expiresAt = Date.now() + 3_600_000;
   writeToken(home, "figma", { accessToken: "real-access-token-value", refreshToken: "real-refresh-token-value", expiresAt });
-  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: ["figma"] }));
-  assert.deepEqual(report.oauth, [{ name: "figma", credential: "valid", expiresAt: new Date(expiresAt).toISOString() }]);
+  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: [{ name: "figma", owner: "trellis" }] }));
+  assert.deepEqual(report.oauth, [{ name: "figma", owner: "trellis", credential: "valid", expiresAt: new Date(expiresAt).toISOString() }]);
 });
 
 test("oauth: no token reports no-token with the auth remediation", async () => {
   const home = scratchHome();
-  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: ["figma"] }));
+  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: [{ name: "figma", owner: "trellis" }] }));
   assert.equal(report.oauth[0].credential, "no-token");
   assert.match(report.oauth[0].remediation as string, /trellis mcp auth figma/);
   assert.equal(report.oauth[0].expiresAt, undefined);
@@ -72,7 +72,7 @@ test("oauth: no token reports no-token with the auth remediation", async () => {
 test("oauth: expired with a refresh token points at renew, not re-auth", async () => {
   const home = scratchHome();
   writeToken(home, "figma", { accessToken: "a", refreshToken: "r", expiresAt: Date.now() - 1000 });
-  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: ["figma"] }));
+  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: [{ name: "figma", owner: "trellis" }] }));
   assert.equal(report.oauth[0].credential, "expired-renewable");
   assert.match(report.oauth[0].remediation as string, /trellis mcp renew/);
 });
@@ -80,7 +80,7 @@ test("oauth: expired with a refresh token points at renew, not re-auth", async (
 test("oauth: expired without a refresh token is needs-auth", async () => {
   const home = scratchHome();
   writeToken(home, "figma", { accessToken: "a", expiresAt: Date.now() - 1000 });
-  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: ["figma"] }));
+  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: [{ name: "figma", owner: "trellis" }] }));
   assert.equal(report.oauth[0].credential, "needs-auth");
   assert.match(report.oauth[0].remediation as string, /trellis mcp auth figma/);
 });
@@ -88,7 +88,7 @@ test("oauth: expired without a refresh token is needs-auth", async () => {
 test("oauth: a corrupt token file is unreadable, not silently skipped", async () => {
   const home = scratchHome();
   writeFileSync(tokenPath(home, "figma"), "{not json");
-  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: ["figma"] }));
+  const report = await callStatus(new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: [{ name: "figma", owner: "trellis" }] }));
   assert.equal(report.oauth[0].credential, "unreadable");
   assert.match(report.oauth[0].remediation as string, /trellis mcp auth figma/);
 });
@@ -96,12 +96,25 @@ test("oauth: a corrupt token file is unreadable, not silently skipped", async ()
 test("no credential material appears in text or structured content", async () => {
   const home = scratchHome();
   writeToken(home, "figma", { accessToken: "real-access-token-value", refreshToken: "real-refresh-token-value", expiresAt: Date.now() + 3_600_000 });
-  const provider = new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: ["figma"] });
+  const provider = new McpStatusProvider(stubBackend([]), { homeDir: home, oauthServers: [{ name: "figma", owner: "trellis" }] });
   const result = await provider.callTool("trellis.mcp.status", {}, CONTEXT);
   const text = (result.content as Array<{ type: string; text: string }>)[0].text;
   const serialized = text + JSON.stringify(result.structuredContent);
   assert.ok(!serialized.includes("real-access-token-value"));
   assert.ok(!serialized.includes("real-refresh-token-value"));
+});
+
+test("oauth: agent-owned servers are reported agent-managed without consulting the token store", async () => {
+  // trellis-desktop-oauth-ownership: the Agent's own client holds that
+  // authorization. Even with a Trellis-store token on disk, inferring
+  // health from it would describe a credential the Agent never uses.
+  const home = scratchHome();
+  writeToken(home, "figma", { accessToken: "real-access-token-value", expiresAt: Date.now() + 3_600_000 });
+  const report = await callStatus(new McpStatusProvider(stubBackend([]), {
+    homeDir: home,
+    oauthServers: [{ name: "figma", owner: "agent" }],
+  }));
+  assert.deepEqual(report.oauth, [{ name: "figma", owner: "agent", credential: "agent-managed" }]);
 });
 
 test("unknown tool names still error", async () => {

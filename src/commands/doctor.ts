@@ -14,7 +14,7 @@ import * as kimiCodeProbe from "../probes/kimi-code.js";
 import * as zcodeProbe from "../probes/zcode.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { GATEWAY_ENTRY_NAME, RUNTIME_ENTRY_NAME, resolveMcpPlan } from "../adapters/mcpPlan.js";
-import { ALL_AGENTS, isOAuthAuth } from "../core/types.js";
+import { ALL_AGENTS, isOAuthAuth, oauthOwner } from "../core/types.js";
 import { classifyStoredToken, remediationFor } from "../lib/oauth/renew.js";
 import { readToken } from "../lib/oauth/store.js";
 import type { AgentId, AgentSnapshot, CanonicalSource } from "../core/types.js";
@@ -202,13 +202,15 @@ export async function collectDoctorReport(
 /**
  * Read-only OAuth credential health (trellis-mcp-oauth-renew design.md
  * D4): classified from the stored token file alone — no token endpoint,
- * no writes. Scope is canonical `auth: oauth` only, the same rule
- * `trellis mcp renew` iterates (design.md D5), via the same classifier
- * (design.md D2).
+ * no writes. Scope is canonical Trellis-owned OAuth servers only, the
+ * same rule `trellis mcp renew` iterates (design.md D5 +
+ * trellis-desktop-oauth-ownership: an agent-owned server's authorization
+ * lives in the Agent's own client, so Trellis's empty token store for it
+ * is expected, never a finding), via the same classifier (design.md D2).
  */
 export function collectOAuthHealth(homeDir: string, canonical: Pick<CanonicalSource, "mcp">): OAuthHealthEntry[] {
   return Object.entries(canonical.mcp.servers)
-    .filter(([, def]) => isOAuthAuth(def.auth))
+    .filter(([, def]) => isOAuthAuth(def.auth) && oauthOwner(def.auth) === "trellis")
     .map(([name]) => name)
     .sort()
     .map((name) => {

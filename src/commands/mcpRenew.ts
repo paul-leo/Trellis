@@ -11,13 +11,18 @@
  *
  * Never opens a browser, never performs an initial grant — that remains
  * `trellis mcp auth` (mcp-gateway-hosting design.md D9). Scope is
- * canonical `auth: oauth` servers only: classification is explicit,
- * never inferred from token files or URLs (design.md D5).
+ * canonical Trellis-owned OAuth servers only: classification is explicit,
+ * never inferred from token files or URLs (design.md D5), and since
+ * trellis-desktop-oauth-ownership an explicit `owner: trellis` is what
+ * makes a credential Trellis's responsibility at all — agent-owned
+ * servers are authorized by the Agent's own client, which neither reads
+ * Trellis's token store nor can be renewed from here, so reporting them
+ * as `no-token` would cry wolf on every run.
  */
 
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
-import { isOAuthAuth } from "../core/types.js";
+import { isOAuthAuth, oauthOwner } from "../core/types.js";
 import { ensureFreshToken } from "../lib/oauth/refresh.js";
 import {
   classifyRefreshFailure,
@@ -61,7 +66,7 @@ export async function collectRenewEntries(opts: RunMcpRenewOptions): Promise<Mcp
   const homeDir = opts.homeDir ?? homedir();
   const canonical = loadCanonicalSource(homeDir);
   const names = Object.entries(canonical.mcp.servers)
-    .filter(([, def]) => isOAuthAuth(def.auth))
+    .filter(([, def]) => isOAuthAuth(def.auth) && oauthOwner(def.auth) === "trellis")
     .map(([name]) => name)
     .sort();
 

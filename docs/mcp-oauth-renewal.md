@@ -12,10 +12,14 @@ trellis mcp renew --dry-run    # report only; no token-endpoint call
 trellis mcp renew --json       # machine-readable (no credential material)
 ```
 
-Scope is canonical `auth: oauth` servers only — classification is explicit
-(mcp-auth-routing-policy). The command never opens a browser and never
+Scope is canonical OAuth servers with an explicit `owner: trellis` —
+classification is explicit (mcp-auth-routing-policy), and ownership decides
+whose problem the credential is (trellis-desktop-oauth-ownership): an
+agent-owned server (the default, e.g. scalar `auth: oauth`) is authorized by
+the Agent's own client, never reads Trellis's token store, and is neither
+renewed nor reported here. The command never opens a browser and never
 performs an initial grant; that remains `trellis mcp auth <name>`
-(mcp-gateway-hosting design.md D9). Exit code: `0` when every classified
+(mcp-gateway-hosting design.md D9). Exit code: `0` when every Trellis-owned
 server is valid or refreshed, `1` when any needs `trellis mcp auth`, has
 never been authorized, or has an unreadable credential file.
 

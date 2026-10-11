@@ -28,12 +28,18 @@ function scratchHome(serversYaml: string): string {
   return home;
 }
 
+/** Trellis-owned: since trellis-desktop-oauth-ownership, only an explicit
+ * `owner: trellis` makes a credential renewable from here — agent-owned
+ * servers are authorized by the Agent's own client and never touch
+ * Trellis's token store. */
 function oauthServersYaml(): string {
   return `servers:
   remote:
     transport: http
     url: "https://example.test/mcp"
-    auth: oauth
+    auth:
+      kind: oauth
+      owner: trellis
 `;
 }
 
@@ -193,6 +199,30 @@ test("renew: token files for unclassified servers are untouched and unlisted", a
   assert.equal(result.entries.length, 0, "scope is canonical `auth: oauth` only — never inferred (design.md D5)");
   assert.equal(result.ok, true, "zero classified servers is vacuously healthy");
   assert.equal(readToken(home, "ordinary")?.accessToken, "a");
+});
+
+test("renew: agent-owned OAuth servers are out of scope — the Agent's own client owns that credential", async () => {
+  // trellis-desktop-oauth-ownership: a scalar `auth: oauth` (or an
+  // explicit `owner: agent`) means the Agent authorizes natively.
+  // Reporting Trellis's empty store as `no-token` would fail every
+  // scheduled run for a credential that was never Trellis's to hold.
+  const home = scratchHome(`servers:
+  figma:
+    transport: http
+    url: "https://mcp.figma.com/mcp"
+    auth: oauth
+  explicit:
+    transport: http
+    url: "https://example.test/mcp"
+    auth:
+      kind: oauth
+      owner: agent
+`);
+
+  const result = await collectRenewEntries({ homeDir: home });
+
+  assert.deepEqual(result.entries, []);
+  assert.equal(result.ok, true);
 });
 
 test("renew: zero OAuth servers prints guidance and exits zero", async () => {

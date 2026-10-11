@@ -15,23 +15,33 @@ export interface McpStatusProviderOptions {
    * the report is empty — the provider stays usable by callers with no
    * home directory, the same contract `LocalBackend` exposes. */
   homeDir?: string;
-  /** Names of OAuth-classified servers routed as direct native entries
-   * for this agent. The gateway never owns their connections, so nothing
-   * connection-shaped can be reported for them — only the health of the
-   * stored credential, which is the part Trellis actually owns
-   * (trellis-mcp-status-credential-health design.md D1). */
-  oauthServers?: readonly string[];
+  /** OAuth-classified servers in scope for this agent, with their
+   * ownership (trellis-desktop-oauth-ownership). Trellis-owned servers
+   * connect through the gateway with a Trellis-store token, so their
+   * stored-credential health is meaningful and reported. Agent-owned
+   * servers are direct native entries authorized by the Agent's own
+   * client — reported as `agent-managed` precisely because inferring
+   * their state from Trellis's store would be a lie (that change's
+   * "unknown native authorization is displayed as unknown"). */
+  oauthServers?: readonly OAuthServerRef[];
+}
+
+export interface OAuthServerRef {
+  name: string;
+  owner: "agent" | "trellis";
 }
 
 /** One OAuth-classified server's credential health. `credential` — not
  * `status` — because the gateway cannot observe a direct-routed server's
- * connection state; claiming "ready" would be a lie (design.md D1). */
+ * connection state; claiming "ready" would be a lie
+ * (trellis-mcp-status-credential-health design.md D1). */
 export interface OAuthCredentialReport {
   name: string;
-  credential: OAuthRenewStatus;
+  owner: "agent" | "trellis";
+  credential: OAuthRenewStatus | "agent-managed";
   /** ISO 8601, when the stored token carries an expiry at all. */
   expiresAt?: string;
-  /** Present only when there is an action to take. */
+  /** Present only when there is an action for Trellis to take. */
   remediation?: string;
 }
 
@@ -54,11 +64,15 @@ export class McpStatusProvider implements TrellisProvider {
     // files and nothing else — no token endpoint, no refresh, no writes.
     // The readOnlyHint annotation on the tool depends on that staying true.
     const oauth: OAuthCredentialReport[] = this.options.homeDir
-      ? (this.options.oauthServers ?? []).map((serverName) => {
+      ? (this.options.oauthServers ?? []).map(({ name: serverName, owner }) => {
+          if (owner === "agent") {
+            return { name: serverName, owner, credential: "agent-managed" as const };
+          }
           const { status, expiresAt } = describeStoredToken(this.options.homeDir as string, serverName);
           const remediation = remediationFor(status, serverName);
           return {
             name: serverName,
+            owner,
             credential: status,
             ...(expiresAt !== undefined ? { expiresAt } : {}),
             ...(remediation !== "" ? { remediation } : {}),
