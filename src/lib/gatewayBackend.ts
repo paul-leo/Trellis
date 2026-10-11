@@ -55,6 +55,11 @@ export interface UpstreamStatus {
   name: string;
   transport: "stdio" | "http" | "sse";
   status: UpstreamStatusKind;
+  /** How many tools this upstream contributed at connect time — the
+   * structured form of the count `detail` already carries in prose, so
+   * Agents reasoning about capability never parse a sentence
+   * (trellis-mcp-status-credential-health design.md D5). */
+  toolCount?: number;
   detail?: string;
   remediation?: string;
   remediationKind?: "oauth" | "environment" | "install" | "endpoint" | "router";
@@ -161,6 +166,7 @@ export class LocalBackend implements GatewayBackend {
         name,
         transport,
         status: "degraded",
+        toolCount: 0,
         detail: "router connected but exposed no downstream tools",
         remediationKind: "router",
         requiresHuman: true,
@@ -168,7 +174,7 @@ export class LocalBackend implements GatewayBackend {
         requiresSessionRestart: true,
       });
     } else {
-      this.statuses.set(name, { name, transport, status: "ready", detail: `connected; ${tools.length} tool(s) available` });
+      this.statuses.set(name, { name, transport, status: "ready", toolCount: tools.length, detail: `connected; ${tools.length} tool(s) available` });
     }
   }
 

@@ -14,8 +14,10 @@ import * as kimiCodeProbe from "../probes/kimi-code.js";
 import * as zcodeProbe from "../probes/zcode.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { GATEWAY_ENTRY_NAME, RUNTIME_ENTRY_NAME, resolveMcpPlan } from "../adapters/mcpPlan.js";
-import { ALL_AGENTS } from "../core/types.js";
-import type { AgentId, AgentSnapshot } from "../core/types.js";
+import { ALL_AGENTS, isOAuthAuth, oauthOwner } from "../core/types.js";
+import { classifyStoredToken, remediationFor } from "../lib/oauth/renew.js";
+import { readToken } from "../lib/oauth/store.js";
+import type { AgentId, AgentSnapshot, CanonicalSource } from "../core/types.js";
 
 /**
  * Interim default until P1 wires this from `.trellis/mcp/servers.yaml`'s
@@ -34,6 +36,7 @@ export type FindingKind =
   | "case-mismatch"
   | "parse-diagnostic"
   | "runtime-drift"
+  | "oauth-expired"
   | "mcp-unreachable";
 
 export interface Finding {
@@ -57,6 +60,10 @@ const EXIT_NONZERO_KINDS: ReadonlySet<FindingKind> = new Set([
   "case-mismatch",
   "parse-diagnostic",
   "runtime-drift",
+  // A stored credential that will 401 on next use is exactly what doctor
+  // exists to catch *before* the session does (trellis-mcp-oauth-renew
+  // design.md D4).
+  "oauth-expired",
 ]);
 
 export interface RunDoctorOptions {
@@ -87,9 +94,20 @@ export interface RunDoctorOptions {
   homeDir?: string;
 }
 
+export interface OAuthHealthEntry {
+  server: string;
+  status: "valid" | "expired" | "absent" | "unreadable";
+  expiresAt?: number;
+}
+
 export interface DoctorReport {
   snapshots: AgentSnapshot[];
   findings: Finding[];
+  /** Credential health for canonical OAuth-classified servers. Absent
+   * when no canonical source exists (doctor stays standalone, P0) or no
+   * server is OAuth-classified. Read-only by construction
+   * (trellis-mcp-oauth-renew design.md D4). */
+  oauth?: OAuthHealthEntry[];
 }
 
 /** Exported so tests can assert on this resolution directly, without
@@ -166,7 +184,8 @@ export async function collectDoctorReport(
     // canonical has not been initialized yet.
   }
 
- findings.push(
+  const oauth = canonical ? collectOAuthHealth(homeDir, canonical) : [];
+  findings.push(
     ...detectDuplication(snapshots),
     ...detectCollisions(snapshots, knownHostInjected),
     ...detectCrossAgentDrift(snapshots),
@@ -174,9 +193,50 @@ export async function collectDoctorReport(
    ...detectParseDiagnostics(snapshots),
     ...(canonical ? detectRuntimeDrift(snapshots, canonical) : []),
    ...detectMcpUnreachable(snapshots),
+    ...oauth.flatMap((entry) => (entry.status === "valid" ? [] : [oauthFinding(entry)])),
   );
 
-  return { snapshots, findings };
+  return { snapshots, findings, ...(oauth.length > 0 ? { oauth } : {}) };
+}
+
+/**
+ * Read-only OAuth credential health (trellis-mcp-oauth-renew design.md
+ * D4): classified from the stored token file alone — no token endpoint,
+ * no writes. Scope is canonical Trellis-owned OAuth servers only, the
+ * same rule `trellis mcp renew` iterates (design.md D5 +
+ * trellis-desktop-oauth-ownership: an agent-owned server's authorization
+ * lives in the Agent's own client, so Trellis's empty token store for it
+ * is expected, never a finding), via the same classifier (design.md D2).
+ */
+export function collectOAuthHealth(homeDir: string, canonical: Pick<CanonicalSource, "mcp">): OAuthHealthEntry[] {
+  return Object.entries(canonical.mcp.servers)
+    .filter(([, def]) => isOAuthAuth(def.auth) && oauthOwner(def.auth) === "trellis")
+    .map(([name]) => name)
+    .sort()
+    .map((name) => {
+      const status = classifyStoredToken(homeDir, name);
+      const expiresAt = readToken(homeDir, name)?.expiresAt;
+      const collapsed: OAuthHealthEntry["status"] =
+        status === "valid" ? "valid"
+        : status === "no-token" ? "absent"
+        : status === "unreadable" ? "unreadable"
+        : "expired";
+      return { server: name, status: collapsed, ...(expiresAt !== undefined ? { expiresAt } : {}) };
+    });
+}
+
+function oauthFinding(entry: OAuthHealthEntry): Finding {
+  const reason =
+    entry.status === "absent" ? "has never been authorized"
+    : entry.status === "unreadable" ? "has an unreadable credential file"
+    : "has an expired stored token";
+  return {
+    kind: "oauth-expired",
+    message: `OAuth server "${entry.server}" ${reason} — ${remediationFor(
+      entry.status === "expired" ? "expired-renewable" : "needs-auth",
+      entry.server,
+    )}`,
+  };
 }
 
 /**
@@ -384,6 +444,15 @@ export function printReport(report: DoctorReport): void {
     console.log(`⚠️  ${label} — ${agentFindings.length} finding(s)`);
     for (const finding of agentFindings) {
       console.log(`   - ${finding.message}`);
+    }
+  }
+
+  if (report.oauth && report.oauth.length > 0) {
+    console.log("\nOAuth credentials:");
+    for (const entry of report.oauth) {
+      const expiry = entry.expiresAt !== undefined ? ` (expires ${new Date(entry.expiresAt).toISOString()})` : "";
+      const icon = entry.status === "valid" ? "✅" : "❌";
+      console.log(`${icon} ${entry.server} — ${entry.status}${expiry}`);
     }
   }
 

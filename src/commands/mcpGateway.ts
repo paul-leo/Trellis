@@ -22,13 +22,13 @@ import { isGatewayAgent, isAgentOwnedOAuth, resolveMcpPlan } from "../adapters/m
 import { LocalBackend, type GatewayBackend, type UpstreamSpec } from "../lib/gatewayBackend.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
 import { BuiltinRegistry, createRuntimeServer, UpstreamProvider } from "../lib/mcpRuntime.js";
-import { McpStatusProvider } from "../lib/mcpStatusProvider.js";
+import { McpStatusProvider, type OAuthServerRef } from "../lib/mcpStatusProvider.js";
 import { RuntimeControlProvider } from "../lib/runtimeControlProvider.js";
 import { TaskProvider } from "../lib/taskProvider.js";
 import { AgentBridgeProvider } from "../lib/agentBridgeProvider.js";
 import { RuntimeMemoryProvider } from "../lib/memoryProvider.js";
 import { SkillProvider } from "../lib/skillProvider.js";
-import { ALL_AGENTS } from "../core/types.js";
+import { ALL_AGENTS, isOAuthAuth } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 
 const CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-gateway", version: "0.0.0" };
@@ -74,15 +74,22 @@ export function parseMcpGatewayArgs(argv: readonly string[]): { agentId: AgentId
 export function resolveGatewayUpstreams(
   agentId: AgentId,
   canonical: Pick<ReturnType<typeof loadCanonicalSource>, "mcp" | "managedAgents" | "secretsPolicy">,
-): { upstreams: UpstreamSpec[]; conflicts: string[] } {
+): { upstreams: UpstreamSpec[]; oauthServers: string[]; conflicts: string[] } {
   const route = canonical.mcp.routes?.[agentId];
   const hubActive = route ? route.mode === "hub" : Boolean(canonical.mcp.hub) && !isGatewayAgent(agentId, canonical.mcp, canonical.managedAgents);
   if (hubActive) {
-    return { upstreams: [], conflicts: [] };
+    // Hub mode writes no direct entries at all (mcpPlan's hub branch), so
+    // there are no OAuth servers for the status tool to report either.
+    return { upstreams: [], oauthServers: [], conflicts: [] };
   }
   const directRoutes = canonical.mcp.routes && route
     ? { ...canonical.mcp.routes, [agentId]: { mode: "direct" as const, ...(route.servers ? { servers: route.servers } : {}) } }
     : canonical.mcp.routes;
+  // Trellis-owned OAuth servers stay in the plan as ordinary upstreams
+  // (auth stripped here so the direct-mode plan keeps them; the original
+  // defs are restored below so withOAuthHeader can attach their tokens at
+  // connect). Agent-owned ones are excluded entirely: sync writes those as
+  // direct native entries beside the gateway (trellis-desktop-oauth-ownership).
   const ordinaryServers = Object.fromEntries(Object.entries(canonical.mcp.servers)
     .filter(([, def]) => !isAgentOwnedOAuth(def))
     .map(([name, def]) => { const { auth: _auth, ...ordinary } = def; return [name, ordinary]; }));
@@ -99,8 +106,20 @@ export function resolveGatewayUpstreams(
   // every server, and every secret resolved into it, to the one agent the
   // user just said to stop involving.
   const { desired, conflicts } = resolveMcpPlan(agentId, direct, canonical.managedAgents, canonical.secretsPolicy);
+  // Agent-owned OAuth servers bypass the gateway as direct entries, so no
+  // connection state exists for them here — but Trellis owns the token
+  // store, so `trellis.mcp.status` reports their credential health for
+  // exactly this set. It is resolved through a second direct-mode plan
+  // over just those servers, so scope, `enabled: false` and route
+  // restrictions match what sync writes (the identical planDirectServers
+  // checks; trellis-mcp-status-credential-health design.md D4).
+  const agentOwnedServers = Object.fromEntries(Object.entries(canonical.mcp.servers).filter(([, def]) => isAgentOwnedOAuth(def)));
+  const oauthServers = Object.keys(agentOwnedServers).length === 0
+    ? []
+    : resolveMcpPlan(agentId, { ...direct, servers: agentOwnedServers }, canonical.managedAgents, canonical.secretsPolicy).desired.map(({ name }) => name);
   return {
     upstreams: desired.map(({ name }) => ({ name, def: canonical.mcp.servers[name]! })),
+    oauthServers,
     conflicts: conflicts.map((conflict) => conflict.message),
   };
 }
@@ -135,7 +154,7 @@ async function runMcpEdge(
     return { exitCode: 1 };
   }
 
-  const { upstreams, conflicts } = resolveGatewayUpstreams(opts.agentId, canonical);
+  const { upstreams, oauthServers, conflicts } = resolveGatewayUpstreams(opts.agentId, canonical);
   for (const message of conflicts) {
     console.error(`trellis-mcp-gateway: ${message}`);
   }
@@ -152,7 +171,16 @@ async function runMcpEdge(
         homeDir,
       });
 
-  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
+  // The status tool's oauth section covers both ownership kinds
+  // (trellis-desktop-oauth-ownership): trellis-owned servers arrive as
+  // upstreams (auth intact) — their Trellis-store credential health is
+  // what the gateway itself will rely on at connect; agent-owned servers
+  // bypass the gateway as direct entries and are marked agent-managed.
+  const oauthReport: OAuthServerRef[] = [
+    ...upstreams.filter((u) => isOAuthAuth(u.def.auth)).map((u) => ({ name: u.name, owner: "trellis" as const })),
+    ...oauthServers.map((name) => ({ name, owner: "agent" as const })),
+  ];
+  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend, { homeDir, oauthServers: oauthReport }), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
   const server = serveStdio(() => createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry));
 
   await waitForShutdown(registry, server);

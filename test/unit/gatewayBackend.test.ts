@@ -23,6 +23,7 @@ import type { SecretsPolicy } from "../../src/core/types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sampleFixture = join(here, "..", "fixtures", "sample-mcp-server.js");
+const emptyFixture = join(here, "..", "fixtures", "empty-mcp-server.js");
 
 const SHORT_TIMEOUT_MS = 8000;
 const CLIENT_INFO = { name: "trellis-mcp-gateway-test", version: "0.0.0" };
@@ -79,6 +80,9 @@ test("LocalBackend: aggregates two real upstreams under server-prefixed names", 
     assert.deepEqual(names, ["alpha__echo", "alpha__env", "beta__echo", "beta__env"]);
     assert.deepEqual(warnings, [], "a clean run must warn about nothing");
     assert.deepEqual(backend.listStatus()?.map((status) => status.status), ["ready", "ready"]);
+    // The structured mirror of the count `detail` carries in prose
+    // (trellis-mcp-status-credential-health tasks.md 2.2).
+    assert.deepEqual(backend.listStatus()?.map((status) => status.toolCount), [2, 2]);
     await backend.close();
   } finally {
     killFixtureChildren(a);
@@ -123,9 +127,31 @@ test("LocalBackend: a broken upstream is isolated — the others still serve", a
     assert.match(warnings[0], /failed to connect to MCP server "broken"/);
     assert.equal(backend.listStatus()?.find((status) => status.name === "broken")?.status, "unavailable");
     assert.equal(backend.listStatus()?.find((status) => status.name === "alpha")?.status, "ready");
+    assert.equal(backend.listStatus()?.find((status) => status.name === "alpha")?.toolCount, 2);
+    // A failed upstream never got a tool count — the field is absent, not 0.
+    assert.equal(backend.listStatus()?.find((status) => status.name === "broken")?.toolCount, undefined);
     await backend.close();
   } finally {
     killFixtureChildren(good);
+  }
+});
+
+test("LocalBackend: an empty mcp-router reports degraded with toolCount 0", async () => {
+  const a = marker("trellis-gw-router-");
+  const warnings: string[] = [];
+  try {
+    const backend = await connectBackend(
+      [{ name: "mcp-router", def: { command: process.execPath, args: [emptyFixture, a] } }],
+      warnings,
+    );
+
+    const status = backend.listStatus()?.find((entry) => entry.name === "mcp-router");
+    assert.equal(status?.status, "degraded");
+    assert.equal(status?.toolCount, 0);
+    assert.equal(status?.requiresHuman, true);
+    await backend.close();
+  } finally {
+    killFixtureChildren(a);
   }
 });
 
