@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { readlink, rm, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -95,83 +95,119 @@ async function currentLinkTarget(path: string): Promise<string | undefined> {
   }
 }
 
-async function planOperation(homeDir: string, runId: string, op: BackupOperation): Promise<RollbackPlanItem> {
+/** Simulated state of one path while planning a sequential undo. Ops are
+ * planned newest-first; each "restore" rewinds the path's simulated state
+ * to what the op itself recorded, so a file written several times in one
+ * run (e.g. the workspace rendered-manifest, or servers.yaml during
+ * onboarding) is checked at every intermediate step instead of producing
+ * false conflicts for all but its last write. */
+type SimState =
+  | { kind: "absent" }
+  | { kind: "file"; hash: string }
+  | { kind: "symlink"; target: string }
+  | { kind: "dir"; digest: string | undefined };
+
+/** Probes the path's real on-disk state once, then caches it in `sim`;
+ * later ops for the same path see the simulated rewinds, not the disk. */
+async function simStateFor(path: string, sim: Map<string, SimState>): Promise<SimState> {
+  const cached = sim.get(path);
+  if (cached) return cached;
+  let state: SimState;
+  // readlink first: it detects symlinks (even dangling ones) that
+  // existsSync would miss or misclassify.
+  const link = await currentLinkTarget(path);
+  if (link !== undefined) {
+    state = { kind: "symlink", target: link };
+  } else if (!existsSync(path)) {
+    state = { kind: "absent" };
+  } else if (statSync(path).isDirectory()) {
+    let digest: string | undefined;
+    try {
+      digest = directoryDigest(path);
+    } catch {
+      digest = undefined;
+    }
+    state = { kind: "dir", digest };
+  } else {
+    state = { kind: "file", hash: sha256(readFileSync(path, "utf-8")) };
+  }
+  sim.set(path, state);
+  return state;
+}
+
+async function planOperation(homeDir: string, runId: string, op: BackupOperation, sim: Map<string, SimState>): Promise<RollbackPlanItem> {
   const runDir = join(backupsRoot(homeDir), runId);
+  const state = await simStateFor(op.path, sim);
 
   switch (op.kind) {
     case "file-create":
     case "file-overwrite": {
-      if (!existsSync(op.path)) {
+      if (state.kind === "absent") {
         return { action: "already-reverted", path: op.path, description: `${op.path} no longer exists — nothing to undo` };
       }
-      const currentHash = sha256(readFileSync(op.path, "utf-8"));
-      if (currentHash !== op.afterHash) {
+      if (state.kind !== "file" || state.hash !== op.afterHash) {
         return { action: "conflict", path: op.path, description: `${op.path} has changed since this run — left untouched` };
       }
       if (op.kind === "file-create") {
+        sim.set(op.path, { kind: "absent" });
         return { action: "restore", path: op.path, description: `delete ${op.path} (created by this run)` };
       }
+      sim.set(op.path, { kind: "file", hash: op.beforeHash });
       return { action: "restore", path: op.path, description: `restore ${op.path} to its content before this run (${join(runDir, op.beforeFile)})` };
     }
     case "symlink-create":
     case "symlink-repair": {
-      const current = await currentLinkTarget(op.path);
-      if (current === undefined) {
+      if (state.kind === "absent") {
         return { action: "already-reverted", path: op.path, description: `${op.path} no longer exists — nothing to undo` };
       }
-      if (current !== op.afterLinkTarget) {
+      if (state.kind !== "symlink" || state.target !== op.afterLinkTarget) {
         return { action: "conflict", path: op.path, description: `${op.path} points somewhere else now — left untouched` };
       }
       if (op.kind === "symlink-create") {
+        sim.set(op.path, { kind: "absent" });
         return { action: "restore", path: op.path, description: `remove ${op.path} (created by this run)` };
       }
+      sim.set(op.path, { kind: "symlink", target: op.beforeLinkTarget });
       return { action: "restore", path: op.path, description: `repoint ${op.path} back to ${op.beforeLinkTarget}` };
     }
     case "symlink-remove": {
-      if (existsSync(op.path)) {
+      if (state.kind !== "absent") {
         return { action: "conflict", path: op.path, description: `${op.path} exists again since this run — left untouched` };
       }
+      sim.set(op.path, { kind: "symlink", target: op.beforeLinkTarget });
       return { action: "restore", path: op.path, description: `recreate ${op.path} -> ${op.beforeLinkTarget}` };
     }
     // Historical `dir-remove` operations remain existence-only because they
     // predate directory manifests. New directory creates/replacements carry a
     // deterministic digest, so remote Skill rollback refuses an edited tree.
     case "dir-create": {
-      if (!existsSync(op.path)) {
+      if (state.kind === "absent") {
         return { action: "already-reverted", path: op.path, description: `${op.path} no longer exists — nothing to undo` };
       }
-      if (op.afterDigest !== undefined) {
-        let digest: string;
-        try {
-          digest = directoryDigest(op.path);
-        } catch {
-          return { action: "conflict", path: op.path, description: `${op.path} can no longer be read safely — left untouched` };
-        }
-        if (digest !== op.afterDigest) {
-          return { action: "conflict", path: op.path, description: `${op.path} has changed since this run — left untouched` };
-        }
+      if (op.afterDigest !== undefined && (state.kind !== "dir" || state.digest !== op.afterDigest)) {
+        return { action: "conflict", path: op.path, description: `${op.path} has changed since this run — left untouched` };
       }
+      sim.set(op.path, { kind: "absent" });
       return { action: "restore", path: op.path, description: `delete ${op.path} (created by this run)` };
     }
     case "dir-remove": {
-      if (existsSync(op.path)) {
+      if (state.kind !== "absent") {
         return { action: "conflict", path: op.path, description: `${op.path} exists again since this run — left untouched` };
       }
+      // The rewind's content comes from the beforeDir snapshot at apply
+      // time; its digest isn't recorded, so mark it unknown for any
+      // (in practice nonexistent) earlier op on the same path.
+      sim.set(op.path, { kind: "dir", digest: undefined });
       return { action: "restore", path: op.path, description: `recreate ${op.path} from its content before this run (${join(runDir, op.beforeDir)})` };
     }
     case "dir-replace": {
-      if (!existsSync(op.path)) {
+      if (state.kind === "absent") {
         return { action: "already-reverted", path: op.path, description: `${op.path} no longer exists — nothing to undo` };
       }
-      let digest: string;
-      try {
-        digest = directoryDigest(op.path);
-      } catch {
-        return { action: "conflict", path: op.path, description: `${op.path} can no longer be read safely — left untouched` };
-      }
-      if (digest !== op.afterDigest) {
+      if (state.kind !== "dir" || state.digest !== op.afterDigest) {
         return { action: "conflict", path: op.path, description: `${op.path} has changed since this run — left untouched` };
       }
+      sim.set(op.path, { kind: "dir", digest: undefined });
       return { action: "restore", path: op.path, description: `restore ${op.path} to its content before this run (${join(runDir, op.beforeDir)})` };
     }
   }
@@ -181,11 +217,15 @@ export async function collectRollbackPlan(homeDirInput: string | undefined, runI
   const homeDir = homeDirInput ?? homedir();
   const runId = resolveRunId(homeDir, runIdInput);
   const manifest = loadManifest(homeDir, runId);
-  const items: RollbackPlanItem[] = [];
-  for (const op of manifest.operations) {
-    items.push(await planOperation(homeDir, runId, op));
+  // Plan newest-first against the simulated undo, then report in the
+  // manifest's original chronological order.
+  const sim = new Map<string, SimState>();
+  const planned: RollbackPlanItem[] = [];
+  for (const op of [...manifest.operations].reverse()) {
+    planned.push(await planOperation(homeDir, runId, op, sim));
   }
-  return { runId, items };
+  planned.reverse();
+  return { runId, items: planned };
 }
 
 async function restoreOperation(homeDir: string, runId: string, op: BackupOperation): Promise<void> {

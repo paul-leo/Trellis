@@ -21,6 +21,7 @@ import { forgetOwned, loadMcpOwnership, ownedByAgent, recordOwned, saveMcpOwners
 import { forgetZcodeSettingsOwnership, loadZcodeSettingsOwnership, saveZcodeSettingsOwnership, type ZcodeSkillControlValues } from "../lib/zcodeOwnership.js";
 import type { BackupSession } from "../lib/backup.js";
 import * as zcodeProbe from "../probes/zcode.js";
+import { globalLayerMcp, globalLayerSkills } from "../lib/workspaceMerge.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -37,7 +38,7 @@ function zcodeServers(parsed: JsonRecord | undefined): JsonRecord {
   return record(record(parsed?.mcp).servers);
 }
 
-function planZcodeMcp(opts: {
+export function planZcodeMcp(opts: {
   configPath: string;
   parsed: JsonRecord | undefined;
   mcp: McpConfig;
@@ -78,7 +79,7 @@ function planZcodeMcp(opts: {
   return items;
 }
 
-function applyZcodeMcp(parsed: JsonRecord | undefined, items: readonly AdapterPlanItem[]): JsonRecord {
+export function applyZcodeMcp(parsed: JsonRecord | undefined, items: readonly AdapterPlanItem[]): JsonRecord {
   const base = parsed ?? {};
   const mcp = record(base.mcp);
   const servers = { ...record(mcp.servers) };
@@ -131,7 +132,7 @@ export class ZcodeAdapter implements TrellisAdapter {
     items.push(...planSymlinks({
       rootDir: join(this.homeDir, ".zcode", "skills"),
       desired: usesNativeCapabilityDelivery(this.id, canonical.mcp)
-        ? canonical.skills.filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents)).map((skill) => ({ name: skill.name, target: skill.dir }))
+        ? globalLayerSkills(canonical).filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents)).map((skill) => ({ name: skill.name, target: skill.dir }))
         : [],
       canonicalRoot: join(canonicalRoot, "skills"),
       kind: "skill",
@@ -146,7 +147,7 @@ export class ZcodeAdapter implements TrellisAdapter {
     items.push(...planZcodeMcp({
       configPath: profile.configPath,
       parsed,
-      mcp: canonical.mcp,
+      mcp: globalLayerMcp(canonical),
       managedAgents: canonical.managedAgents,
       policy: canonical.secretsPolicy,
       ownership: ownedByAgent(loadMcpOwnership(this.homeDir), this.id),
@@ -209,7 +210,7 @@ export class ZcodeAdapter implements TrellisAdapter {
     const profile = zcodeProbe.resolveZcodeProfile(this.homeDir, this.env);
     if (!profile) return { ok: false, mismatches: ["zcode profile cannot be selected"] };
     const mismatches: string[] = [];
-    const desiredNativeSkills = canonical.skills
+    const desiredNativeSkills = globalLayerSkills(canonical)
       .filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => skill.name);
     const actualNativeSkills = new Set(snapshot.skillRoots.filter((root) => root.path === join(this.homeDir, ".zcode", "skills")).flatMap((root) => root.skills.map((skill) => skill.name)));
@@ -217,7 +218,7 @@ export class ZcodeAdapter implements TrellisAdapter {
     const expectedMcp = planZcodeMcp({
       configPath: profile.configPath,
       parsed: readConfig(profile.configPath),
-      mcp: canonical.mcp,
+      mcp: globalLayerMcp(canonical),
       managedAgents: canonical.managedAgents,
       policy: canonical.secretsPolicy,
       ownership: ownedByAgent(loadMcpOwnership(this.homeDir), this.id),

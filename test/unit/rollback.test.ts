@@ -11,6 +11,7 @@ import { test } from "node:test";
 import { collectSyncReport } from "../../src/commands/sync.js";
 import { collectMcpSyncReport } from "../../src/commands/mcp.js";
 import { listBackups, runRollback } from "../../src/commands/rollback.js";
+import { openBackupSession } from "../../src/lib/backup.js";
 
 function scratchHome(): string {
   const home = mkdtempSync(join(tmpdir(), "trellis-rollback-"));
@@ -43,6 +44,40 @@ test("rollback restores a native-config file-overwrite to its exact prior bytes"
   const { exitCode } = await runRollback({ homeDir: home });
   assert.equal(exitCode, 0);
   assert.equal(readFileSync(join(home, ".claude.json"), "utf-8"), '{"existing":"value"}');
+});
+
+test("rollback plans a file written SEVERAL times in one run as a clean sequential undo, not false conflicts", async () => {
+  // Regression: the workspace rendered-manifest is rewritten once per
+  // adapter inside a single backup session. The old planner checked every
+  // op against the pre-rollback disk state, so only the last write matched
+  // and the earlier ones reported "has changed since this run" — conflicts
+  // and exit 1 on a perfectly clean rollback (found by the workspace e2e).
+  const home = scratchHome();
+  const target = join(home, "manifest.json");
+  const session = openBackupSession(home, "multi-write-fixture");
+  session.writeFile(target, "v1\n"); // file-create
+  session.writeFile(target, "v2\n"); // file-overwrite
+  session.writeFile(target, "v3\n"); // file-overwrite
+  session.finalize();
+  assert.equal(readFileSync(target, "utf-8"), "v3\n", "sanity: session wrote all versions");
+
+  const { exitCode } = await runRollback({ homeDir: home });
+  assert.equal(exitCode, 0, "a multi-write session must roll back without conflicts");
+  assert.equal(existsSync(target), false, "the created file is gone after undoing the whole chain");
+});
+
+test("rollback of a multi-write run restores an OVERWRITTEN file to its pre-run bytes", async () => {
+  const home = scratchHome();
+  const target = join(home, "existing.json");
+  writeFileSync(target, "original\n");
+  const session = openBackupSession(home, "multi-write-overwrite-fixture");
+  session.writeFile(target, "mid\n");   // file-overwrite original→mid
+  session.writeFile(target, "final\n"); // file-overwrite mid→final
+  session.finalize();
+
+  const { exitCode } = await runRollback({ homeDir: home });
+  assert.equal(exitCode, 0);
+  assert.equal(readFileSync(target, "utf-8"), "original\n");
 });
 
 test("rollback removes a symlink that a sync run created", async () => {

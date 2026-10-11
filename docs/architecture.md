@@ -10,8 +10,8 @@ required reading for that.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Trellis canonical source  (~/.trellis — global only, see  │
-│  "Global vs. workspace scope" below)                        │
+│  Trellis canonical source  (~/.trellis global + <repo>/.agents,     │
+│  see "Global vs. workspace scope" below)                            │
 │  instructions · skills · agents · mcp/servers.yaml ·      │
 │  memories · secrets policy                                 │
 └───────────────┬─────────────────────────────────────────┘
@@ -19,8 +19,8 @@ required reading for that.
         ┌───────┼────────┬─────────────┬──────────────┐
         ▼                ▼             ▼              ▼
    Claude Code         Codex          Kiro            pi          Kimi Code       ZCode
-  (symlink adapter) (incremental   (symlink adapter) (bridge
-                     TOML writer)                    extension)
+  (symlink adapter) (incremental   (symlink adapter) (native
+                     TOML writer)                    mcp.json)
 ```
 
 Trellis owns exactly one thing: **the canonical source, and the generators
@@ -56,19 +56,77 @@ Aligned to the `.agents Protocol` draft, extended where the draft is silent:
 
 ## Global vs. workspace scope
 
-**Global only, for now.** Trellis manages `~/.trellis` — one canonical
-source per machine, applied to that machine's six supported agents. It does not yet
-read or merge a project-local `.trellis/` in a specific repo.
+Two layers, both canonical: `~/.trellis` per machine (global) and
+`<repo>/.agents/` per project (workspace). A repo opts in by containing
+`.agents/`; `trellis sync` discovers the nearest ancestor `.agents/`
+walking up from the cwd (`findWorkspaceRoot` in `src/lib/workspace.ts` —
+`~/` itself is never picked up as a workspace root) and merges the two
+layers. Outside any workspace the plan is byte-identical to the old
+global-only behavior; `--global-only` opts out explicitly.
 
-The `.agents Protocol` draft (see `research.md`) describes a two-layer
-merge — global defaults, workspace overrides on top, closest wins. That
-model is a reasonable target eventually, but it's explicitly **out of
-scope until a later phase**: it adds real complexity (merge precedence,
-per-project drift, a second place secrets policy has to be checked) that
-isn't justified before the single-layer global case is solid. Don't build
-workspace resolution ahead of that decision — if you find yourself adding
-a `root?: string` parameter or precedence logic to `loadCanonicalSource`,
-that's scope creep against this section, not a natural extension.
+```
+.agents/
+├── config.json             # { "version": 1, mcp.servers } — the same
+│                           # snake_case schema and validator as
+│                           # mcp/servers.yaml; one schema, one validator
+├── AGENTS.md               # workspace instructions
+├── skills/<name>/SKILL.md
+└── .trellis-rendered.json  # Trellis's ownership manifest — committable;
+                            # what a fresh clone re-attaches through
+```
+
+Merge semantics (`src/lib/workspaceMerge.ts`): workspace wins by ID for
+MCP servers and skills; `enabled: false` tombstones a global entry for
+this project only; instructions are not content-merged (a workspace
+`AGENTS.md` stands on its own layer). Provenance and the
+shadowed/tombstoned lists ride on the canonical source so `trellis
+doctor` can attribute every entry to its layer.
+
+Delivery is layer-preserving — Trellis never re-renders global content
+into project files. Global entries go to the agents' user-level paths as
+before; workspace entries go to project-level native paths (`.mcp.json`,
+`.codex/config.toml`, `.kiro/settings/mcp.json`, `.pi/mcp.json`,
+`.kimi-code/mcp.json`, `zcode.json`/`.zcode/config.json`). The agents
+then layer natively: five of six resolve project-over-user; zcode
+resolves same-name MCP conflicts user-first, so a shadowing workspace
+server gets an explicit sync warning instead of a silent no-op. Skills
+are *copied* (not symlinked — rendered artifacts must be committable and
+work without symlink support) into `.claude/skills/` and `.kiro/skills/`
+with digest-based drift detection, while Codex/pi/Kimi read
+`.agents/skills/` natively. Instructions render as marker-headed copies:
+root `AGENTS.md` for Codex/pi/Kimi and `.kiro/steering/
+trellis-workspace.md` for Kiro; Claude's `CLAUDE.md` is never written
+(v1 limitation — `migrate --workspace` is the path for absorbing a
+hand-written one).
+
+Two invariants make the workspace layer safe to commit:
+
+- **No secrets in the repo.** Workspace `config.json` rejects
+  credential-shaped literals at load (the same `reject_patterns` as the
+  global secrets policy) and accepts only `${VAR}` references; rendered
+  artifacts likewise carry references, never resolved values. Secret
+  values live in the machine-local store (`secrets.policy.yaml`'s
+  `env_file`) and are re-established per machine —
+  `migrate --workspace` extracts any literal it finds in a hand-written
+  project file into that store (and flags git-tracked plaintext with a
+  rotation advisory).
+- **Ownership travels with the repo.** `.agents/.trellis-rendered.json`
+  records what Trellis rendered per agent per server; an entry present
+  in an agent's file but absent from the manifest is user-authored and
+  never overwritten. Because the manifest is committed, a fresh clone —
+  or a copied directory — re-attaches cleanly instead of
+  conflict-guarding on its own committed artifacts.
+
+`trellis sync --check` computes the identical plan with zero writes and
+exits non-zero on drift — the CI freshness gate for committed artifacts.
+Existing hand-written project config is adopted with
+`trellis migrate --workspace`: it scans all six agents' project-level
+paths plus the root `AGENTS.md`, classifies every find (create /
+already-managed / identical-to-global / skip-local / skip-unsupported /
+conflict / extract-secret), refuses the whole run on unresolved
+conflicts, then imports and re-renders inside a single backup session so
+one `trellis rollback` restores originals and removes generated
+`.agents/` content.
 
 ## Private / agent-specific capabilities
 
@@ -163,17 +221,19 @@ populates `~/.pi/agent/skills` on its own. (This corrects an earlier,
 pre-P0 assumption that pi needed "no adapter" for skills/instructions;
 that was written before pi's actual global discovery directory was
 confirmed, when it wasn't yet known whether canonical skills would ever
-reach it without one.) MCP is the one place pi is genuinely different: it
-needs a real bridge either way, but which shape depends on `mcp.hub`:
-without it, the bridge extension opens N `@modelcontextprotocol/sdk` stdio
-clients (one per server) and registers each one's tools through pi's
-`registerTool` API; with `mcp.hub` set, it opens exactly one HTTP client to
-the hub instead — meaningfully less code and one fewer class of failure
-(N processes to keep alive vs. one connection). This is the one piece of
-the project that is an agent runtime extension, not a config generator,
-regardless of hub mode.
+reach it without one.) MCP on pi ≥ 1.1.0 is native: the adapter merges
+entries into `~/.pi/agent/mcp.json` — a `trellis mcp-gateway --agent pi`
+stdio entry under gateway mode (or `mcp-runtime` under runtime delivery),
+a single hub-URL entry under hub mode, direct entries otherwise — with
+agent-owned OAuth servers written as bare `{url}` entries that
+`pi mcp login` authorizes (an optional canonical `auth.client_name`
+renders as `oauth.clientName` for providers that gate dynamic client
+registration by name, e.g. Figma). On pi < 1.1.0 the legacy bridge
+extension (`src/pi-bridge/`, symlinked into `~/.pi/agent/extensions/`) is
+still planned instead; it is deprecated and scheduled for removal.
 
-The pi bridge symlink follows the currently executing Trellis installation.
+The legacy bridge symlink follows the currently executing Trellis
+installation.
 When switching from a checkout to a global package (or between installation
 roots), sync can repair an outside-root link only if its target ends in
 `dist/pi-bridge/bundle.js` and its bytes match the current bridge bundle.
@@ -211,12 +271,14 @@ to the code writing one entry that points at it.
 - Every adapter writes ONE entry instead of N. This is most of the value:
   adding a new backend server means editing wherever the hub's own config
   lives (this project doesn't prescribe that either) and never touching
-  any of the five agents' configs or restarting them, if the hub supports
+  any of the six agents' configs or restarting them, if the hub supports
   live reload (mcp-hub does, via SSE).
 - The collision check against `known_host_injected` (docs/research.md
   §"Codex — three hard constraints") shrinks to checking one name instead
   of N, since there's nothing else locally defined to collide with.
-- pi's bridge (P4) becomes one HTTP client instead of N stdio clients.
+- pi gets one hub-URL entry in its native mcp.json instead of N direct
+  entries (pre-1.1.0: the legacy bridge opens one HTTP client instead of N
+  stdio clients).
 
 **What doesn't change:** the boundary with mirasim (docs/research.md §3)
 is unaffected — `mcp.hub`, self-hosted or not, only ever carries the
@@ -253,11 +315,11 @@ there (not silently dropped) while still reaching every other agent.
 
 **Real OAuth** (browser redirect, short-lived access token, refresh
 token) was, for most of this project's life, deliberately not built:
-all three native-config agents already have their own working flow —
+all the native-config agents already have their own working flow —
 Claude Code's `claude mcp add --client-id/--client-secret/--callback-port`,
 Codex's `codex mcp login`/`logout` pair, Kiro's `oauth`/`oauthScopes`
-fields — and pi, whose bridge is Trellis's own code, simply couldn't
-reach such a server at all.
+fields, pi's `pi mcp login` (native since pi 1.1.0; the legacy bridge
+could not reach such a server at all).
 
 Gateway mode does not automatically take ownership of OAuth servers. Mark a
 server explicitly with `auth: oauth` (or `trellis mcp set <name> --auth oauth`)
@@ -400,7 +462,7 @@ Trellis MCP Runtime
   │   ├─ SkillProvider   (read/search canonical skills)
   │   ├─ RuntimeMemoryProvider
   │   │   └─ CanonicalMemoryProvider (read-only canonical Markdown)
-  │   └─ StatusProvider  (future read-only diagnostics)
+  │   └─ StatusProvider  (read-only diagnostics)
   └─ UpstreamProvider
       └─ existing GatewayBackend / future RemoteBackend
 ```
@@ -542,26 +604,26 @@ development, not in CI, not for a "quick manual check." A bug in an adapter
 that patches TOML in place is exactly the kind of thing that corrupts a
 real config file if it's tested against one.
 
-**Exception: pi.** This rule protects real state a person depends on — the
-other three agents' adapters patch that state in place (symlinks over real
-directories, in-place TOML/JSON edits). pi's adapter never does: skills/
-instructions are the same symlink-or-noop regardless of machine, and the
-MCP bridge (P4) is a single already-symlinked extension file that reads a
-separate, Trellis-owned `servers.yaml` rather than writing into anything pi
-itself depends on. A temporary, narrowly-scoped `~/.trellis/mcp/servers.yaml`
-(deleted afterward) plus a real `pi -p` run therefore carries none of the
-corruption risk this section exists to prevent, and it's the only way to
-observe pi's actual extension-loading behavior on *this* installed pi/jiti
-version — `docker/pi-sandbox.Dockerfile` verifies the same jiti-tolerance in
-general (P4's own acceptance criteria), but doesn't stand in for a
-spot-check against a specific real installation. Real-machine verification
-of pi specifically is therefore permitted, not a hard-rule violation — the
-other three agents are not exempted.
+**Exception: pi (bridge era, kept as history).** This rule protects real
+state a person depends on — the other agents' adapters patch that state in
+place (symlinks over real directories, in-place TOML/JSON edits). In the
+bridge era pi's adapter never did: skills/instructions were the same
+symlink-or-noop regardless of machine, and the MCP bridge (P4) was a
+single already-symlinked extension file that read a separate,
+Trellis-owned `servers.yaml` rather than writing into anything pi itself
+depended on, so a temporary, narrowly-scoped `~/.trellis/mcp/servers.yaml`
+plus a real `pi -p` run carried none of the corruption risk this section
+exists to prevent. Since pi 1.1.0 the adapter merges
+`~/.pi/agent/mcp.json` in place like every other adapter, so **this
+exception no longer applies to MCP config** — real-machine pi verification
+(the v0.14.0 managed migration, for example) follows the standard
+discipline: backup, dry-run, then a scoped apply. The paragraph is kept
+because the bridge extension still exists as the pre-1.1.0 fallback.
 
 Verification happens against an isolated environment instead: a scratch
 `$HOME` (or a container with one mounted) populated with synthetic
 per-agent config that looks like the real thing but is expendable — created
-fresh, asserted against, thrown away. `docs/implementation-plan.md`'s P1
+fresh, asserted against, thrown away. `docs/archive/implementation-plan.md`'s P1
 acceptance criteria already describes this shape ("point at a scratch
 `$HOME`... run `trellis sync skills`... confirm zero findings"); this
 section exists to make it a project-wide rule that every later phase's

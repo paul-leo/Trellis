@@ -71,6 +71,22 @@ Trellis Runtime / Gateway
         └── MCP Runtime ────── Kimi Code / ZCode / 其他 Runtime-first Agent
 ```
 
+### 所有权边界（Ownership boundary）
+
+- `~/.trellis/` 是 canonical source 和策略边界。
+- 各 Agent 的原生目录是投影，不是独立的事实源。
+- Gateway/Runtime 负责连接路由和 Provider 暴露，不接管 Agent 的私有会话。
+- 凭证不进入 canonical YAML，在运行时解析。
+- Runtime Provider 将 Memory、MCP 输出和任务记录视为不可信上下文。
+
+## 投递模式（Delivery modes）
+
+| 模式 | 含义 | 典型场景 |
+|---|---|---|
+| `native` | 将能力投影到 Agent 的原生配置 | 最大化原生兼容性 |
+| `mcp` | 通过 Runtime MCP 边界消费 Trellis 能力 | Kimi Code 等 Runtime-first Agent |
+| `both` | 过渡期同时保留 native 和 Runtime 投递 | 兼容性迁移 |
+
 ## 与相似产品的关系
 
 | 产品/类别 | 主要解决的问题 | Trellis 的区别 |
@@ -79,6 +95,7 @@ Trellis Runtime / Gateway
 | [MCP Router](https://github.com/mcp-router/mcp-router) | 桌面 MCP 管理、Workspace、Provider 和日志 | 可作为 Trellis 的导入源或上游；Trellis 自己维护 canonical MCP 状态 |
 | [MetaMCP](https://github.com/metatool-ai/metamcp) / [mcp-hub](https://github.com/ravitemer/mcp-hub) | MCP 聚合和统一入口 | Trellis 额外负责不同 Agent 的 native 适配、生命周期和安全同步 |
 | [OpenViking](https://github.com/volcengine/OpenViking) | Memory、资源和 Skill 的上下文数据库 | Trellis 可将其接入 Memory/Context Provider，作为底层上下文服务 |
+| Agent 编排平台 | 启动 worker、调度任务、协调执行 | Trellis 目前只提供持久化任务交接记录和租约，不隐式远程执行 Agent；执行层是明确的未来方向 |
 
 ## 术语约定
 

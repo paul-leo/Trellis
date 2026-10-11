@@ -30,6 +30,10 @@ import { PiAdapter } from "../adapters/pi.js";
 import { KimiCodeAdapter } from "../adapters/kimi-code.js";
 import { ZcodeAdapter } from "../adapters/zcode.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
+import { findWorkspaceRoot } from "../lib/workspace.js";
+import { applyWorkspaceMcp, planWorkspaceMcp, workspacePrecedenceWarnings } from "../lib/workspaceMcp.js";
+import { readWorkspaceConfigJson, upsertWorkspaceServer } from "../lib/workspaceConfig.js";
+import { toServerDefYaml } from "../core/mcpServerDef.js";
 
 export interface RunMcpSyncOptions {
   json?: boolean;
@@ -47,16 +51,25 @@ export interface RunMcpSyncOptions {
   /** Onboard-only seam — see RunSyncOptions.backupSession. Never a CLI
    * flag. */
   backupSession?: BackupSession;
+  /** Force global-only behavior even inside a workspace (`--global-only`). */
+  globalOnly?: boolean;
+  /** Explicit workspace root — the test/sandbox seam (see RunSyncOptions). */
+  workspaceDir?: string | null;
+  /** `--check`: plan only, write nothing, exit non-zero on any stale or
+   * missing rendered artifact (trellis-workspace-scope design D7). */
+  check?: boolean;
 }
 
 export interface AgentMcpSyncReport {
   agent: AgentId;
   present: boolean;
   items: AdapterPlanItem[];
+  warnings?: string[];
 }
 
 export interface McpSyncReport {
   reports: AgentMcpSyncReport[];
+  workspaceRoot?: string;
 }
 
 const ADAPTER_FACTORY: Record<AgentId, (homeDir: string) => TrellisAdapter> = {
@@ -76,14 +89,16 @@ function buildAdapters(homeDir: string, managedAgents: readonly AgentId[]): Trel
 
 export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promise<McpSyncReport> {
   const homeDir = opts.homeDir ?? homedir();
-  const loaded = loadCanonicalSource(homeDir);
+  const workspaceDir = opts.globalOnly ? null : (opts.workspaceDir !== undefined ? opts.workspaceDir : findWorkspaceRoot(process.cwd()));
+  const loaded = loadCanonicalSource({ homeDir, workspaceDir });
   const canonical = {
     ...loaded,
     ...(opts.managedAgents ? { managedAgents: opts.managedAgents } : {}),
     ...(opts.mcp ? { mcp: opts.mcp } : {}),
   };
   const reports: AgentMcpSyncReport[] = [];
-  const ownSession = !opts.dryRun && !opts.backupSession ? openBackupSession(homeDir, "mcp-sync") : undefined;
+  const writeMode = !opts.dryRun && !opts.check;
+  const ownSession = writeMode && !opts.backupSession ? openBackupSession(homeDir, "mcp-sync") : undefined;
   const backup = opts.backupSession ?? ownSession;
 
   for (const adapter of buildAdapters(homeDir, canonical.managedAgents)) {
@@ -93,15 +108,18 @@ export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promis
       continue;
     }
 
-    const items = (await adapter.plan(canonical)).filter((item) => item.kind === "mcp");
-    if (!opts.dryRun) {
-      await adapter.apply(items, backup!);
+    const globalItems = (await adapter.plan(canonical)).filter((item) => item.kind === "mcp");
+    const wsItems = planWorkspaceMcp(adapter.id, canonical);
+    if (writeMode) {
+      await adapter.apply(globalItems, backup!);
+      applyWorkspaceMcp(adapter.id, canonical, wsItems, backup!);
     }
-    reports.push({ agent: adapter.id, present: true, items });
+    const warnings = workspacePrecedenceWarnings(adapter.id, canonical);
+    reports.push({ agent: adapter.id, present: true, items: [...globalItems, ...wsItems], ...(warnings.length > 0 ? { warnings } : {}) });
   }
 
   ownSession?.finalize();
-  return { reports };
+  return { reports, ...(canonical.workspace ? { workspaceRoot: canonical.workspace.root } : {}) };
 }
 
 export async function runMcpSync(opts: RunMcpSyncOptions = {}): Promise<{ exitCode: number }> {
@@ -116,23 +134,31 @@ export async function runMcpSync(opts: RunMcpSyncOptions = {}): Promise<{ exitCo
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    printReport(report, opts.dryRun ?? false);
+    printReport(report, opts.dryRun ?? false, opts.check ?? false);
   }
 
   const hasConflict = report.reports.some((r) => r.items.some((i) => i.action === "conflict"));
+  if (opts.check) {
+    const hasPending = report.reports.some((r) => r.items.some((i) => i.action !== "conflict"));
+    return { exitCode: hasPending || hasConflict ? 1 : 0 };
+  }
   return { exitCode: hasConflict ? 1 : 0 };
 }
 
 /** Exported so `onboard` prints an mcp-sync report identically to running
  * `mcp sync` standalone, instead of a second, easily-drifting copy of this
  * formatting. */
-export function printReport(report: McpSyncReport, dryRun: boolean): void {
+export function printReport(report: McpSyncReport, dryRun: boolean, check: boolean = false): void {
   if (dryRun) console.log("[dry run]");
+  if (check) console.log("[check]");
+  if (report.workspaceRoot) {
+    console.log(`Workspace layer: ${report.workspaceRoot} (.agents/)`);
+  }
   if (report.reports.length === 0) {
     console.log("No managed agents yet — run `trellis onboard` or list agent ids in ~/.trellis/managed.yaml.");
     return;
   }
-  for (const { agent, present, items } of report.reports) {
+  for (const { agent, present, items, warnings } of report.reports) {
     if (!present) {
       console.log(`—  ${agent} (not installed)`);
       continue;
@@ -143,19 +169,25 @@ export function printReport(report: McpSyncReport, dryRun: boolean): void {
 
     if (created.length === 0 && removed.length === 0 && conflicts.length === 0) {
       console.log(`✅ ${agent} — already in sync`);
-      continue;
+    } else {
+      const icon = conflicts.length > 0 ? "⚠️ " : "✅";
+      console.log(`${icon} ${agent} — ${created.length} created/updated, ${removed.length} removed, ${conflicts.length} conflict(s)`);
+      for (const item of [...created, ...removed, ...conflicts]) {
+        console.log(`   - [${item.action}]${item.layer === "workspace" ? " (workspace)" : ""} ${item.description}`);
+        // Conflicts carry the actionable fix (e.g. the unmarked-overwrite
+        // guard's "run migrate --workspace or remove the entry") — printing
+        // only the description would leave the user stuck at "left untouched".
+        if (item.remediation) console.log(`     → ${item.remediation}`);
+      }
+      // pi does not watch mcp.json (verified 2026-10-11): without this hint
+      // a changed config silently only takes effect on the next pi launch
+      // (trellis-pi-native-mcp-migration design.md D5).
+      if (agent === "pi" && (created.length > 0 || removed.length > 0)) {
+        console.log("   pi does not watch mcp.json — restart pi or run /reload to pick up MCP changes");
+      }
     }
-
-    const icon = conflicts.length > 0 ? "⚠️ " : "✅";
-    console.log(`${icon} ${agent} — ${created.length} created/updated, ${removed.length} removed, ${conflicts.length} conflict(s)`);
-    for (const item of [...created, ...removed, ...conflicts]) {
-      console.log(`   - [${item.action}] ${item.description}`);
-    }
-    // pi does not watch mcp.json (verified 2026-10-11): without this hint
-    // a changed config silently only takes effect on the next pi launch
-    // (trellis-pi-native-mcp-migration design.md D5).
-    if (agent === "pi" && (created.length > 0 || removed.length > 0)) {
-      console.log("   pi does not watch mcp.json — restart pi or run /reload to pick up MCP changes");
+    for (const warning of warnings ?? []) {
+      console.log(`   ⚠ ${warning}`);
     }
   }
 }
@@ -370,39 +402,45 @@ export interface McpAddPlan {
  * write failure — design.md's open question, resolved in favor of
  * refusing early with a specific reason. No `--force`: an existing name
  * always refuses, ever (design.md D4).
+ *
+ * Split into two steps so `mcp add --workspace` reuses the identical
+ * flag validation/def construction and only swaps which file's existing
+ * entries it conflicts against (trellis-workspace-scope task 3.4):
+ * `buildMcpAddDef` is the pure part, `collectMcpAddPlan` adds the
+ * global-canonical existence check.
  */
-export function collectMcpAddPlan(name: string | undefined, raw: McpAddRawArgs, homeDir: string = homedir()): McpAddPlan {
+export function buildMcpAddDef(name: string | undefined, raw: McpAddRawArgs): { ok: true; name: string; def: McpServerDef } | { ok: false; plan: McpAddPlan } {
   if (!name) {
-    return { name: "(none)", action: "invalid-input", detail: "a name is required: trellis mcp add <name> --transport ..." };
+    return { ok: false, plan: { name: "(none)", action: "invalid-input", detail: "a name is required: trellis mcp add <name> --transport ..." } };
   }
   if (!raw.transport || !(TRANSPORTS as readonly string[]).includes(raw.transport)) {
-    return { name, action: "invalid-input", detail: `--transport must be one of: ${TRANSPORTS.join(", ")}` };
+    return { ok: false, plan: { name, action: "invalid-input", detail: `--transport must be one of: ${TRANSPORTS.join(", ")}` } };
   }
   const transport = raw.transport as Transport;
 
   if (transport === "stdio" && !raw.command) {
-    return { name, action: "invalid-input", detail: "--transport stdio requires --command" };
+    return { ok: false, plan: { name, action: "invalid-input", detail: "--transport stdio requires --command" } };
   }
   if ((transport === "http" || transport === "sse") && !raw.url) {
-    return { name, action: "invalid-input", detail: `--transport ${transport} requires --url` };
+    return { ok: false, plan: { name, action: "invalid-input", detail: `--transport ${transport} requires --url` } };
   }
   if (raw.auth !== undefined && raw.auth !== "oauth") {
-    return { name, action: "invalid-input", detail: `--auth must be "oauth" when provided (got ${raw.auth})` };
+    return { ok: false, plan: { name, action: "invalid-input", detail: `--auth must be "oauth" when provided (got ${raw.auth})` } };
   }
   if (raw.auth === "oauth" && transport === "stdio") {
-    return { name, action: "invalid-input", detail: "--auth oauth requires an http or sse MCP server" };
+    return { ok: false, plan: { name, action: "invalid-input", detail: "--auth oauth requires an http or sse MCP server" } };
   }
 
   const agentsList = parseCsv(raw.agents);
   if (agentsList) {
     for (const id of agentsList) {
       if (!(ALL_AGENTS as readonly string[]).includes(id)) {
-        return { name, action: "invalid-input", detail: `--agents "${id}" is not a recognized agent id (${ALL_AGENTS.join(", ")})` };
+        return { ok: false, plan: { name, action: "invalid-input", detail: `--agents "${id}" is not a recognized agent id (${ALL_AGENTS.join(", ")})` } };
       }
     }
   }
   if (raw.enabled !== undefined && raw.enabled !== "true" && raw.enabled !== "false") {
-    return { name, action: "invalid-input", detail: `--enabled must be "true" or "false" (got ${raw.enabled})` };
+    return { ok: false, plan: { name, action: "invalid-input", detail: `--enabled must be "true" or "false" (got ${raw.enabled})` } };
   }
 
   const def: McpServerDef = {
@@ -417,17 +455,50 @@ export function collectMcpAddPlan(name: string | undefined, raw: McpAddRawArgs, 
     ...(raw.enabled !== undefined ? { enabled: raw.enabled === "true" } : {}),
     ...(agentsList ? { agents: agentsList as AgentId[] } : {}),
   };
+  return { ok: true, name, def };
+}
+
+export function collectMcpAddPlan(name: string | undefined, raw: McpAddRawArgs, homeDir: string = homedir()): McpAddPlan {
+  const built = buildMcpAddDef(name, raw);
+  if (!built.ok) return built.plan;
+  const def = built.def;
 
   const canonical = loadCanonicalSource(homeDir);
-  const existing = canonical.mcp.servers[name];
+  const existing = canonical.mcp.servers[built.name];
   if (existing) {
     if (JSON.stringify(existing) === JSON.stringify(def)) {
-      return { name, action: "already-present", detail: "canonical entry is already identical" };
+      return { name: built.name, action: "already-present", detail: "canonical entry is already identical" };
     }
-    return { name, action: "conflict", detail: `servers.yaml already has "${name}" with different settings — resolve by hand (no --force, design.md D4)` };
+    return { name: built.name, action: "conflict", detail: `servers.yaml already has "${built.name}" with different settings — resolve by hand (no --force, design.md D4)` };
   }
 
-  return { name, action: "create", detail: "will add to servers.yaml", def };
+  return { name: built.name, action: "create", detail: "will add to servers.yaml", def };
+}
+
+/** The workspace twin of `collectMcpAddPlan` (trellis-workspace-scope
+ * task 3.4): identical validation, but the existence check runs against
+ * `.agents/config.json` — compared through the same snake_case
+ * serialization the file stores, so a re-add of the same definition is
+ * a clean "already-present" no-op. A global same-name entry is NOT a
+ * conflict here (workspace shadowing a global entry is a legal,
+ * documented merge outcome), just noted in the detail. */
+export function collectMcpAddWorkspacePlan(name: string | undefined, raw: McpAddRawArgs, workspaceRoot: string, homeDir: string = homedir()): McpAddPlan {
+  const built = buildMcpAddDef(name, raw);
+  if (!built.ok) return built.plan;
+  const def = built.def;
+
+  const config = readWorkspaceConfigJson(workspaceRoot);
+  const existing = config.mcp?.servers?.[built.name];
+  if (existing) {
+    if (JSON.stringify(existing) === JSON.stringify(toServerDefYaml(def))) {
+      return { name: built.name, action: "already-present", detail: ".agents/config.json entry is already identical" };
+    }
+    return { name: built.name, action: "conflict", detail: `.agents/config.json already has "${built.name}" with different settings — resolve by hand (no --force)` };
+  }
+
+  const global = loadCanonicalSource(homeDir).mcp.servers[built.name];
+  const shadowNote = global ? ` (shadows the global "${built.name}" for this project)` : "";
+  return { name: built.name, action: "create", detail: `will add to .agents/config.json${shadowNote}`, def };
 }
 
 export type McpSetAuthAction = "updated" | "already-set" | "not-found" | "invalid-input";
@@ -745,8 +816,56 @@ export async function applyMcpAddWithSync(plan: McpAddPlan, opts: { homeDir?: st
   return { plan, ...(writeError ? { writeError } : {}), ...(syncReport ? { sync: syncReport } : {}) };
 }
 
-export async function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+/** Workspace twin of `applyMcpAddWithSync` (trellis-workspace-scope task
+ * 3.4): writes `.agents/config.json` instead of `servers.yaml`, then
+ * cascades the same mcp sync — which, run inside the workspace, renders
+ * only the project-level targets for the workspace layer (plus the usual
+ * global-layer targets; the agent does its own layering). */
+export async function applyMcpAddWorkspaceWithSync(plan: McpAddPlan, workspaceRoot: string, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<McpAddOutcome> {
   const homeDir = opts.homeDir ?? homedir();
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "create" ? openBackupSession(homeDir, "mcp-add") : undefined;
+  const session = opts.backupSession ?? ownSession;
+  if (!opts.dryRun && plan.action === "create" && plan.def) {
+    upsertWorkspaceServer(workspaceRoot, plan.name, plan.def, session);
+  }
+  ownSession?.finalize();
+  const planFailed = plan.action === "conflict" || plan.action === "invalid-input";
+  let syncReport: McpSyncReport | undefined;
+  if (!planFailed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectMcpSyncReport({ homeDir, workspaceDir: workspaceRoot, dryRun: opts.dryRun });
+  }
+  return { plan, ...(syncReport ? { sync: syncReport } : {}) };
+}
+
+export async function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean; workspace?: boolean; workspaceDir?: string } = {}): Promise<{ exitCode: number }> {
+  const homeDir = opts.homeDir ?? homedir();
+
+  if (opts.workspace) {
+    const workspaceRoot = opts.workspaceDir ?? findWorkspaceRoot(process.cwd());
+    if (!workspaceRoot) {
+      console.error("no .agents/ found here or above — run `trellis init --workspace` first (or pass --workspace from inside the repo)");
+      return { exitCode: 1 };
+    }
+    let plan: McpAddPlan;
+    try {
+      plan = collectMcpAddWorkspacePlan(name, raw, workspaceRoot, homeDir);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return { exitCode: 1 };
+    }
+    const { sync: syncReport } = await applyMcpAddWorkspaceWithSync(plan, workspaceRoot, { homeDir, dryRun: opts.dryRun });
+    const planFailed = plan.action === "conflict" || plan.action === "invalid-input";
+    if (opts.json) {
+      console.log(JSON.stringify(syncReport ? { ...plan, workspace: workspaceRoot, sync: syncReport } : { ...plan, workspace: workspaceRoot }, null, 2));
+    } else {
+      console.log(`${opts.dryRun ? "[dry run] " : ""}mcp add ${plan.name} --workspace`);
+      console.log(`  [${plan.action}] ${plan.detail}`);
+      if (syncReport) printReport(syncReport, opts.dryRun ?? false);
+    }
+    const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+    return { exitCode: planFailed || syncConflict ? 1 : 0 };
+  }
+
   let plan: McpAddPlan;
   try {
     plan = collectMcpAddPlan(name, raw, homeDir);

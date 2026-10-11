@@ -93,6 +93,20 @@ export interface AdapterPlanItem {
     skillsEnabled: boolean | null;
     previous?: { featuresSkill: boolean | null; skillsEnabled: boolean | null };
   };
+  /** Set when this item renders the workspace (`.agents/`) layer rather
+   * than the global one (trellis-workspace-scope) — the command layer
+   * routes these to the workspace apply functions, never to the agent's
+   * global adapter apply. */
+  layer?: "workspace";
+  /** Only set when `layer === "workspace"`, `kind === "skill"`, and
+   * `action === "create"`: the canonical directory to copy into `target`
+   * (workspace skills are COPIED, never symlinked — rendered artifacts
+   * must be committable and Windows-safe, design D5). */
+  copyFrom?: string;
+  /** Only set when `layer === "workspace"`, `kind === "instructions"`, and
+   * `action === "create"`: the full rendered file content (managed marker
+   * header + workspace AGENTS.md body) to write at `target`. */
+  fileContent?: string;
 }
 
 export interface AdapterVerifyResult {

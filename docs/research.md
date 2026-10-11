@@ -3,6 +3,13 @@
 Surveyed 2026-09-11. This is why Trellis is a thin orchestration layer, not a
 from-scratch rebuild of anything below.
 
+> **Currency note (2026-10-11, doc governance):** this is a research/history
+> document — sections are dated snapshots of what was true when surveyed, and
+> some "decided not to build" / "future direction" passages have since been
+> implemented (gateway/runtime, skills-over-MCP, pi native MCP). Where a
+> section conflicts with [`architecture.md`](architecture.md), architecture.md
+> is current. Inline markers flag the known-superseded spots.
+
 ## Rules / skills sync (crowded — don't rebuild)
 
 | Project | Covers | Kiro | pi | MCP | Memory | Secrets |
@@ -50,7 +57,11 @@ specifies).
 | [mcp-router](https://github.com/mcp-router/mcp-router) | — | Desktop app + CLI, Sustainable Use License | Already deployed in this environment; token-based, has a GUI. **First-hand incident**: its `MCPR_TOKEN` existed in three different values across `secrets.env`/`config.toml`/`kiro/mcp.json` simultaneously, one silently invalid — see below |
 
 Decision: Trellis still does not implement aggregation/routing logic
-itself. It generates native MCP config for each agent directly — that's
+itself. *(Superseded 2026-10: gateway mode and the Trellis MCP Runtime now
+do exactly this in-process — see architecture.md "Gateway mode" and the
+BuiltinRegistry/UpstreamProvider diagram; the hub-mode support described
+below remains as the external-endpoint option.)* It generates native MCP
+config for each agent directly — that's
 what actually needed solving, since none of the above touch Kiro/pi/Codex's
 TOML format. But it now natively *supports* routing every agent through a
 single external endpoint instead of N direct definitions ("hub mode," see
@@ -67,6 +78,10 @@ entirely, and this project hit real drift from exactly that shape of setup
 before hub mode existed as a documented option.
 
 ### MCP Runtime / built-in capability direction — confirmed architecture
+
+*(Implemented: SkillProvider, RuntimeMemoryProvider and StatusProvider ship
+in v0.12–v0.14 exactly in this shape — this section is the pre-implementation
+confirmation, kept as the design's origin.)*
 
 The next abstraction is broader than a skill-only MCP server. MCP defines
 tools, resources, and prompts with different control models, so a Trellis
@@ -92,6 +107,11 @@ model-visible tools never mutate canonical configuration or execute skill
 scripts by default.
 
 ### Local Claude Code / pi dogfood — 2026-09-18
+
+*(Bridge-era snapshot: "the packaged MCP bridge" below refers to the pi
+bridge extension, retired as the default delivery by pi 1.1.0 native MCP in
+v0.14.0. The findings about tool-surface size and route granularity are
+still valid.)*
 
 After an external, credential-minimized host snapshot, the managed set was
 narrowed from all four agents to Claude Code and pi through `trellis manage
@@ -245,12 +265,14 @@ Reverse-engineered directly from the installed binary
   not supported"` — that era is why the bridge extension below exists.
 - pi's capability surface is **extensions**: JS modules loaded via
   `--extension`/discovery, with a real API (`createExtension`,
-  `registerTool`). Giving pi access to the same MCP servers every other agent
-  uses means writing a bridge extension that spins up
+  `registerTool`). *(Superseded as the default path: since pi 1.1.0, Trellis
+  writes pi's native `mcp.json` directly — trellis-pi-native-mcp-migration,
+  v0.14.0. The bridge extension remains only as the pre-1.1.0 fallback and
+  is scheduled for removal.)* Giving pi access to the same MCP servers
+  every other agent uses meant writing a bridge extension that spins up
   `@modelcontextprotocol/sdk` stdio clients from `mcp.json` and registers
-  their tools through this API. This is the one adapter in Trellis that is
-  genuine code, not config templating — see
-  [`src/adapters/pi/`](../src/adapters/pi).
+  their tools through this API — the one adapter in Trellis that is genuine
+  code, not config templating.
 
 ## Cross-machine / cloud sharing — surveyed 2026-09-15, future direction confirmed
 

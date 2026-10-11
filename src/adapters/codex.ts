@@ -30,6 +30,7 @@ import { resolveMcpPlan } from "./mcpPlan.js";
 import { currentServerSectionText, removeSection, renderServerSection, upsertSection } from "../lib/tomlSection.js";
 import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
 import type { BackupSession } from "../lib/backup.js";
+import { globalLayerMcp, globalLayerSkills } from "../lib/workspaceMerge.js";
 
 export class CodexAdapter implements TrellisAdapter {
   readonly name = "Codex";
@@ -46,7 +47,7 @@ export class CodexAdapter implements TrellisAdapter {
     const canonicalRoot = dirname(canonical.instructionsFile);
     const skillsRoot = join(this.homeDir, ".agents", "skills");
 
-    const desiredSkills = canonical.skills
+    const desiredSkills = globalLayerSkills(canonical)
       .filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
@@ -79,7 +80,7 @@ export class CodexAdapter implements TrellisAdapter {
   private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
     const configTomlPath = join(this.homeDir, ".codex", "config.toml");
     const content = existsSync(configTomlPath) ? readFileSync(configTomlPath, "utf-8") : "";
-    const { desired, conflicts } = resolveMcpPlan(this.id, canonical.mcp, canonical.managedAgents, canonical.secretsPolicy);
+    const { desired, conflicts } = resolveMcpPlan(this.id, globalLayerMcp(canonical), canonical.managedAgents, canonical.secretsPolicy);
 
     const items: AdapterPlanItem[] = [];
     for (const { name, def } of desired) {
@@ -153,7 +154,7 @@ export class CodexAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
+    const desiredNames = new Set(globalLayerSkills(canonical).filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

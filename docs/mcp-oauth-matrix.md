@@ -41,7 +41,18 @@ per-provider list, is what Trellis commits to.
 | Notion | DCR-open | `client_id` from DCR | Same | Medium |
 | Linear | DCR-open | `client_id` from DCR | Same | Medium |
 | Cloudflare | DCR-open | `client_id` from DCR | Same | Medium |
-| Figma | Allowlist | Provider-published `client_id`, supplied by the user | Registration refused with `unauthorized_client` — observed directly, and the reason this change exists | High |
+| Figma | DCR gated by client_name | `client_id` from DCR, issued only when the self-asserted `client_name` is on Figma's beta allowlist | Registration with an unknown name (e.g. `pi`, `Trellis`) refused with a bare 403; `Claude Code` succeeds — observed directly 2026-10-11 (oauth-client-name) | High |
+
+**Figma, updated.** The row above supersedes an earlier classification of
+Figma as plain Allowlist ("no self-service path"). What Figma actually gates
+is the `client_name` a client asserts at registration, not possession of a
+pre-issued `client_id`: the same registration endpoint answers 403 for
+`pi`/`Trellis` and 200 for an allowlisted name, independent of User-Agent.
+The working path is therefore agent-owned auth plus a declared canonical
+`auth.client_name` (rendered into the agent's own registration, e.g. pi's
+`oauth.clientName`). Trellis-hosted DCR hardcodes `client_name: "Trellis"`
+(`src/lib/oauth/flow.ts`) and would be refused for Figma until Trellis's own
+name is allowlisted or the field is wired through there too.
 
 **On confidence.** "High" means the behavior was observed directly against the
 live provider and the failure (or success) is reproducible from this

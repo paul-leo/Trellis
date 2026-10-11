@@ -349,10 +349,11 @@ export interface AgentSnapshot {
 
 export interface CanonicalSource {
   /**
-   * Global (`~/.trellis`) only for now. Project-local `.trellis/` and its
-   * merge-over-global precedence are an explicit non-goal until a later
-   * phase — see docs/roadmap.md. Don't build workspace resolution ahead of
-   * that decision.
+   * Global (`~/.trellis`) by default. When the caller explicitly supplies a
+   * discovered workspace root, the `<workspace>/.agents/` project layer is
+   * merged over the global layer (workspace wins by ID, `enabled: false`
+   * tombstones) and `workspace` below carries the merge's provenance — see
+   * openspec/changes/trellis-workspace-scope.
    */
   instructionsFile: string;
   /** From `~/.trellis/managed.yaml`. Missing file and `agents: []` both
@@ -363,7 +364,43 @@ export interface CanonicalSource {
   memories: MemoryEntry[];
   mcp: McpConfig;
   secretsPolicy: SecretsPolicy;
+  /** Present only when the source was loaded with a workspace layer. */
+  workspace?: WorkspaceLayerInfo;
   /** e.g. a `scope.yaml` entry naming a skill/agent/memory that doesn't
    * exist — recorded, not a load failure. See `loadCanonicalSource`. */
   diagnostics: string[];
+}
+
+export type LayerProvenance = "global" | "workspace";
+
+/** Merge metadata produced when a workspace `.agents/` layer is in scope. */
+export interface WorkspaceLayerInfo {
+  /** Absolute path of the workspace root (the directory containing `.agents/`). */
+  root: string;
+  /** `<root>/.agents/AGENTS.md`, when the workspace declares instructions. */
+  instructionsFile?: string;
+  /** Per-server source layer for every entry in `mcp.servers`. */
+  mcpProvenance: Record<string, LayerProvenance>;
+  /** The pre-merge GLOBAL layer's server map — what global (user-level)
+   * delivery must render, layer-preserving (workspace-delivery spec:
+   * "global config files are untouched by the workspace entries"). Includes
+   * shadowed entries with their GLOBAL definitions (zcode resolves same-name
+   * conflicts user-first, so the global def is what zcode will actually use)
+   * and tombstoned entries (a tombstone only removes the server from the
+   * workspace's effective view; the shared user-level files still carry the
+   * global def for every other context). */
+  mcpGlobalServers: Record<string, McpServerDef>;
+  /** Per-skill source layer for every entry in `skills`. */
+  skillProvenance: Record<string, LayerProvenance>;
+  /** The pre-merge GLOBAL layer's skills — what global (user-level)
+   * delivery must symlink, layer-preserving, same invariant as
+   * `mcpGlobalServers`. Includes entries the workspace shadows, with their
+   * GLOBAL definitions: the user-level skill dirs are shared by every
+   * project, so a workspace override only governs project-level delivery.
+   * (zcode's Runtime SkillProvider is the deliberate exception — it serves
+   * the merged view by design, trellis-workspace-scope task 2.2.) */
+  globalSkills: SkillRef[];
+  /** Global entries the workspace overrode or tombstoned, as
+   * `"mcp:<name>"` / `"skill:<name>"` — surfaced by doctor/status. */
+  shadowed: string[];
 }

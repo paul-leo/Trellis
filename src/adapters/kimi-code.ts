@@ -20,6 +20,7 @@ import { RUNTIME_COMMAND, RUNTIME_ENTRY_NAME } from "./mcpPlan.js";
 import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
 import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
 import type { BackupSession } from "../lib/backup.js";
+import { globalLayerMcp, globalLayerSkills } from "../lib/workspaceMerge.js";
 
 const KIMI_RUNTIME_STARTUP_TIMEOUT_MS = 30_000;
 
@@ -52,7 +53,7 @@ export class KimiCodeAdapter implements TrellisAdapter {
     items.push(...planSymlinks({
       rootDir: join(root, "skills"),
       desired: native
-        ? canonical.skills
+        ? globalLayerSkills(canonical)
           .filter((skill) => isInScope(this.id, skill.scope, canonical.managedAgents))
           .map((skill) => ({ name: skill.name, target: skill.dir }))
         : [],
@@ -72,7 +73,7 @@ export class KimiCodeAdapter implements TrellisAdapter {
     items.push(...planJsonMcp({
       configPath,
       parsed,
-      mcp: canonical.mcp,
+      mcp: globalLayerMcp(canonical),
       agentId: this.id,
       managedAgents: canonical.managedAgents,
       policy: canonical.secretsPolicy,
@@ -102,7 +103,7 @@ export class KimiCodeAdapter implements TrellisAdapter {
   async verify(canonical: CanonicalSource): Promise<AdapterVerifyResult> {
     const snapshot = await kimiProbe.probe(this.homeDir);
     if (!snapshot.present) return { ok: false, mismatches: ["kimi-code is not present on this machine"] };
-    const desired = new Set(canonical.skills.filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents)).map((skill) => skill.name));
+    const desired = new Set(globalLayerSkills(canonical).filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents)).map((skill) => skill.name));
     const actual = new Set(snapshot.skillRoots.flatMap((root) => root.skills).filter((skill) => skill.dir.includes("/.kimi-code/skills/")).map((skill) => skill.name));
     const mismatches = [
       ...[...desired].filter((name) => !actual.has(name)).map((name) => `skill "${name}" is missing on Kimi Code`),

@@ -39,6 +39,7 @@ import { applyJsonMcp, planJsonMcp } from "./jsonMcp.js";
 import { piRenderer, supportsNativeMcp } from "./piMcp.js";
 import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
 import { currentLinkTarget, type BackupSession } from "../lib/backup.js";
+import { globalLayerMcp, globalLayerSkills } from "../lib/workspaceMerge.js";
 
 const BRIDGE_SYMLINK_NAME = "trellis-mcp-bridge.js";
 
@@ -103,7 +104,7 @@ export class PiAdapter implements TrellisAdapter {
     const canonicalRoot = dirname(canonical.instructionsFile);
     const agentDir = join(this.homeDir, ".pi", "agent");
 
-    const desiredSkills = canonical.skills
+    const desiredSkills = globalLayerSkills(canonical)
       .filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
@@ -159,7 +160,7 @@ export class PiAdapter implements TrellisAdapter {
     const items = planJsonMcp({
       configPath,
       parsed,
-      mcp: canonical.mcp,
+      mcp: globalLayerMcp(canonical),
       agentId: this.id,
       managedAgents: canonical.managedAgents,
       policy: canonical.secretsPolicy,
@@ -253,7 +254,7 @@ export class PiAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
+    const desiredNames = new Set(globalLayerSkills(canonical).filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

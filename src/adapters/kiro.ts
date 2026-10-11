@@ -30,6 +30,7 @@ import { resolveMcpPlan } from "./mcpPlan.js";
 import { declaredEnvNames } from "../lib/envVarNames.js";
 import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
 import type { BackupSession } from "../lib/backup.js";
+import { globalLayerMcp, globalLayerSkills } from "../lib/workspaceMerge.js";
 
 /** VS-Code-family global settings path. macOS only — see
  * trellis-kiro-approved-env-vars proposal.md Non-Goals: Linux/Windows
@@ -56,7 +57,7 @@ export class KiroAdapter implements TrellisAdapter {
     const canonicalRoot = dirname(canonical.instructionsFile);
     const skillsRoot = join(this.homeDir, ".kiro", "skills");
 
-    const desiredSkills = canonical.skills
+    const desiredSkills = globalLayerSkills(canonical)
       .filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
@@ -84,14 +85,14 @@ export class KiroAdapter implements TrellisAdapter {
     const configPath = join(this.homeDir, ".kiro", "settings", "mcp.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
     const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
-    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership });
+    return planJsonMcp({ configPath, parsed, mcp: globalLayerMcp(canonical), agentId: this.id, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership });
   }
 
   /** Names come from `resolveMcpPlan`, not a raw scan of `canonical.mcp.servers`
    * (design.md D2) — a server scoped away from Kiro, or refused for a
    * known_host_injected collision, never contributes a name here either. */
   private desiredApprovedEnvVars(canonical: CanonicalSource): string[] {
-    const { desired } = resolveMcpPlan(this.id, canonical.mcp, canonical.managedAgents, canonical.secretsPolicy);
+    const { desired } = resolveMcpPlan(this.id, globalLayerMcp(canonical), canonical.managedAgents, canonical.secretsPolicy);
     const names = new Set<string>();
     for (const { def } of desired) {
       for (const name of declaredEnvNames(def)) names.add(name);
@@ -186,7 +187,7 @@ export class KiroAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
+    const desiredNames = new Set(globalLayerSkills(canonical).filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

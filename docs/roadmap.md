@@ -1,10 +1,13 @@
 # Roadmap
 
+*Current release: v0.14.1 (2026-10-11). This file tracks phase-level scope;
+per-release detail lives in [`releases/`](releases/).*
+
 Each phase must ship with a `trellis doctor` check that verifies its own
 claim — no phase is "done" on the strength of a config file existing, only
 on the strength of a passing verification against the real running agent.
 
-See [`implementation-plan.md`](implementation-plan.md) for P1–P4 broken down
+See [`archive/implementation-plan.md`](archive/implementation-plan.md) for P1–P4 broken down
 to file/function level.
 
 **P0 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-doctor-p0/`;
@@ -21,7 +24,7 @@ had a much larger blast radius than "read-only" should mean.
 
 This is the format every later phase uses: one `openspec/changes/<phase>/`
 directory per phase, `openspec new change <name>` → tasks implemented →
-`openspec archive <name>`. `implementation-plan.md`'s P0/P1 sections are
+`openspec archive <name>`. `archive/implementation-plan.md`'s P0/P1 sections are
 kept only as historical notes; don't edit them further.
 
 **P1 is done and archived** (`openspec/changes/archive/2026-09-12-trellis-sync-p1/`;
@@ -933,7 +936,7 @@ tests passing.
 | P1 | ✅ `trellis sync skills` / `trellis sync instructions` — symlink-based distribution to Claude Code, Codex, Kiro, and pi | P0 |
 | P2 | ✅ `trellis mcp sync` — incremental, in-place adapters for Claude Code (JSON merge), Codex (TOML section patch), Kiro (JSON merge); collision check against known host-injected server names | P1 |
 | P3 | ✅ `trellis secrets audit` — scans every adapter's output for literal credential patterns and unexpected env var names, fails non-zero on any hit | P2 |
-| P4 | ✅ pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml` | P2 |
+| P4 | ✅ pi bridge extension — MCP tool registration via `registerTool`, sourced from the same `mcp/servers.yaml`. **Superseded as the default by v0.14.0** (pi ≥ 1.1.0 native MCP, trellis-pi-native-mcp-migration): the bridge is now the pre-1.1.0 fallback only, and `src/pi-bridge/` is scheduled for removal one release later | P2 |
 | P5 | ✅ `@trellis/sdk` — read-only API over the canonical source, for third-party agents to consume without depending on the CLI | P1–P4 stable |
 | P6 | ✅ Memory: document and wire the `server-memory` default; write the mem0/OpenMemory upgrade guide | P2 |
 | P7 | ✅ Secrets/env management: shared `resolveSecretEnv` + `secrets.policy.yaml`'s `env_file`, pi bridge stops reading raw ambient env, `secrets audit` gains a `missing-env-value` check | P3, P4 |
@@ -957,9 +960,18 @@ tests passing.
 
 | P25 | ✅ Onboard prompt TUI: replaces Trellis's hand-written raw-mode picker and ANSI redraw logic with `@clack/prompts`, preserving non-TTY fallbacks, `--json`, stream-injected tests, stderr-only interactive chrome, and compact agent summaries that show counts instead of enumerating skills. Full-screen TUI runtimes remain out of scope; onboarding stays visible in terminal scrollback | P22 |
 | P26 | ✅ Fine-grained capability selection: item-level skill/MCP/memory selection from a serializable selection file or searchable TUI, per-agent MCP route overrides with direct/gateway/hub precedence, selected-memory sync without implicit native-memory import, and explicit unsupported-reader diagnostics | P17, P21, P22, P25 |
-| P27 | 🚧 Trellis MCP Runtime phase 1 ✅: one provider registry and agent-facing MCP edge; SkillProvider and the read-only CanonicalMemoryProvider expose scoped progressive-disclosure tools/resources, runtime delivery supports native/mcp/both per agent, selected upstream tools mount through the existing GatewayBackend, and doctor checks runtime drift. Remaining: upstream resource/prompt backend, real pi/Kiro model smoke, and real Claude model smoke (Claude remains intentionally deferred) | P21, P25, P26 |
-| P28 | 🚧 Kimi Code Runtime-first adapter: Kimi is recognized as a managed Agent, receives one deferred `trellis` Runtime entry in `~/.kimi-code/mcp.json`, and `trellis kimi` isolates native Skill discovery for Runtime-only delivery. The Runtime Skill is available through SkillProvider; remaining: real Kimi model-session smoke and upstream resource/prompt consumption | P27 |
+| P27 | 🚧 Trellis MCP Runtime phase 1 ✅: one provider registry and agent-facing MCP edge; SkillProvider and the read-only CanonicalMemoryProvider expose scoped progressive-disclosure tools/resources, runtime delivery supports native/mcp/both per agent, selected upstream tools mount through the existing GatewayBackend, upstream **resources** ship (v0.12.0), and doctor checks runtime drift. Remaining: upstream **prompts** backend, real pi/Kiro model smoke, and real Claude model smoke (Claude remains intentionally deferred) | P21, P25, P26 |
+| P28 | 🚧 Kimi Code Runtime-first adapter: Kimi is recognized as a managed Agent, receives one deferred `trellis` Runtime entry in `~/.kimi-code/mcp.json`, and `trellis kimi` isolates native Skill discovery for Runtime-only delivery. The Runtime Skill is available through SkillProvider; upstream resources ship (v0.12.0). Remaining: real Kimi model-session smoke and upstream prompt consumption | P27 |
 | P29 | ✅ ZCode Runtime-first adapter: `zcode` is a managed Agent with profile-aware static configuration (`~/.zcode/cli/config.json` for official profiles and `setting.json` for the local community CLI), a single owned Runtime MCP entry, scoped-Skill isolation, safe instruction/MCP migration, doctor/onboarding coverage, and public-CLI chat/delegation parsing for ZCode's `response`/`sessionId` stream envelope. Desktop-private runtime paths are never process-host entry points. | P27, P28 |
+| P30 | ✅ Workspace scope: a second canonical layer in the repo itself, `<repo>/.agents/` (`config.json` reusing `servers.yaml`'s exact snake_case schema + validator, `AGENTS.md`, `skills/`), discovered by walking up from the cwd (`~/` never counts) and merged workspace-wins-by-ID with `enabled: false` tombstones. Delivery is layer-preserving — global content never re-renders into project files; workspace entries go to all six agents' project-level native paths, with skills *copied* (digest-drift-detected) for Claude/Kiro, native `.agents/skills/` reads for Codex/pi/Kimi, marker-headed root `AGENTS.md` for Codex/pi/Kimi + Kiro steering, and a zcode reverse-precedence warning (its MCP resolves user-first). Committable by design: `config.json` refuses credential-shaped literals at load, rendered artifacts carry only `${VAR}` references, and the committed `.agents/.trellis-rendered.json` ownership manifest is what lets a fresh clone or copied directory re-attach instead of conflict-guarding on its own artifacts. CLI: `init --workspace`, `sync` auto-include with `--check` as the CI freshness gate and `--global-only` as the escape hatch, `mcp add`/`skill add --workspace`, and `migrate --workspace` — a six-path scanner + seven-way classifier (create / already-managed / identical-to-global / skip-local / skip-unsupported / conflict / extract-secret) that refuses wholesale on unresolved conflicts, extracts plaintext secrets into the global store (git-tracked literals get a rotation advisory), seeds manifest ownership so the cascade render adopts rather than conflicts, and runs inside one backup session so a single `rollback` restores every original | P2, P24 |
+
+**Shipped since P29 without a phase number** (detail in `docs/releases/`):
+v0.13.0 — OAuth credential operability (`trellis mcp renew`, doctor OAuth
+health, honest credential status in `trellis.mcp.status`, browser callback
+page). v0.14.0 — pi native MCP delivery (pi ≥ 1.1.0 `mcp.json` writes,
+bridge retirement in the same sync; supersedes P4's default path).
+v0.14.1 — canonical `auth.client_name` for providers that gate OAuth dynamic
+client registration by client name (Figma).
 
 **Cross-machine / cloud sharing — confirmed future direction, not yet
 scoped as a phase.** Surveyed 2026-09-15 (`docs/research.md`'s "Cross-

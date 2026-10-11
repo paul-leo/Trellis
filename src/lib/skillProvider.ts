@@ -5,6 +5,7 @@ import { parse as parseYaml } from "yaml";
 import type { Resource, ReadResourceResult, Tool, CallToolResult } from "@modelcontextprotocol/server";
 import { isInScope } from "../core/adapter.js";
 import { loadCanonicalSource } from "../core/canonical.js";
+import { findWorkspaceRoot } from "./workspace.js";
 import { resolveScope } from "../core/types.js";
 import type { AgentId, CanonicalSource, SkillRef } from "../core/types.js";
 import type { RuntimeContext, TrellisProvider } from "./mcpRuntime.js";
@@ -12,6 +13,19 @@ import { buildSkillEntry, parseSkillUri, readSkillFileBytes, toResourceContent, 
 
 const MAX_FILE_BYTES = 256 * 1024;
 const SKILL_RESOURCE_PREFIX = "trellis://skills/";
+
+/**
+ * The Runtime process is spawned by the agent with the agent's own cwd —
+ * inside a repo carrying `.agents/`, skills served over the Runtime
+ * (zcode's delivery path) include the workspace layer, exactly like the
+ * file-delivered agents get their project copies (trellis-workspace-scope
+ * task 2.2). MCP upstream connections are deliberately NOT layered this
+ * way (design D6: workspace servers are direct, agent-owned) — this
+ * helper is used only here, never in the gateway's upstream resolution.
+ */
+function loadSkillCanonical(homeDir: string): CanonicalSource {
+  return loadCanonicalSource({ homeDir, workspaceDir: findWorkspaceRoot(process.cwd()) });
+}
 
 const SEARCH_TOOL: Tool = {
   name: "trellis.skills.search",
@@ -141,7 +155,7 @@ export class SkillProvider implements TrellisProvider {
 
   /** `skills/list` — one entry per servable, in-scope skill. */
   listSkillEntries(context: RuntimeContext): SkillEntry[] {
-    return this.catalog(loadCanonicalSource(context.homeDir), context.agentId).map(({ entry }) => entry);
+    return this.catalog(loadSkillCanonical(context.homeDir), context.agentId).map(({ entry }) => entry);
   }
 
   /** `skills/get` — lookup by URI, independent of listing. Out-of-scope and
@@ -157,7 +171,7 @@ export class SkillProvider implements TrellisProvider {
   }
 
   async callTool(name: string, args: unknown, context: RuntimeContext): Promise<CallToolResult> {
-    const canonical = loadCanonicalSource(context.homeDir);
+    const canonical = loadSkillCanonical(context.homeDir);
     const input = (args ?? {}) as Record<string, unknown>;
     if (name === SEARCH_TOOL.name) return this.search(canonical, context.agentId, input);
     if (name === READ_TOOL.name) return this.readSkill(canonical, context.agentId, input);
@@ -166,7 +180,7 @@ export class SkillProvider implements TrellisProvider {
   }
 
   listResources(context: RuntimeContext): Resource[] {
-    const canonical = loadCanonicalSource(context.homeDir);
+    const canonical = loadSkillCanonical(context.homeDir);
     const legacy: Resource[] = canonical.skills
       .filter((skill) => hasSkillDocument(skill) && isInScope(context.agentId, skill.scope, canonical.managedAgents))
       .map((skill) => ({
@@ -193,7 +207,7 @@ export class SkillProvider implements TrellisProvider {
     if (segments.length !== 2 || segments[1] !== "SKILL.md") {
       throw new Error(`unsupported skill resource URI "${uri.toString()}"`);
     }
-    const canonical = loadCanonicalSource(context.homeDir);
+    const canonical = loadSkillCanonical(context.homeDir);
     const skill = skillFor(canonical, context.agentId, segments[0]);
     if (!skill) throw new Error(`skill "${segments[0]}" is not available to ${context.agentId}`);
     const content = this.readBoundedFile(resolve(skill.dir, "SKILL.md"), skill.dir);
@@ -204,7 +218,7 @@ export class SkillProvider implements TrellisProvider {
    * computed its digests — the two cannot disagree. */
   private readConventionalResource(uri: string, context: RuntimeContext): ReadResourceResult {
     const parsed = parseSkillUri(uri);
-    const canonical = loadCanonicalSource(context.homeDir);
+    const canonical = loadSkillCanonical(context.homeDir);
     const skill = parsed ? skillFor(canonical, context.agentId, parsed.name) : undefined;
     const served = skill && parsed ? this.catalog(canonical, context.agentId).find(({ entry }) => entry.uri === `skill://${parsed.name}/SKILL.md`) : undefined;
     if (!parsed || !skill || !served || !served.entry.resources.some((file) => file.uri === uri)) {

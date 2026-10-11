@@ -496,8 +496,8 @@ Trellis resolves `CODEX_HOME` when set, otherwise `~/.codex`, and reads only
 the Memory directory. `AGENTS.md`, `session_index.jsonl`, sessions,
 credentials, and plugin state are never treated as memory.
 
-**MCP servers** (claude-code, kiro, codex — not pi, which has no static
-MCP config to read at all) migrate the same way, into
+**MCP servers** (claude-code, kiro, codex, kimi-code, zcode — not pi, whose
+mcp.json migrate-in is not implemented) migrate the same way, into
 `~/.trellis/mcp/servers.yaml`:
 
 ```
@@ -821,6 +821,69 @@ automatically, so `trellis rollback` can undo the whole run later — see
 [`trellis rollback`](#trellis-rollback--undoing-a-syncmcp-synconboard-run)
 below.
 
+## Workspace scope — per-project config in the repo
+
+Everything above manages `~/.trellis`, one canonical source per machine.
+A project can carry its own layer in the repo itself, under `.agents/` —
+committable by design, shared with every teammate and agent that checks
+it out:
+
+```
+$ cd your-repo
+$ trellis init --workspace     # scaffold .agents/ (fill-missing-only)
+```
+
+```
+.agents/
+├── config.json             # { "version": 1, mcp.servers } — same schema
+│                           # as ~/.trellis/mcp/servers.yaml
+├── AGENTS.md               # workspace instructions
+├── skills/<name>/SKILL.md
+└── .trellis-rendered.json  # Trellis's ownership manifest — commit it too
+```
+
+Edit those files directly, or use the CLI with `--workspace`
+(`trellis mcp add <name> --workspace`, `trellis skill add <name> --from ... --workspace`).
+Then, from anywhere inside the repo:
+
+```
+$ trellis sync               # global layer + workspace layer together
+$ trellis sync --global-only # global only, even inside a workspace
+```
+
+The workspace layer wins on ID conflicts with the global one (and
+`enabled: false` in `config.json` tombstones a global server for this
+project). Rendered artifacts — `.mcp.json`, `.codex/config.toml`,
+`.pi/mcp.json`, skill copies under `.claude/skills/`, the marker-headed
+root `AGENTS.md`, … — are meant to be **committed** alongside `.agents/`.
+They contain only `${VAR}` references, never secret values, and
+`.agents/config.json` itself refuses credential-shaped literals at load;
+actual values live in each machine's local secret store and are
+re-established per machine. CI keeps the committed artifacts honest:
+
+```
+$ trellis sync --check       # zero writes; exit 1 naming any stale file
+```
+
+Already have hand-written project config (a `.mcp.json`, a
+`.codex/config.toml`, a root `AGENTS.md`)? Absorb it instead of
+rewriting by hand:
+
+```
+$ trellis migrate --workspace --dry-run   # preview the classified plan
+$ trellis migrate --workspace             # import + re-render, one
+                                          # backup session — `trellis
+                                          # rollback` undoes the whole thing
+```
+
+The scanner inventories all six agents' project-level paths, skips
+`*.local.*` files unread, extracts plaintext secrets into the global
+secret store as `${VAR}` references (with a rotation advisory when the
+literal was git-tracked), and refuses the run on unresolved conflicts —
+pick a side with `--choose name=agentId`, or import an
+identical-to-global entry as an intentional shadow with
+`--dedup override`.
+
 ## `trellis mcp sync`
 
 Distributes `~/.trellis/mcp/servers.yaml` to every **managed** agent's
@@ -915,9 +978,13 @@ stay direct while ordinary remote servers remain shared through the gateway.
 
 ### `trellis mcp auth <server-name>`
 
-For a remote (`http`/`sse`) server marked `auth: oauth`, native Agents should
-use their own login command. Pi's direct bridge path can be authorized once
-through Trellis:
+Authorization ownership is explicit per server (the full model is
+[`mcp-authorization-ownership.md`](mcp-authorization-ownership.md)):
+**agent-owned** OAuth servers (plain `auth: oauth`) are authorized by the
+Agent's own login command — `claude mcp` / `codex mcp login` /
+`pi mcp login <name>` — and Trellis never touches their tokens. **Trellis-owned**
+servers (`auth: { kind: oauth, owner: trellis }`) connect through the
+gateway/runtime on a credential Trellis holds, authorized once through:
 
 ```
 $ trellis mcp auth notion-remote
@@ -929,17 +996,19 @@ This opens your browser, completes the flow, and stores the result 0600
 under `~/.trellis/mcp/oauth/` — never in `servers.yaml`, so canonical
 stays safe to read, diff, and commit.
 
-Run it once per server when Pi's direct bridge owns the OAuth connection.
-After that the bridge refreshes the token silently whenever it expires; it
-never opens a browser and never prompts, because it is spawned by an agent
-with no terminal attached. Re-running
+Run it once per Trellis-owned server. After that the gateway refreshes the
+token silently whenever it expires; it never opens a browser and never
+prompts, because it is spawned by an agent with no terminal attached.
+Re-running
 this command when the stored token is still valid does nothing (`--force`
 overrides); when it has expired but is renewable, it refreshes without a
-browser.
+browser. `trellis mcp renew` does the same non-interactively for every
+Trellis-owned server that can be renewed without a browser.
 
-If a Pi direct OAuth server has no stored credential, the bridge skips that
-one server and keeps serving every other — it does not fail to start. Native
-Agents report the same direct entry as requiring their own authorization.
+If a Trellis-owned OAuth server has no stored credential, the gateway skips
+that one server and keeps serving every other — it does not fail to start.
+Agent-owned servers in the same route are unaffected: the Agent's own client
+reports them as requiring its own authorization.
 
 An Agent can call the read-only `trellis.mcp.status` Runtime tool to explain
 this partial state to the user. It reports unavailable or authorization-
@@ -1083,7 +1152,10 @@ $ trellis doctor
 ```
 
 Read-only. Scans all six agents' current state and reports drift —
-mismatched skill content across agents, wrong-case skill files, and (with
+mismatched skill content across agents, wrong-case skill files, OAuth
+credential health for Trellis-owned servers (the same read-only
+classification as `trellis mcp renew` and the `trellis.mcp.status` Runtime
+tool, so the three never disagree), and (with
 `--probe-mcp`) whether each configured MCP server actually handshakes.
 Safe to run any time; nothing here writes anything.
 

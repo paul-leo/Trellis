@@ -25,6 +25,7 @@ import type { SyncReport } from "./sync.js";
 import { remoteSkillProvenance } from "./remoteSkill.js";
 import { describeScope, resolveScopeSelection, sameScope, type ScopeSelectorRaw } from "../lib/scopeSelection.js";
 import type { RemoteSkillLockEntry } from "../lib/remoteSkillLock.js";
+import { findWorkspaceRoot } from "../lib/workspace.js";
 
 function builtinSkillTemplate(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -142,6 +143,58 @@ export function applySkillAddPlan(plan: SkillAddPlan, homeDir: string = homedir(
   cpSync(plan.sourceDir, dest, { recursive: true });
 }
 
+/** The workspace twin of `collectSkillAddPlan` (trellis-workspace-scope
+ * task 3.4): same source validation, destination is `.agents/skills/`
+ * instead of the global canonical skills dir. */
+export function collectSkillAddWorkspacePlan(name: string, fromPath: string, workspaceRoot: string): SkillAddPlan {
+  const skillFile = findSkillFile(fromPath);
+  if (!skillFile) {
+    return { name, action: "invalid-source", detail: `${fromPath} has no SKILL.md` };
+  }
+  if (!skillFile.caseCorrect) {
+    return { name, action: "invalid-source", detail: `${fromPath} has skill.md, not case-correct SKILL.md — fix the case first` };
+  }
+
+  const dest = join(workspaceRoot, ".agents", "skills", name);
+  switch (decideDirImport(fromPath, dest)) {
+    case "create":
+      return { name, action: "create", detail: `will copy from ${fromPath} into .agents/skills/`, sourceDir: fromPath };
+    case "already-present":
+      return { name, action: "already-present", detail: ".agents/skills/ content is already byte-identical" };
+    case "conflict":
+      return { name, action: "conflict", detail: `.agents/skills/${name}/ already exists with different content — resolve by hand` };
+  }
+}
+
+export function applySkillAddWorkspacePlan(plan: SkillAddPlan, workspaceRoot: string, backup?: BackupSession): void {
+  if (plan.action !== "create" || !plan.sourceDir) return;
+  const dest = join(workspaceRoot, ".agents", "skills", plan.name);
+  if (backup) {
+    backup.createDirFromSource(dest, plan.sourceDir);
+    return;
+  }
+  mkdirSync(dest, { recursive: true });
+  cpSync(plan.sourceDir, dest, { recursive: true });
+}
+
+/** Same own-backup-session + cascade-sync posture as
+ * `applySkillAddWithSync`, scoped to the workspace layer. */
+export async function applySkillAddWorkspaceWithSync(plan: SkillAddPlan, workspaceRoot: string, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<SkillAddOutcome> {
+  const homeDir = opts.homeDir ?? homedir();
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "create" ? openBackupSession(homeDir, "skill-add") : undefined;
+  const session = opts.backupSession ?? ownSession;
+  if (!opts.dryRun && plan.action === "create") {
+    applySkillAddWorkspacePlan(plan, workspaceRoot, session);
+  }
+  ownSession?.finalize();
+  const failed = plan.action === "conflict" || plan.action === "invalid-source";
+  let syncReport: SyncReport | undefined;
+  if (!failed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectSyncReport({ target: "skills", homeDir, workspaceDir: workspaceRoot, dryRun: opts.dryRun });
+  }
+  return { plan, ...(syncReport ? { sync: syncReport } : {}) };
+}
+
 export interface SkillAddOutcome {
   plan: SkillAddPlan;
   sync?: SyncReport;
@@ -171,8 +224,29 @@ export async function applySkillAddWithSync(plan: SkillAddPlan, opts: { homeDir?
   return { plan, ...(syncReport ? { sync: syncReport } : {}) };
 }
 
-export async function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+export async function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean; workspace?: boolean; workspaceDir?: string } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
+
+  if (opts.workspace) {
+    const workspaceRoot = opts.workspaceDir ?? findWorkspaceRoot(process.cwd());
+    if (!workspaceRoot) {
+      console.error("no .agents/ found here or above — run `trellis init --workspace` first (or pass --workspace from inside the repo)");
+      return { exitCode: 1 };
+    }
+    const plan = collectSkillAddWorkspacePlan(name, fromPath, workspaceRoot);
+    const { sync: syncReport } = await applySkillAddWorkspaceWithSync(plan, workspaceRoot, { homeDir, dryRun: opts.dryRun });
+    const failed = plan.action === "conflict" || plan.action === "invalid-source";
+    if (opts.json) {
+      console.log(JSON.stringify(syncReport ? { ...plan, workspace: workspaceRoot, sync: syncReport } : { ...plan, workspace: workspaceRoot }, null, 2));
+    } else {
+      console.log(`${opts.dryRun ? "[dry run] " : ""}skill add ${name} --workspace`);
+      console.log(`  [${plan.action}] ${plan.detail}`);
+      if (syncReport) printSyncReport(syncReport, opts.dryRun ?? false);
+    }
+    const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+    return { exitCode: failed || syncConflict ? 1 : 0 };
+  }
+
   const plan = collectSkillAddPlan(name, fromPath, homeDir);
   const { sync: syncReport } = await applySkillAddWithSync(plan, { homeDir, dryRun: opts.dryRun });
   const failed = plan.action === "conflict" || plan.action === "invalid-source";

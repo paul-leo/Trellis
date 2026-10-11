@@ -22,6 +22,7 @@ import { applySymlinkPlan, planSymlinks } from "./symlinkPlan.js";
 import { applyJsonMcp, planJsonMcp, renderJsonServerEntry } from "./jsonMcp.js";
 import { loadMcpOwnership, ownedByAgent, recordOwned, forgetOwned, saveMcpOwnership } from "../lib/mcpOwnership.js";
 import type { BackupSession } from "../lib/backup.js";
+import { globalLayerMcp, globalLayerSkills } from "../lib/workspaceMerge.js";
 
 export class ClaudeCodeAdapter implements TrellisAdapter {
   readonly name = "Claude Code";
@@ -38,7 +39,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     const canonicalRoot = dirname(canonical.instructionsFile);
     const skillsRoot = join(this.homeDir, ".claude", "skills");
 
-    const desiredSkills = canonical.skills
+    const desiredSkills = globalLayerSkills(canonical)
       .filter((skill) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, skill.scope, canonical.managedAgents))
       .map((skill) => ({ name: skill.name, target: skill.dir }));
 
@@ -65,7 +66,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     const configPath = join(this.homeDir, ".claude.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
     const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
-    return planJsonMcp({ configPath, parsed, mcp: canonical.mcp, agentId: this.id, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership });
+    return planJsonMcp({ configPath, parsed, mcp: globalLayerMcp(canonical), agentId: this.id, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership });
   }
 
   async apply(plan: AdapterPlanItem[], backup: BackupSession): Promise<void> {
@@ -101,7 +102,7 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
     }
 
     const mismatches: string[] = [];
-    const desiredNames = new Set(canonical.skills.filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
+    const desiredNames = new Set(globalLayerSkills(canonical).filter((s) => usesNativeCapabilityDelivery(this.id, canonical.mcp) && isInScope(this.id, s.scope, canonical.managedAgents)).map((s) => s.name));
     const actualSkills = new Set(snapshot.skillRoots.flatMap((root) => root.skills).map((s) => s.name));
 
     for (const name of desiredNames) {

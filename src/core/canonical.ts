@@ -1,45 +1,31 @@
 /**
- * Loads `~/.trellis/` into a `CanonicalSource`. Global only — no `root`
- * parameter, no workspace merge (docs/architecture.md "Global vs.
- * workspace scope"). See openspec/changes/trellis-sync-p1/specs/
- * canonical-source-loading/spec.md for the exact contract this implements.
+ * Loads `~/.trellis/` into a `CanonicalSource`. Global-only by default —
+ * no working-directory consultation; a caller that explicitly discovered a
+ * workspace root (src/lib/workspace.ts `findWorkspaceRoot`) may pass it in
+ * to layer `<workspace>/.agents/` over the global source
+ * (openspec/changes/trellis-workspace-scope, design D2).
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { isMap, isSeq, parse as parseYaml, parseDocument } from "yaml";
-import type { AgentId, AgentProfile, CapabilityDelivery, CanonicalSource, GatewayConfig, McpAuthConfig, McpAuthMode, McpConfig, McpRoute, McpRouteMode, McpRuntimeConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
+import type { AgentId, AgentProfile, CapabilityDelivery, CanonicalSource, GatewayConfig, McpConfig, McpRoute, McpRouteMode, McpRuntimeConfig, McpServerDef, MemoryEntry, Scope, SecretsPolicy, SkillRef } from "./types.js";
 import { ALL_AGENTS, oauthClientMetadata } from "./types.js";
-import { isValidSecretVarName } from "../lib/secretEnv.js";
+import { fromServerDefYaml, toServerDefYaml } from "./mcpServerDef.js";
+import type { McpServerDefYaml } from "./mcpServerDef.js";
+import { loadWorkspaceLayer } from "../lib/workspace.js";
+import { mergeWorkspaceLayer } from "../lib/workspaceMerge.js";
 import type { BackupSession } from "../lib/backup.js";
+
+export { toServerDefYaml } from "./mcpServerDef.js";
+export type { McpServerDefYaml } from "./mcpServerDef.js";
 
 interface ScopeYaml {
   skills?: Record<string, AgentId[]>;
   agents?: Record<string, AgentId[]>;
   memories?: Record<string, AgentId[]>;
 }
-
-/**
- * The on-disk shape for one server entry — `static_env`/`env_aliases`
- * (snake_case, like every other multi-word key across `.trellis/*.yaml`)
- * are translated to `McpServerDef.staticEnv`/`envAliases` (camelCase)
- * below, and `auth`'s object form carries `client_id`/`client_secret_env`/
- * `client_name` the same way (trellis-mcp-static-env-and-disabled-servers,
- * trellis-migrate-env-var-alias, trellis-mcp-oauth-static-client,
- * oauth-client-name).
- */
-type McpServerDefYaml = Omit<McpServerDef, "staticEnv" | "envAliases" | "auth"> & {
-  static_env?: Record<string, string>;
-  env_aliases?: Record<string, string>;
-  auth?: McpAuthYaml;
-};
-
-/** The on-disk `auth`: the `oauth` scalar exactly as before, or the object
- * form whose keys are snake_case like every other multi-word key in
- * `.trellis/*.yaml`. Values are `unknown` until `fromAuthYaml` validates
- * them — a YAML cast is optimistic, validation is this module's job. */
-type McpAuthYaml = string | { kind?: unknown; owner?: unknown; client_id?: unknown; client_secret_env?: unknown; client_name?: unknown };
 
 interface ServersYaml {
   servers?: Record<string, McpServerDefYaml>;
@@ -48,81 +34,6 @@ interface ServersYaml {
   gateway?: { enabled?: boolean; agents?: AgentId[] };
   routes?: Partial<Record<string, { mode?: McpRouteMode; servers?: string[] }>>;
   runtime?: { delivery?: Partial<Record<string, CapabilityDelivery>> };
-}
-
-function fromServerDefYaml(serverName: string, def: McpServerDefYaml): McpServerDef {
-  const { static_env, env_aliases, auth, ...rest } = def;
-  const out: McpServerDef = { ...rest };
-  if (static_env) out.staticEnv = static_env;
-  if (env_aliases) out.envAliases = env_aliases;
-  if (auth !== undefined) out.auth = fromAuthYaml(serverName, auth);
-  return out;
-}
-
-/**
- * `auth` translation and shape validation
- * (trellis-mcp-oauth-static-client tasks 1.1/1.3): the scalar and the
- * object form share one discriminator — `kind: oauth` — and the object
- * accepts exactly `kind`, `owner`, `client_id`, `client_secret_env`. Everything
- * else is refused here at load, naming the field but never echoing the
- * value: an invalid `client_secret_env` is at best a typo, at worst a
- * pasted secret.
- */
-function fromAuthYaml(serverName: string, auth: McpAuthYaml): McpAuthMode | McpAuthConfig {
-  if (auth === "oauth") return "oauth";
-  if (typeof auth !== "object" || auth === null) {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth must be the scalar "oauth" or { kind: oauth, client_id?, client_secret_env?, client_name? }`);
-  }
-  const { kind, owner, client_id, client_secret_env, client_name, ...extra } = auth;
-  const unknownKey = Object.keys(extra)[0];
-  if (unknownKey !== undefined) {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth has unrecognized key "${unknownKey}" — expected kind, owner, client_id, client_secret_env, client_name`);
-  }
-  if (kind !== "oauth") {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth.kind must be "oauth" — kind is the only recognized discriminator`);
-  }
-  if (client_id !== undefined && typeof client_id !== "string") {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth.client_id must be a string`);
-  }
-  if (client_secret_env !== undefined && (typeof client_secret_env !== "string" || !isValidSecretVarName(client_secret_env))) {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth.client_secret_env must be a variable NAME (e.g. FIGMA_CLIENT_SECRET), never a secret value`);
-  }
-  if (client_name !== undefined && typeof client_name !== "string") {
-    throw new Error(`mcp/servers.yaml: "${serverName}" auth.client_name must be a string`);
-  }
-  const out: McpAuthConfig = { kind: "oauth" };
-  if (owner !== undefined && owner !== "agent" && owner !== "trellis") throw new Error(`mcp/servers.yaml: "${serverName}" auth.owner must be agent or trellis`);
-  if (owner !== undefined) out.owner = owner;
-  if (typeof client_id === "string") out.clientId = client_id;
-  if (typeof client_secret_env === "string") out.clientSecretEnv = client_secret_env;
-  if (typeof client_name === "string") out.clientName = client_name;
-  return out;
-}
-
-/** Inverse of `fromServerDefYaml` (trellis-canonical-cli-crud) — strips
- * `undefined` fields so the written YAML never gets a literal `null`
- * for an omitted optional. */
-export function toServerDefYaml(def: McpServerDef): McpServerDefYaml {
-  const { staticEnv, envAliases, auth, ...rest } = def;
-  const out: Record<string, unknown> = { ...rest };
-  if (staticEnv) out.static_env = staticEnv;
-  if (envAliases) out.env_aliases = envAliases;
-  if (auth !== undefined) {
-    out.auth =
-      typeof auth === "string"
-        ? auth
-        : {
-            kind: auth.kind,
-            ...(auth.owner !== undefined ? { owner: auth.owner } : {}),
-            ...(auth.clientId !== undefined ? { client_id: auth.clientId } : {}),
-            ...(auth.clientSecretEnv !== undefined ? { client_secret_env: auth.clientSecretEnv } : {}),
-            ...(auth.clientName !== undefined ? { client_name: auth.clientName } : {}),
-          };
-  }
-  for (const key of Object.keys(out)) {
-    if (out[key] === undefined) delete out[key];
-  }
-  return out as McpServerDefYaml;
 }
 
 interface SecretsPolicyYaml {
@@ -617,8 +528,25 @@ function assertAuthMetadataClean(mcp: McpConfig, policy: SecretsPolicy): void {
   }
 }
 
+/**
+ * Options form of `loadCanonicalSource` (trellis-workspace-scope design D2).
+ * `homeDir` anchors BOTH the global canonical root and user-home semantics
+ * (secrets `env_file` `~` expansion) at all times; `workspaceDir` — a root
+ * previously discovered via `findWorkspaceRoot` — only adds the `.agents/`
+ * project layer on top, never relocates either.
+ */
+export interface LoadCanonicalOptions {
+  homeDir?: string;
+  workspaceDir?: string | null;
+}
+
 /** Load the global canonical source from the supplied home directory. */
-export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSource {
+export function loadCanonicalSource(homeDir?: string): CanonicalSource;
+/** Load the global canonical source, optionally layered with an explicit workspace's `.agents/`. */
+export function loadCanonicalSource(options: LoadCanonicalOptions): CanonicalSource;
+export function loadCanonicalSource(arg: string | LoadCanonicalOptions = {}): CanonicalSource {
+  const options: LoadCanonicalOptions = typeof arg === "string" ? { homeDir: arg } : arg;
+  const homeDir = options.homeDir ?? homedir();
   const root = trellisRoot(homeDir);
   if (!existsSync(root)) {
     throw new Error(
@@ -669,7 +597,7 @@ export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSourc
   const secretsPolicy = loadSecretsPolicyYaml(join(root, "secrets.policy.yaml"), homeDir);
   assertAuthMetadataClean(mcp, secretsPolicy);
 
-  return {
+  const source: CanonicalSource = {
     instructionsFile: join(root, "agents.md"),
     managedAgents,
     skills,
@@ -679,4 +607,10 @@ export function loadCanonicalSource(homeDir: string = homedir()): CanonicalSourc
     secretsPolicy,
     diagnostics,
   };
+
+  if (options.workspaceDir) {
+    const layer = loadWorkspaceLayer(options.workspaceDir, secretsPolicy);
+    return mergeWorkspaceLayer(source, layer);
+  }
+  return source;
 }

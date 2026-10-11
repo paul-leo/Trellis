@@ -8,6 +8,7 @@
 import { runDoctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
 import { runMigrate } from "./commands/migrate.js";
+import { runMigrateWorkspace } from "./commands/migrateWorkspace.js";
 import { runOnboard } from "./commands/onboard.js";
 import { runSync } from "./commands/sync.js";
 import { runMcpSync, runMcpList, runMcpAdd, runMcpRemove, runMcpSetAuth, runMcpScope, parseMcpAddArgs, parseMcpSetArgs } from "./commands/mcp.js";
@@ -77,6 +78,7 @@ Commands:
               (never overwrites an existing file — fills in only what's
               missing) and prints which agents are present
               --json    machine-readable output, no report text
+              --workspace  scaffold .agents/ in the current project instead
   migrate --from <agent>
             Import an existing agent's real skills/instructions/MCP/memory
             servers into canonical source (claude-code | codex | kiro |
@@ -85,6 +87,18 @@ Commands:
             conflict instead.
             --only skills|instructions|mcp|memory
                                     restrict to one category
+              --dry-run    preview the plan, write nothing
+              --json       machine-readable output, no report text
+  migrate --workspace
+            Absorb the repo's existing project-level agent config (all six
+            agents' MCP files + root AGENTS.md) into .agents/, then
+            re-render. Plaintext secrets are intercepted into the global
+            secret store as \${VAR} references, never written under
+            .agents/; *.local.* files are listed, never read.
+              --choose name=agentId   pick a side for a cross-agent conflict
+              --dedup drop|override   identical-to-global entries: skip
+                                      (default) or import as an intentional
+                                      shadow
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   doctor    Scan Claude Code / Codex / Kiro / pi for drift
@@ -126,6 +140,7 @@ Commands:
             no overwrite): --command <cmd> [--args a,b] (stdio) or
             --url <url> (http/sse); [--headers k=v,...]
             [--auth oauth] [--env NAME,...] [--static-env k=v,...] [--agents id,...]
+            [--workspace]  write to .agents/config.json instead of servers.yaml
             [--enabled true|false]
             --dry-run    preview the plan, write nothing
             --json       machine-readable output, no report text
@@ -189,6 +204,7 @@ Commands:
   skill add <name> --from <path>
             Import a real skill directory into canonical (refuses on
               an existing name with different content, no overwrite)
+              --workspace  copy into .agents/skills/ instead of canonical
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill remove <name>
@@ -353,12 +369,28 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "init") {
-    const { exitCode } = await runInit({ json: rest.includes("--json") });
+    const { exitCode } = await runInit({ json: rest.includes("--json"), workspace: rest.includes("--workspace") });
     process.exitCode = exitCode;
     return;
   }
 
   if (command === "migrate") {
+    if (rest.includes("--workspace")) {
+      // Repeated `--choose name=agentId` flags collect into an array.
+      const choose: string[] = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === "--choose" && rest[i + 1] !== undefined) choose.push(rest[i + 1]);
+      }
+      const dedupIndex = rest.indexOf("--dedup");
+      const { exitCode } = await runMigrateWorkspace({
+        choose,
+        dedup: dedupIndex >= 0 ? rest[dedupIndex + 1] : undefined,
+        dryRun: rest.includes("--dry-run"),
+        json: rest.includes("--json"),
+      });
+      process.exitCode = exitCode;
+      return;
+    }
     const fromIndex = rest.indexOf("--from");
     const from = fromIndex >= 0 ? rest[fromIndex + 1] : undefined;
     const onlyIndex = rest.indexOf("--only");
@@ -399,7 +431,7 @@ async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const { exitCode } = await runSync({ target, json: rest.includes("--json"), dryRun: rest.includes("--dry-run") });
+    const { exitCode } = await runSync({ target, json: rest.includes("--json"), dryRun: rest.includes("--dry-run"), check: rest.includes("--check"), globalOnly: rest.includes("--global-only") });
     process.exitCode = exitCode;
     return;
   }
@@ -454,7 +486,7 @@ async function main(argv: string[]): Promise<void> {
     const dryRun = mcpRest.includes("--dry-run");
 
     if (subcommand === "sync") {
-      const { exitCode } = await runMcpSync({ json, dryRun });
+      const { exitCode } = await runMcpSync({ json, dryRun, check: mcpRest.includes("--check"), globalOnly: mcpRest.includes("--global-only") });
       process.exitCode = exitCode;
       return;
     }
@@ -464,7 +496,7 @@ async function main(argv: string[]): Promise<void> {
     }
     if (subcommand === "add") {
       const [name] = mcpRest;
-      process.exitCode = (await runMcpAdd(name, parseMcpAddArgs(mcpRest), { json, dryRun })).exitCode;
+      process.exitCode = (await runMcpAdd(name, parseMcpAddArgs(mcpRest), { json, dryRun, workspace: mcpRest.includes("--workspace") })).exitCode;
       return;
     }
     if (subcommand === "import") {
@@ -533,7 +565,7 @@ async function main(argv: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      process.exitCode = (await runSkillAdd(name, from, { json, dryRun })).exitCode;
+      process.exitCode = (await runSkillAdd(name, from, { json, dryRun, workspace: skillRest.includes("--workspace") })).exitCode;
       return;
     }
     if (subcommand === "remove") {

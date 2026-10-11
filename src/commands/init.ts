@@ -20,12 +20,19 @@ import * as kimiCodeProbe from "../probes/kimi-code.js";
 import * as zcodeProbe from "../probes/zcode.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
+import { scaffoldWorkspace } from "../lib/workspaceConfig.js";
 
 export interface RunInitOptions {
   json?: boolean;
   /** Defaults to the real `~`; overridable for tests only — same seam
    * every other Trellis entry point uses. */
   homeDir?: string;
+  /** `--workspace`: scaffold `.agents/` in the project instead of the
+   * global `~/.trellis/` (trellis-workspace-scope task 3.3). */
+  workspace?: boolean;
+  /** Workspace scaffold target — the test/sandbox seam. CLI discovery is
+   * simply `process.cwd()`. */
+  workspaceDir?: string;
 }
 
 export interface InitFileResult {
@@ -182,6 +189,26 @@ export async function collectInitReport(homeDir: string = homedir(), options: { 
 }
 
 export async function runInit(opts: RunInitOptions = {}): Promise<{ exitCode: number }> {
+  if (opts.workspace) {
+    const dir = opts.workspaceDir ?? process.cwd();
+    const files = scaffoldWorkspace(dir);
+    if (opts.json) {
+      console.log(JSON.stringify({ workspace: dir, files }, null, 2));
+    } else {
+      const created = files.filter((f) => f.action === "create");
+      if (created.length === 0) {
+        console.log(`${dir}/.agents already fully initialized — nothing to create.`);
+      } else {
+        console.log(`Created ${created.length} file(s) under ${dir}/.agents:`);
+        for (const f of created) console.log(`  - ${f.path}`);
+      }
+      for (const f of files.filter((f) => f.action === "already-present")) {
+        console.log(`  - ${f.path} (already present, left untouched)`);
+      }
+      console.log("\nNext: commit .agents/ to share it, then `trellis sync` renders per-agent project files.");
+    }
+    return { exitCode: 0 };
+  }
   const homeDir = opts.homeDir ?? homedir();
   const report = await collectInitReport(homeDir);
 

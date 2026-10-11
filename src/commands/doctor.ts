@@ -18,6 +18,8 @@ import { ALL_AGENTS, isOAuthAuth, oauthOwner } from "../core/types.js";
 import { classifyStoredToken, remediationFor } from "../lib/oauth/renew.js";
 import { readToken } from "../lib/oauth/store.js";
 import type { AgentId, AgentSnapshot, CanonicalSource } from "../core/types.js";
+import { findWorkspaceRoot } from "../lib/workspace.js";
+import { collectWorkspaceDoctorSection, type WorkspaceDoctorSection } from "../lib/workspaceDoctor.js";
 
 /**
  * Interim default until P1 wires this from `.trellis/mcp/servers.yaml`'s
@@ -92,6 +94,10 @@ export interface RunDoctorOptions {
   /** Defaults to the real `~`; overridable for tests only — same seam
    * every other Trellis entry point uses. */
   homeDir?: string;
+  /** Explicit workspace root for layer attribution — the test/sandbox
+   * seam. CLI discovery walks up from cwd via `findWorkspaceRoot`;
+   * null = no workspace layer. */
+  workspaceDir?: string | null;
 }
 
 export interface OAuthHealthEntry {
@@ -108,6 +114,9 @@ export interface DoctorReport {
    * server is OAuth-classified. Read-only by construction
    * (trellis-mcp-oauth-renew design.md D4). */
   oauth?: OAuthHealthEntry[];
+  /** Per-entry layer attribution when a `.agents/` workspace layer
+   * participated (trellis-workspace-scope task 3.5). */
+  workspace?: WorkspaceDoctorSection;
 }
 
 /** Exported so tests can assert on this resolution directly, without
@@ -124,7 +133,8 @@ export function resolveKnownHostInjected(opts: RunDoctorOptions): readonly strin
 }
 
 export async function runDoctor(opts: RunDoctorOptions = {}): Promise<{ exitCode: number }> {
-  const report = await collectDoctorReport(opts.homeDir, resolveKnownHostInjected(opts), opts.probeMcp);
+  const workspaceDir = opts.workspaceDir !== undefined ? opts.workspaceDir : findWorkspaceRoot(process.cwd());
+  const report = await collectDoctorReport(opts.homeDir, resolveKnownHostInjected(opts), opts.probeMcp, workspaceDir);
   const exitCode = report.findings.some((f) => EXIT_NONZERO_KINDS.has(f.kind)) ? 1 : 0;
 
   if (opts.json) {
@@ -148,6 +158,7 @@ export async function collectDoctorReport(
   homeDir: string = homedir(),
   knownHostInjected: readonly string[] = DEFAULT_KNOWN_HOST_INJECTED,
   probeMcp = false,
+  workspaceDir?: string | null,
 ): Promise<DoctorReport> {
   const probeList: { agent: AgentId; run: () => Promise<AgentSnapshot> }[] = [
     { agent: "claude-code", run: () => claudeCodeProbe.probe(homeDir, { probeMcp }) },
@@ -178,11 +189,19 @@ export async function collectDoctorReport(
 
   let canonical: ReturnType<typeof loadCanonicalSource> | undefined;
   try {
-    canonical = loadCanonicalSource(homeDir);
+    // Workspace-merged when a layer is in play — doctor's attribution is
+    // the merged view, and a broken workspace config degrades doctor to
+    // the global-only view rather than failing the whole scan.
+    canonical = loadCanonicalSource({ homeDir, workspaceDir: workspaceDir ?? null });
   } catch {
-    // Doctor remains useful as a standalone cross-agent scanner when
-    // canonical has not been initialized yet.
+    try {
+      canonical = loadCanonicalSource(homeDir);
+    } catch {
+      // Doctor remains useful as a standalone cross-agent scanner when
+      // canonical has not been initialized yet.
+    }
   }
+  const workspace = canonical?.workspace ? collectWorkspaceDoctorSection(canonical) : undefined;
 
   const oauth = canonical ? collectOAuthHealth(homeDir, canonical) : [];
   findings.push(
@@ -196,7 +215,7 @@ export async function collectDoctorReport(
     ...oauth.flatMap((entry) => (entry.status === "valid" ? [] : [oauthFinding(entry)])),
   );
 
-  return { snapshots, findings, ...(oauth.length > 0 ? { oauth } : {}) };
+  return { snapshots, findings, ...(oauth.length > 0 ? { oauth } : {}), ...(workspace ? { workspace } : {}) };
 }
 
 /**
@@ -460,6 +479,32 @@ export function printReport(report: DoctorReport): void {
     console.log("\nCross-agent:");
     for (const finding of crossAgent) {
       console.log(`⚠️  ${finding.message}`);
+    }
+  }
+
+  if (report.workspace) {
+    const ws = report.workspace;
+    console.log(`\nWorkspace layer: ${ws.root} (.agents/)`);
+    for (const entry of ws.mcp) {
+      console.log(`   mcp ${entry.name} — ${entry.layer}`);
+    }
+    for (const entry of ws.skills) {
+      console.log(`   skill ${entry.name} — ${entry.layer}`);
+    }
+    if (ws.shadowed.length > 0) {
+      console.log(`   shadowed by workspace: ${ws.shadowed.join(", ")}`);
+    }
+    if (ws.tombstoned.length > 0) {
+      console.log(`   tombstoned (disabled for this project): ${ws.tombstoned.join(", ")}`);
+    }
+    for (const ref of ws.unresolvedVars) {
+      console.log(`   ⚠ ${ref.server} ${ref.field}: \${${ref.name}} does not resolve under the current secrets policy`);
+    }
+    for (const hint of ws.unmigrated) {
+      console.log(`   ⚠ ${hint.path} holds ${hint.entries.length} entr${hint.entries.length === 1 ? "y" : "ies"} Trellis didn't render (${hint.entries.join(", ")}) — run \`trellis migrate --workspace\``);
+    }
+    for (const warning of ws.precedenceWarnings) {
+      console.log(`   ⚠ ${warning}`);
     }
   }
 }

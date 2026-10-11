@@ -2,13 +2,21 @@
 
 ## Purpose
 TBD - created by archiving change trellis-sync-p1. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Global-only canonical source loading
 The system SHALL load a `CanonicalSource` by reading `~/.trellis/skills/*/SKILL.md`,
 `~/.trellis/agents/*.md`, `~/.trellis/agents.md`, `~/.trellis/scope.yaml`,
-`~/.trellis/mcp/servers.yaml`, and `~/.trellis/secrets.policy.yaml`. The
-system SHALL NOT read or merge any project-local `.trellis/` directory, and
-SHALL NOT accept a root/workspace parameter that would enable one.
+`~/.trellis/mcp/servers.yaml`, and `~/.trellis/secrets.policy.yaml`. By
+default the system SHALL NOT read or merge any project-local directory, and
+the default invocation SHALL NOT consult the current working directory. Only
+when the caller explicitly supplies a workspace root discovered per
+`workspace-scope` SHALL the system additionally load that workspace's
+`.agents/` layer and merge it per that capability's semantics. The home
+directory parameter anchors both the global canonical root and user-home
+semantics (such as `~` expansion in `secrets.policy.yaml`'s `env_file`) at
+all times; a workspace root SHALL NOT relocate either.
 
 #### Scenario: Global canonical source loads successfully
 - **WHEN** `~/.trellis/` exists with at least one skill under
@@ -18,10 +26,24 @@ SHALL NOT accept a root/workspace parameter that would enable one.
   working directory
 
 #### Scenario: No project-local override is ever consulted
-- **WHEN** `loadCanonicalSource()` is called from within a project
-  directory that itself contains a `.trellis/` folder
+- **WHEN** `loadCanonicalSource()` is called without an explicit workspace
+  root, from within a project directory that itself contains a `.agents/`
+  folder
 - **THEN** that project-local folder is never read; only `~/.trellis/` is
-  consulted
+  consulted (the default invocation remains global-only; only a caller
+  supplying a discovered workspace root opts into the project layer)
+
+#### Scenario: An explicit workspace root is loaded and merged
+- **WHEN** `loadCanonicalSource()` is called with a workspace root whose
+  `.agents/config.json` declares an MCP server absent from the global layer
+- **THEN** the returned `CanonicalSource` includes that server, attributed
+  to the workspace layer
+
+#### Scenario: Workspace root never relocates secrets home semantics
+- **WHEN** `loadCanonicalSource()` is called with both a home directory and
+  a workspace root, and `secrets.policy.yaml` sets `env_file: ~/.secrets.env`
+- **THEN** the env file path still expands against the home directory, not
+  the workspace root
 
 #### Scenario: mcp/servers.yaml populates canonical.mcp
 - **WHEN** `~/.trellis/mcp/servers.yaml` exists with at least one server
@@ -79,4 +101,3 @@ load.
   valid scope restriction on a skill that does exist
 - **THEN** `loadCanonicalSource()` returns successfully, the valid skill's
   scope is applied normally, and a diagnostic names the stale entry
-

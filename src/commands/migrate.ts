@@ -33,9 +33,12 @@ import { discoverNativeMemory, MAX_NATIVE_MEMORY_BYTES, renderNativeMemory, type
  * a second, disconnected location. `~`-form for what gets written into
  * `secrets.policy.yaml` itself (portable across machines); resolved form
  * for real file I/O. */
-const DEFAULT_LOCAL_SECRETS_ENV_FILE_TILDE = "~/.trellis/mcp/servers.local.env";
+export const DEFAULT_LOCAL_SECRETS_ENV_FILE_TILDE = "~/.trellis/mcp/servers.local.env";
 
-function defaultLocalSecretsEnvFilePath(homeDir: string): string {
+/** Exported for `migrate --workspace` (trellis-workspace-scope task 4.2) —
+ * its staticEnv extraction lands in the same default store under the same
+ * naming scheme, never a second location. */
+export function defaultLocalSecretsEnvFilePath(homeDir: string): string {
   return join(homeDir, ".trellis", "mcp", "servers.local.env");
 }
 
@@ -60,8 +63,9 @@ const PROBES: Record<AgentId, (homeDir: string) => Promise<AgentSnapshot>> = {
   zcode: (homeDir) => zcodeProbe.probe(homeDir),
 };
 
-/** pi has no static MCP config to read at all (roadmap.md P14/
- * trellis-migrate-mcp-servers) — deliberately absent, not an oversight;
+/** pi's mcp.json migrate-in is not implemented (roadmap.md P14/
+ * trellis-migrate-mcp-servers predates pi 1.1.0's native MCP config) —
+ * deliberately absent, not an oversight;
  * `collectMigratePlan` skips the `mcp` category entirely for pi. */
 const MCP_READERS: Partial<Record<AgentId, (homeDir: string) => { entries: { name: string; def: McpServerDef }[]; unsupported: { name: string; reason: string }[] }>> = {
   "claude-code": readClaudeCodeMcpDefs,

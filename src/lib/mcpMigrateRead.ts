@@ -113,7 +113,11 @@ interface ZcodeRichJsonConfig {
   mcp?: { servers?: Record<string, RichJsonServerDef> };
 }
 
-function fromRichJsonServerDef(raw: RichJsonServerDef): McpServerDef | undefined {
+/** Also exported for the workspace-migration scanner's zcode reader
+ * (trellis-workspace-scope task 4.1): zcode's project config nests the
+ * same rich-JSON server shape under `mcp.servers`, so the walker there
+ * reuses this per-entry mapping unchanged. */
+export function fromRichJsonServerDef(raw: RichJsonServerDef): McpServerDef | undefined {
   if (raw.url) {
     const transport: Transport = raw.type === "sse" ? "sse" : "http";
     const def: McpServerDef = { transport, url: raw.url };
@@ -127,7 +131,10 @@ function fromRichJsonServerDef(raw: RichJsonServerDef): McpServerDef | undefined
   return def;
 }
 
-function readRichJsonMcpDefs(configPath: string): McpMigrateReadResult {
+/** Also the workspace-migration scanner's JSON reader (trellis-workspace-
+ * scope task 4.1): project-level `.mcp.json`-shape files parse through
+ * the exact same rules as their global counterparts. */
+export function readRichJsonMcpDefs(configPath: string): McpMigrateReadResult {
   const parsed = readJsonFile<RichJsonConfig>(configPath);
   const entries: McpMigrateEntry[] = [];
   const unsupported: McpMigrateUnsupported[] = [];
