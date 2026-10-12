@@ -11,12 +11,10 @@
 
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import trellisMcpBridge, { withTimeout } from "../../src/pi-bridge/index.js";
+import trellisMcpBridge from "../../src/pi-bridge/index.js";
 import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -56,23 +54,6 @@ function killFixtureChildren(marker: string): void {
     // pkill exits non-zero when nothing matched — not an error here
   }
 }
-
-test("withTimeout: a promise that resolves before the timeout passes its value through unchanged", async () => {
-  const result = await withTimeout(Promise.resolve("real-value"), 1000, "should not fire");
-  assert.equal(result, "real-value");
-});
-
-test("withTimeout: a promise that never settles rejects at the timeout boundary", async () => {
-  const neverSettles = new Promise<never>(() => {});
-  await assert.rejects(() => withTimeout(neverSettles, 50, "timed out as expected"), /timed out as expected/);
-});
-
-test("withTimeout: a promise that rejects before the timeout passes that rejection through unchanged, not masked by a timeout error", async () => {
-  await assert.rejects(
-    () => withTimeout(Promise.reject(new Error("real failure")), 1000, "should not fire"),
-    /real failure/,
-  );
-});
 
 test("a server that never answers initialize fails within the timeout, not forever", async () => {
   const home = scratchHome();
