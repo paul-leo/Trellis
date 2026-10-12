@@ -76,6 +76,8 @@ test("runDelegatedCallStreaming: chunks arrive incrementally, before the process
     },
   );
 
+  const end = Date.now() - start;
+
   assert.equal(result.status, "completed");
   assert.equal(result.output, "stream-reply:hello");
   assert.equal(result.sessionId, "stub-session-123");
@@ -89,10 +91,14 @@ test("runDelegatedCallStreaming: chunks arrive incrementally, before the process
   assert.equal(chunks[3]?.parsed?.kind, "text-delta");
   assert.equal(chunks[4]?.parsed?.kind, "final");
 
-  // Real proof of incremental delivery: the first chunk arrived well
-  // before the ~120ms it takes stub-agent-cli to emit all five lines and
-  // exit, not all at once at the very end.
-  assert.ok(arrivalTimes[0]! < 90, `expected first chunk before 90ms, got ${arrivalTimes[0]}ms`);
+  // Real proof of incremental delivery, stated relative to the call itself
+  // rather than an absolute wall-clock bound (an absolute bound flakes under
+  // full-suite load: process spawn alone can exceed it — observed 110ms vs a
+  // 90ms bound during an npm publish run). The first chunk must land well
+  // before the call returns, not buffered to the end; the stub's own pacing
+  // puts ~96ms between first and last chunk, and timers only ever stretch
+  // under load, never compress.
+  assert.ok(arrivalTimes[0]! < end - 30, `expected first chunk well before the call returned, got ${arrivalTimes[0]}ms of ${end}ms`);
   assert.ok(arrivalTimes[4]! - arrivalTimes[0]! >= 60, "expected a real gap between the first and last chunk");
 });
 

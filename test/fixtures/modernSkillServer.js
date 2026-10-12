@@ -1,11 +1,21 @@
+import { createHash } from "node:crypto";
 import { Server, ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod/v4";
-import { digestOf } from "../../src/lib/skillManifest.js";
+
+// Plain .js, deliberately: this fixture is spawned by real connects, and a
+// `node --import tsx` boot (transpiling the fixture plus the SDK) can exceed
+// the version-negotiation probe's 3s timeout under full-suite load — the
+// probe then wrongly verdicts "legacy" and this server's `legacy: "reject"`
+// fails the connect with a confusing "Unsupported protocol version". A plain
+// JS boot answers the probe in ~200ms, so the test exercises negotiation,
+// not machine load. digestOf is inlined (sha256:<hex>, same as
+// src/lib/skillManifest.ts) so the fixture has no TS-only imports.
+const digestOf = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
 let supporting = process.argv.includes("--large") ? "x".repeat(11 * 1024 * 1024) : "check correctness\n";
 const withTools = process.argv.includes("--tools");
-function entry(name: string) {
+function entry(name) {
   const files = {
     [`skill://${name}/SKILL.md`]: `---\nname: ${name}\ndescription: Review code\nmetadata:\n  team: upstream\n---\nRead references/checklist.md\n`,
     [`skill://${name}/references/checklist.md`]: supporting,
@@ -25,7 +35,7 @@ serveStdio(() => {
     if (skill.uri !== uri) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "unknown skill");
     return { skill, ttlMs: 0, cacheScope: "private" };
   });
-  server.setRequestHandler("resources/list", async () => ({ resources: Object.keys(entry("review").files).map((uri) => ({ uri, name: uri.split("/").at(-1)! })) }));
+  server.setRequestHandler("resources/list", async () => ({ resources: Object.keys(entry("review").files).map((uri) => ({ uri, name: uri.split("/").at(-1) })) }));
   server.setRequestHandler("resources/read", async ({ params: { uri } }) => {
     const text = { ...entry("review").files, ...entry("hidden").files }[uri];
     if (text === undefined) throw new ProtocolError(ProtocolErrorCode.InvalidParams, "unknown file");

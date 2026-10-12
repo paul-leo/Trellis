@@ -12,9 +12,9 @@ import { SkillProvider } from "../../src/lib/skillProvider.js";
 import { UpstreamResources, upstreamUri, withoutUpstreamServerInfo } from "../../src/lib/upstreamResources.js";
 import { digestOf } from "../../src/lib/skillManifest.js";
 
-const fixture = resolve("test/fixtures/modernSkillServer.ts");
+const fixture = resolve("test/fixtures/modernSkillServer.js");
 const policy = { allowedVars: [], rejectPatterns: [] };
-const spec = (name: string, tools = false) => ({ name, def: { transport: "stdio" as const, command: process.execPath, args: ["--import", "tsx", fixture, ...(tools ? ["--tools"] : [])] } });
+const spec = (name: string, tools = false) => ({ name, def: { transport: "stdio" as const, command: process.execPath, args: [fixture, ...(tools ? ["--tools"] : [])] } });
 
 test("a valid skill resource larger than the SDK's default frame limit remains readable", async () => {
   const large = spec("large");
