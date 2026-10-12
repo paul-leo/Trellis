@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, statSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, statSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -16,14 +16,11 @@ import { runMcpAuth } from "../../src/commands/mcpAuth.js";
 import { readToken, tokenPath, writeToken } from "../../src/lib/oauth/store.js";
 import { LocalBackend } from "../../src/lib/gatewayBackend.js";
 import { startFakeAuthServer, type FakeAuthServer } from "../fixtures/fakeAuthServer.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(serversYaml: string): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-mcpauth-"));
-  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
-  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
-  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
-  writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [claude-code]\n");
-  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), serversYaml);
+  const home = sharedScratchHome("mcpauth");
+  seedCanonical(home, { managed: ["claude-code"], serversYaml, instructions: "# instructions\n", secretsPolicyYaml: "allowed_vars: []\nreject_patterns: []\n" });
   return home;
 }
 

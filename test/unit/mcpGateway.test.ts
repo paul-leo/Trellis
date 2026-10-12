@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -16,17 +16,15 @@ import { loadCanonicalSource } from "../../src/core/canonical.js";
 import { GATEWAY_ENTRY_NAME } from "../../src/adapters/mcpPlan.js";
 import { parseMcpGatewayArgs, resolveGatewayUpstreams, runMcpGateway, runMcpRuntime } from "../../src/commands/mcpGateway.js";
 import type { GatewayBackend } from "../../src/lib/gatewayBackend.js";
+import type { AgentId } from "../../src/core/types.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 /** `managed.yaml` defaults to all four agents: absent, nothing is managed
  * and therefore nothing is in scope for anyone, which would make every
  * scope assertion below trivially true for the wrong reason. */
-function scratchHome(serversYaml: string, managedYaml = "agents: [claude-code, codex, kiro, pi]\n"): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-gateway-"));
-  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
-  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
-  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
-  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), serversYaml);
-  writeFileSync(join(home, ".trellis", "managed.yaml"), managedYaml);
+function scratchHome(serversYaml: string, managed: readonly AgentId[] = ["claude-code", "codex", "kiro", "pi"]): string {
+  const home = sharedScratchHome("gateway");
+  seedCanonical(home, { managed, serversYaml, instructions: "# instructions\n", secretsPolicyYaml: "allowed_vars: []\nreject_patterns: []\n" });
   return home;
 }
 
@@ -217,7 +215,7 @@ gateway:
 });
 
 test("gateway upstreams: managed-agent scoping still applies — gateway mode is not a way around it", () => {
-  const canonical = loadCanonicalSource(scratchHome(GATEWAY_ON, "agents: [codex]\n"));
+  const canonical = loadCanonicalSource(scratchHome(GATEWAY_ON, ["codex"]));
 
   // claude-code isn't managed here, so nothing is in scope for it even
   // though the server has no `agents:` restriction of its own.

@@ -10,16 +10,17 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectInitReport } from "../../src/commands/init.js";
 import { applyMigratePlan, collectMigratePlan } from "../../src/commands/migrate.js";
 import { SKIP_NO_CODEX } from "./realCodexAvailable.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  return mkdtempSync(join(tmpdir(), "trellis-migrate-sources-"));
+  return sharedScratchHome("migrate-sources");
 }
 
 test("codex: a real skill and real instructions are both migrated (src/probes/codex.ts's real paths)", async () => {

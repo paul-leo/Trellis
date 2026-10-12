@@ -5,7 +5,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -26,9 +26,10 @@ import {
 } from "../../src/commands/skill.js";
 import { backupsRoot } from "../../src/lib/backup.js";
 import { parse as parseYaml } from "yaml";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  return mkdtempSync(join(tmpdir(), "trellis-skill-"));
+  return sharedScratchHome("skill");
 }
 
 function writeSourceSkill(dir: string, content = "# Demo\ncontent\n"): string {

@@ -11,12 +11,13 @@
 
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import trellisMcpBridge, { withTimeout } from "../../src/pi-bridge/index.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const hangingFixture = join(here, "..", "fixtures", "hanging-mcp-server.js");
@@ -41,14 +42,11 @@ function fakePi(): { registerTool: (tool: CapturedTool) => void; tools: Captured
 }
 
 function scratchHome(): string {
-  return mkdtempSync(join(tmpdir(), "trellis-connect-timeout-"));
+  return sharedScratchHome("connect-timeout");
 }
 
 function writeServersYaml(home: string, body: string): void {
-  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
-  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
-  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
-  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), body);
+  seedCanonical(home, { serversYaml: body, instructions: "# instructions\n", secretsPolicyYaml: "allowed_vars: []\nreject_patterns: []\n" });
 }
 
 function killFixtureChildren(marker: string): void {

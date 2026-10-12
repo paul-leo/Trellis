@@ -6,27 +6,23 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectSyncReport } from "../../src/commands/sync.js";
 import { backupsRoot } from "../../src/lib/backup.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-sync-"));
-  // Minimal per-agent presence markers, matching each P0 probe's own
-  // "present" check — no real agent binaries required.
-  writeFileSync(join(home, ".claude.json"), "{}");
-  mkdirSync(join(home, ".codex"), { recursive: true });
+  const home = sharedScratchHome("sync");
+  seedAgentPresence(home, ["claude-code", "codex", "kiro", "pi"]);
+  // Codex instructions delivery needs the pointer in config.toml — richer
+  // than the bare presence marker, so overwrite after seeding.
   writeFileSync(
     join(home, ".codex", "config.toml"),
     `model = "x"\ninstructions = "${join(home, ".codex", "instructions.md")}"\n`,
   );
-  mkdirSync(join(home, ".kiro", "settings"), { recursive: true });
-  writeFileSync(join(home, ".kiro", "settings", "mcp.json"), "{}");
-  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
-  writeFileSync(join(home, ".pi", "agent", "settings.json"), "{}");
   return home;
 }
 

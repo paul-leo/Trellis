@@ -5,16 +5,17 @@
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { backupsRoot, openBackupSession } from "../../src/lib/backup.js";
 import { applyRollbackPlan, collectRollbackPlan, loadManifest } from "../../src/commands/rollback.js";
 import type { BackupManifest } from "../../src/lib/backup.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  return mkdtempSync(join(tmpdir(), "trellis-backup-"));
+  return sharedScratchHome("backup");
 }
 
 function sha256(content: string): string {

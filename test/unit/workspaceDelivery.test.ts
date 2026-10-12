@@ -15,16 +15,11 @@ import { collectSyncReport, runSync } from "../../src/commands/sync.js";
 import { collectMcpSyncReport, runMcpSync } from "../../src/commands/mcp.js";
 import { planWorkspaceMcp, workspaceMcpConfigPath, workspacePrecedenceWarnings } from "../../src/lib/workspaceMcp.js";
 import { loadCanonicalSource } from "../../src/core/canonical.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-ws-deliv-"));
-  writeFileSync(join(home, ".claude.json"), "{}");
-  mkdirSync(join(home, ".codex"), { recursive: true });
-  writeFileSync(join(home, ".codex", "config.toml"), `model = "x"\n`);
-  mkdirSync(join(home, ".kiro", "settings"), { recursive: true });
-  writeFileSync(join(home, ".kiro", "settings", "mcp.json"), "{}");
-  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
-  writeFileSync(join(home, ".pi", "agent", "settings.json"), "{}");
+  const home = sharedScratchHome("ws-deliv");
+  seedAgentPresence(home, ["claude-code", "codex", "kiro", "pi"]);
   return home;
 }
 

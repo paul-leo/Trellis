@@ -11,18 +11,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectDoctorReport } from "../../src/commands/doctor.js";
+import type { AgentId } from "../../src/core/types.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
-function scratchHome(managed: string[] = ["claude-code"]): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-ws-doc-"));
-  writeFileSync(join(home, ".claude.json"), "{}");
-  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
-  writeFileSync(join(home, ".trellis", "agents.md"), "# global\n");
-  writeFileSync(join(home, ".trellis", "managed.yaml"), `agents: [${managed.join(", ")}]\n`);
+function scratchHome(managed: readonly AgentId[] = ["claude-code"]): string {
+  const home = sharedScratchHome("ws-doc");
+  seedAgentPresence(home, ["claude-code"]);
+  seedCanonical(home, { managed, instructions: "# global\n" });
   return home;
 }
 
 function writeGlobalServers(home: string, yaml: string): void {
-  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), yaml);
+  seedCanonical(home, { serversYaml: yaml });
 }
 
 function scratchWorkspace(config: object): string {

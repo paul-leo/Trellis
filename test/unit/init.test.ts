@@ -6,7 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -15,9 +15,10 @@ import { loadCanonicalSource } from "../../src/core/canonical.js";
 import { collectSyncReport } from "../../src/commands/sync.js";
 import { collectMcpSyncReport } from "../../src/commands/mcp.js";
 import { runSecretsAudit } from "../../src/commands/secretsAudit.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  return mkdtempSync(join(tmpdir(), "trellis-init-"));
+  return sharedScratchHome("init");
 }
 
 test("a fresh machine with no canonical source gets a working one", async () => {

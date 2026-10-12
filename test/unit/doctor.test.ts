@@ -21,9 +21,10 @@ import {
 } from "../../src/commands/doctor.js";
 import { readToken, writeToken } from "../../src/lib/oauth/store.js";
 import type { AgentSnapshot, AgentSnapshotSkillEntry } from "../../src/core/types.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  return mkdtempSync(join(tmpdir(), "trellis-doctor-report-"));
+  return sharedScratchHome("doctor-report");
 }
 
 function skill(overrides: Partial<AgentSnapshotSkillEntry> & { name: string; realDir: string }): AgentSnapshotSkillEntry {

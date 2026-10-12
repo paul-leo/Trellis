@@ -6,21 +6,19 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runInit } from "../../src/commands/init.js";
 import { runMcpAdd } from "../../src/commands/mcp.js";
 import { runSkillAdd } from "../../src/commands/skill.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-ws-cli-"));
-  writeFileSync(join(home, ".claude.json"), "{}");
-  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
-  writeFileSync(join(home, ".trellis", "agents.md"), "# global\n");
-  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "servers: {}\n");
-  writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [claude-code]\n");
+  const home = sharedScratchHome("ws-cli");
+  seedAgentPresence(home, ["claude-code"]);
+  seedCanonical(home, { managed: ["claude-code"], instructions: "# global\n", serversYaml: "servers: {}\n" });
   return home;
 }
 

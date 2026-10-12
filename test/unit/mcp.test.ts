@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -29,16 +29,11 @@ import { loadCanonicalSource } from "../../src/core/canonical.js";
 import { backupsRoot } from "../../src/lib/backup.js";
 import { writeToken } from "../../src/lib/oauth/store.js";
 import { parse as parseYaml } from "yaml";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-mcp-"));
-  writeFileSync(join(home, ".claude.json"), "{}");
-  mkdirSync(join(home, ".codex"), { recursive: true });
-  writeFileSync(join(home, ".codex", "config.toml"), `model = "x"\n`);
-  mkdirSync(join(home, ".kiro", "settings"), { recursive: true });
-  writeFileSync(join(home, ".kiro", "settings", "mcp.json"), "{}");
-  mkdirSync(join(home, ".pi", "agent"), { recursive: true });
-  writeFileSync(join(home, ".pi", "agent", "settings.json"), "{}");
+  const home = sharedScratchHome("mcp");
+  seedAgentPresence(home, ["claude-code", "codex", "kiro", "pi"]);
   return home;
 }
 

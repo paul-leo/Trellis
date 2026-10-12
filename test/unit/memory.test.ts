@@ -4,15 +4,16 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectMemoryExtractionResult, collectMemoryList, collectMemorySyncResult, runMemoryExtraction, runMemorySync } from "../../src/commands/memory.js";
 import { TRELLIS_MEMORY_ENTITY_TYPE } from "../../src/lib/memoryGraph.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(): string {
-  return mkdtempSync(join(tmpdir(), "trellis-memory-cmd-"));
+  return sharedScratchHome("memory-cmd");
 }
 
 function initCanonical(home: string, serversYaml: string): void {

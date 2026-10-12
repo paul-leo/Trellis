@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -17,14 +17,11 @@ import { discoverAuthorizationServer } from "../../src/lib/oauth/discovery.js";
 import { authorize } from "../../src/lib/oauth/flow.js";
 import { readToken, writeToken } from "../../src/lib/oauth/store.js";
 import { startFakeAuthServer, type FakeAuthServer } from "../fixtures/fakeAuthServer.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
 function scratchHome(serversYaml: string): string {
-  const home = mkdtempSync(join(tmpdir(), "trellis-mcprenew-"));
-  mkdirSync(join(home, ".trellis", "mcp"), { recursive: true });
-  writeFileSync(join(home, ".trellis", "agents.md"), "# instructions\n");
-  writeFileSync(join(home, ".trellis", "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
-  writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [claude-code]\n");
-  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), serversYaml);
+  const home = sharedScratchHome("mcprenew");
+  seedCanonical(home, { managed: ["claude-code"], serversYaml, instructions: "# instructions\n", secretsPolicyYaml: "allowed_vars: []\nreject_patterns: []\n" });
   return home;
 }
 
