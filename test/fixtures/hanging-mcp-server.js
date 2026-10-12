@@ -30,7 +30,15 @@ process.stdin.on("data", (chunk) => {
     } catch {
       continue;
     }
-    if (mode === "before-tools-list" && msg.method === "initialize") {
+    if (msg.method === "server/discover") {
+      // The version-negotiation probe is a pre-`initialize` step, not the
+      // hang point this fixture exists for — answer it like a legacy SDK
+      // server would so the client falls back fast and the test spends its
+      // budget on the actual hang, not on a probe timeout.
+      process.stdout.write(
+        JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "unknown method server/discover" } }) + "\n",
+      );
+    } else if (mode === "before-tools-list" && msg.method === "initialize") {
       process.stdout.write(
         JSON.stringify({
           jsonrpc: "2.0",

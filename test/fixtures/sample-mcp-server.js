@@ -77,6 +77,15 @@ process.stdin.on("data", (chunk) => {
       );
     } else if (msg.method?.startsWith("notifications/")) {
       // no response expected for notifications
+    } else if (msg.id !== undefined) {
+      // Unknown requests get a real -32601, like any SDK-built server —
+      // including `server/discover`: without an answer the client's
+      // version-negotiation probe waits out its full timeout (3s at the
+      // default budget) before falling back to legacy initialize, which
+      // dominated this fixture's cost in every connecting test.
+      process.stdout.write(
+        JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `unknown method ${msg.method}` } }) + "\n",
+      );
     }
   }
 });
