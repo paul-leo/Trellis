@@ -25,6 +25,7 @@ import { collectMemoryList, runMemoryExtraction, runMemorySync } from "./command
 import { parseManageArgs, runManage } from "./commands/manage.js";
 import { runKimi } from "./commands/kimi.js";
 import { TRELLIS_VERSION } from "./lib/cliMetadata.js";
+import { flagValue } from "./lib/cliArgs.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
 const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "add", "update", "memory", "manage", "kimi", "secrets", "rollback"] as const;
@@ -196,6 +197,9 @@ Commands:
             Remove a canonical MCP server, then run the same sync as
             mcp sync so every managed agent's Trellis-owned entry for
             it is removed too
+              --workspace  remove from .agents/config.json instead of
+                           servers.yaml (a shadowed global entry takes
+                           effect again, it is not deleted)
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill list
@@ -336,31 +340,15 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "onboard") {
-    const agentIndex = rest.indexOf("--agent");
-    const agent = agentIndex >= 0 ? rest[agentIndex + 1] : undefined;
-    const manageIndex = rest.indexOf("--manage");
-    const manage = manageIndex >= 0 ? rest[manageIndex + 1] : undefined;
-    const mcpModeIndex = rest.indexOf("--mcp-mode");
-    const mcpMode = mcpModeIndex >= 0 ? rest[mcpModeIndex + 1] : undefined;
-    const hubUrlIndex = rest.indexOf("--hub-url");
-    const hubUrl = hubUrlIndex >= 0 ? rest[hubUrlIndex + 1] : undefined;
-    const gatewayAgentsIndex = rest.indexOf("--gateway-agents");
-    const gatewayAgents = gatewayAgentsIndex >= 0 ? rest[gatewayAgentsIndex + 1] : undefined;
-    const memoryIndex = rest.indexOf("--memory");
-    const memory = memoryIndex >= 0 ? rest[memoryIndex + 1] : undefined;
-    const memoryMigrateIndex = rest.indexOf("--memory-migrate");
-    const memoryMigrate = memoryMigrateIndex >= 0 ? rest[memoryMigrateIndex + 1] : undefined;
-    const selectionIndex = rest.indexOf("--selection");
-    const selectionFile = selectionIndex >= 0 ? rest[selectionIndex + 1] : undefined;
     const { exitCode } = await runOnboard({
-      agent,
-      manage,
-      mcpMode,
-      hubUrl,
-      gatewayAgents,
-      memory,
-      memoryMigrate,
-      selectionFile,
+      agent: flagValue(rest, "--agent"),
+      manage: flagValue(rest, "--manage"),
+      mcpMode: flagValue(rest, "--mcp-mode"),
+      hubUrl: flagValue(rest, "--hub-url"),
+      gatewayAgents: flagValue(rest, "--gateway-agents"),
+      memory: flagValue(rest, "--memory"),
+      memoryMigrate: flagValue(rest, "--memory-migrate"),
+      selectionFile: flagValue(rest, "--selection"),
       dryRun: rest.includes("--dry-run"),
       json: rest.includes("--json"),
     });
@@ -381,21 +369,16 @@ async function main(argv: string[]): Promise<void> {
       for (let i = 0; i < rest.length; i++) {
         if (rest[i] === "--choose" && rest[i + 1] !== undefined) choose.push(rest[i + 1]);
       }
-      const dedupIndex = rest.indexOf("--dedup");
       const { exitCode } = await runMigrateWorkspace({
         choose,
-        dedup: dedupIndex >= 0 ? rest[dedupIndex + 1] : undefined,
+        dedup: flagValue(rest, "--dedup"),
         dryRun: rest.includes("--dry-run"),
         json: rest.includes("--json"),
       });
       process.exitCode = exitCode;
       return;
     }
-    const fromIndex = rest.indexOf("--from");
-    const from = fromIndex >= 0 ? rest[fromIndex + 1] : undefined;
-    const onlyIndex = rest.indexOf("--only");
-    const only = onlyIndex >= 0 ? rest[onlyIndex + 1] : undefined;
-    const { exitCode } = await runMigrate({ from, only, dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
+    const { exitCode } = await runMigrate({ from: flagValue(rest, "--from"), only: flagValue(rest, "--only"), dryRun: rest.includes("--dry-run"), json: rest.includes("--json") });
     process.exitCode = exitCode;
     return;
   }
@@ -521,7 +504,7 @@ async function main(argv: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      process.exitCode = (await runMcpRemove(name, { json, dryRun })).exitCode;
+      process.exitCode = (await runMcpRemove(name, { json, dryRun, workspace: mcpRest.includes("--workspace") })).exitCode;
       return;
     }
 
@@ -558,8 +541,7 @@ async function main(argv: string[]): Promise<void> {
     }
     if (subcommand === "add") {
       const [name] = skillRest;
-      const fromIndex = skillRest.indexOf("--from");
-      const from = fromIndex >= 0 ? skillRest[fromIndex + 1] : undefined;
+      const from = flagValue(skillRest, "--from");
       if (!name || !from) {
         console.error("Usage: trellis skill add <name> --from <path>");
         process.exitCode = 1;

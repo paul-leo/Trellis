@@ -32,8 +32,9 @@ import { ZcodeAdapter } from "../adapters/zcode.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
 import { findWorkspaceRoot } from "../lib/workspace.js";
 import { applyWorkspaceMcp, planWorkspaceMcp, workspacePrecedenceWarnings } from "../lib/workspaceMcp.js";
-import { readWorkspaceConfigJson, upsertWorkspaceServer } from "../lib/workspaceConfig.js";
+import { readWorkspaceConfigJson, removeWorkspaceServer, upsertWorkspaceServer } from "../lib/workspaceConfig.js";
 import { toServerDefYaml } from "../core/mcpServerDef.js";
+import { flagValue, unknownFlags } from "../lib/cliArgs.js";
 
 export interface RunMcpSyncOptions {
   json?: boolean;
@@ -314,8 +315,9 @@ export function runMcpList(opts: { homeDir?: string; json?: boolean } = {}): { e
 
 /** Raw, unvalidated CLI flag values — `collectMcpAddPlan` does the actual
  * parsing/validation. Kept as plain strings here so `parseMcpAddArgs`
- * stays a dumb `--flag value` reader, same posture as every other
- * command's own inline flag parsing in src/cli.ts. */
+ * stays a dumb `--flag value` reader. Both `--flag value` and
+ * `--flag=value` are accepted (see src/lib/cliArgs.ts — the `=` form used
+ * to be silently dropped). */
 export interface McpAddRawArgs {
   transport?: string;
   auth?: string;
@@ -333,37 +335,47 @@ export interface McpAddRawArgs {
   agents?: string;
   /** `"true"` or `"false"`. */
   enabled?: string;
+  /** `--*` tokens no flag claimed (typos, wrong command); `runMcpAdd`
+   * warns about them instead of letting them vanish silently. */
+  unknown?: string[];
 }
+
+const MCP_ADD_KNOWN_FLAGS: readonly string[] = [
+  "--transport", "--auth", "--command", "--args", "--url", "--headers",
+  "--env", "--static-env", "--agents", "--enabled",
+  "--workspace", "--dry-run", "--json",
+];
 
 export function parseMcpAddArgs(argv: readonly string[]): McpAddRawArgs {
-  const flag = (name: string): string | undefined => {
-    const i = argv.indexOf(name);
-    return i >= 0 ? argv[i + 1] : undefined;
-  };
+  const unknown = unknownFlags(argv, MCP_ADD_KNOWN_FLAGS);
   return {
-    transport: flag("--transport"),
-    auth: flag("--auth"),
-    command: flag("--command"),
-    args: flag("--args"),
-    url: flag("--url"),
-    headers: flag("--headers"),
-    env: flag("--env"),
-    staticEnv: flag("--static-env"),
-    agents: flag("--agents"),
-    enabled: flag("--enabled"),
+    transport: flagValue(argv, "--transport"),
+    auth: flagValue(argv, "--auth"),
+    command: flagValue(argv, "--command"),
+    args: flagValue(argv, "--args"),
+    url: flagValue(argv, "--url"),
+    headers: flagValue(argv, "--headers"),
+    env: flagValue(argv, "--env"),
+    staticEnv: flagValue(argv, "--static-env"),
+    agents: flagValue(argv, "--agents"),
+    enabled: flagValue(argv, "--enabled"),
+    ...(unknown.length > 0 ? { unknown } : {}),
   };
 }
 
+const MCP_SET_KNOWN_FLAGS: readonly string[] = [
+  "--auth", "--client-id", "--client-secret-env", "--auth-owner",
+  "--dry-run", "--json",
+];
+
 export function parseMcpSetArgs(argv: readonly string[]): McpSetAuthRawArgs {
-  const flag = (name: string): string | undefined => {
-    const i = argv.indexOf(name);
-    return i >= 0 ? argv[i + 1] : undefined;
-  };
+  const unknown = unknownFlags(argv, MCP_SET_KNOWN_FLAGS);
   return {
-    auth: flag("--auth"),
-    clientId: flag("--client-id"),
-    clientSecretEnv: flag("--client-secret-env"),
-    authOwner: flag("--auth-owner"),
+    auth: flagValue(argv, "--auth"),
+    clientId: flagValue(argv, "--client-id"),
+    clientSecretEnv: flagValue(argv, "--client-secret-env"),
+    authOwner: flagValue(argv, "--auth-owner"),
+    ...(unknown.length > 0 ? { unknown } : {}),
   };
 }
 
@@ -522,6 +534,8 @@ export interface McpSetAuthRawArgs {
   clientId?: string;
   /** A variable NAME, never a secret value. */
   clientSecretEnv?: string;
+  /** See `McpAddRawArgs.unknown`. */
+  unknown?: string[];
 }
 
 /**
@@ -636,6 +650,7 @@ export function collectMcpSetAuthPlan(name: string | undefined, raw: McpSetAuthR
 
 export function runMcpSetAuth(name: string | undefined, raw: McpSetAuthRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
   const homeDir = opts.homeDir ?? homedir();
+  warnUnknownFlags("mcp set", raw.unknown);
   let plan: McpSetAuthPlan;
   try {
     plan = collectMcpSetAuthPlan(name, raw, homeDir);
@@ -837,8 +852,17 @@ export async function applyMcpAddWorkspaceWithSync(plan: McpAddPlan, workspaceRo
   return { plan, ...(syncReport ? { sync: syncReport } : {}) };
 }
 
+/** Warn about `--*` tokens the parser didn't claim — a typo like
+ * `--tranport http` must not exit 0 in silence. */
+function warnUnknownFlags(commandLabel: string, unknown: readonly string[] | undefined): void {
+  if (unknown && unknown.length > 0) {
+    console.error(`warning: ${commandLabel}: unrecognized flag(s) ${unknown.map((f) => `"${f}"`).join(", ")} — ignored`);
+  }
+}
+
 export async function runMcpAdd(name: string | undefined, raw: McpAddRawArgs, opts: { homeDir?: string; json?: boolean; dryRun?: boolean; workspace?: boolean; workspaceDir?: string } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
+  warnUnknownFlags("mcp add", raw.unknown);
 
   if (opts.workspace) {
     const workspaceRoot = opts.workspaceDir ?? findWorkspaceRoot(process.cwd());
@@ -944,8 +968,65 @@ export async function applyMcpRemoveWithSync(plan: McpRemovePlan, opts: { homeDi
   return { plan, ...(writeError ? { writeError } : {}), ...(syncReport ? { sync: syncReport } : {}) };
 }
 
-export async function runMcpRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): Promise<{ exitCode: number }> {
+/** Workspace twin of `collectMcpRemovePlan`: presence is judged against
+ * `.agents/config.json` only — a global entry of the same name is this
+ * entry's shadow target, not a reason to touch the global file. */
+export function collectMcpRemoveWorkspacePlan(name: string, workspaceRoot: string): McpRemovePlan {
+  const config = readWorkspaceConfigJson(workspaceRoot);
+  return { name, action: config.mcp?.servers?.[name] ? "removed" : "not-found" };
+}
+
+/** Workspace twin of `applyMcpRemoveWithSync`: deletes the entry from
+ * `.agents/config.json` (backup-session wrapped), then cascades the same
+ * mcp sync — run inside the workspace, so `planWorkspaceMcp` sees the
+ * entry is gone and removes the rendered project-level copies (the
+ * ledger-gated propagation already exists; this command was the missing
+ * corner). A shadowed global entry simply takes effect again. */
+export async function applyMcpRemoveWorkspaceWithSync(plan: McpRemovePlan, workspaceRoot: string, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<McpRemoveOutcome> {
   const homeDir = opts.homeDir ?? homedir();
+  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "removed" ? openBackupSession(homeDir, "mcp-remove") : undefined;
+  const session = opts.backupSession ?? ownSession;
+  if (!opts.dryRun && plan.action === "removed") {
+    removeWorkspaceServer(workspaceRoot, plan.name, session);
+  }
+  ownSession?.finalize();
+  const planFailed = plan.action === "not-found";
+  let syncReport: McpSyncReport | undefined;
+  if (!planFailed && existsSync(join(homeDir, ".trellis"))) {
+    syncReport = await collectMcpSyncReport({ homeDir, workspaceDir: workspaceRoot, dryRun: opts.dryRun });
+  }
+  return { plan, ...(syncReport ? { sync: syncReport } : {}) };
+}
+
+export async function runMcpRemove(name: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean; workspace?: boolean; workspaceDir?: string } = {}): Promise<{ exitCode: number }> {
+  const homeDir = opts.homeDir ?? homedir();
+
+  if (opts.workspace) {
+    const workspaceRoot = opts.workspaceDir ?? findWorkspaceRoot(process.cwd());
+    if (!workspaceRoot) {
+      console.error("no .agents/ found here or above — run `trellis init --workspace` first (or pass --workspace from inside the repo)");
+      return { exitCode: 1 };
+    }
+    let plan: McpRemovePlan;
+    try {
+      plan = collectMcpRemoveWorkspacePlan(name, workspaceRoot);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return { exitCode: 1 };
+    }
+    const { sync: syncReport } = await applyMcpRemoveWorkspaceWithSync(plan, workspaceRoot, { homeDir, dryRun: opts.dryRun });
+    if (opts.json) {
+      console.log(JSON.stringify(syncReport ? { ...plan, workspace: workspaceRoot, sync: syncReport } : { ...plan, workspace: workspaceRoot }, null, 2));
+    } else if (plan.action === "not-found") {
+      console.error(`"${name}" is not in the workspace layer (${workspaceRoot}/.agents/config.json) — nothing to remove.`);
+    } else {
+      console.log(`${opts.dryRun ? "[dry run] " : ""}removed MCP server "${name}" from ${workspaceRoot}/.agents/config.json.`);
+      if (syncReport) printReport(syncReport, opts.dryRun ?? false);
+    }
+    const syncConflict = syncReport?.reports.some((r) => r.items.some((i) => i.action === "conflict")) ?? false;
+    return { exitCode: plan.action === "not-found" || syncConflict ? 1 : 0 };
+  }
+
   let plan: McpRemovePlan;
   try {
     plan = collectMcpRemovePlan(name, homeDir);
@@ -968,7 +1049,21 @@ export async function runMcpRemove(name: string, opts: { homeDir?: string; json?
     const payload = writeError ? { ...plan, writeError } : plan;
     console.log(JSON.stringify(syncReport ? { ...payload, sync: syncReport } : payload, null, 2));
   } else if (plan.action === "not-found") {
-    console.error(`"${name}" is not a canonical MCP server — nothing to remove.`);
+    // A name that lives only in the workspace layer used to get this same
+    // blunt message (found by the v0.15.0 real-machine smoke test) —
+    // point at the flag instead of implying the entry doesn't exist.
+    let workspaceHint = "";
+    const workspaceRoot = opts.workspaceDir !== undefined ? opts.workspaceDir : findWorkspaceRoot(process.cwd());
+    if (workspaceRoot) {
+      try {
+        if (readWorkspaceConfigJson(workspaceRoot).mcp?.servers?.[name]) {
+          workspaceHint = ` here, but it exists in the workspace layer — re-run with --workspace to remove it from ${workspaceRoot}/.agents/config.json`;
+        }
+      } catch {
+        // An unreadable workspace config must not mask the primary answer.
+      }
+    }
+    console.error(`"${name}" is not a canonical MCP server${workspaceHint} — nothing to remove.`);
   } else if (writeError) {
     console.error(`  write failed: ${writeError}`);
   } else {

@@ -324,6 +324,38 @@ test("mcp add: parseMcpAddArgs reads --flag value pairs and comma-separated list
   });
 });
 
+test("mcp add: parseMcpAddArgs accepts the --flag=value form (v0.15.0 smoke-test regression: --args=-y,… was silently dropped)", () => {
+  const raw = parseMcpAddArgs([
+    "--transport=stdio",
+    "--command=npx",
+    "--args=-y,@modelcontextprotocol/server-everything",
+    "--agents=claude-code",
+  ]);
+  assert.equal(raw.transport, "stdio");
+  assert.equal(raw.command, "npx");
+  assert.equal(raw.args, "-y,@modelcontextprotocol/server-everything");
+  assert.equal(raw.agents, "claude-code");
+  assert.equal(raw.unknown, undefined);
+});
+
+test("mcp add: parseMcpAddArgs surfaces unknown --flags instead of letting them vanish, and runMcpAdd warns", async () => {
+  const raw = parseMcpAddArgs(["typo-demo", "--transport", "http", "--url", "https://example/mcp", "--tranport", "stdio"]);
+  assert.deepEqual(raw.unknown, ["--tranport"]);
+
+  const home = scratchHome();
+  initCanonical(home, "servers: {}\n");
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (message: string) => errors.push(message);
+  try {
+    const { exitCode } = await runMcpAdd("typo-demo", raw, { homeDir: home, json: true });
+    assert.equal(exitCode, 0, "a warning never blocks the add itself");
+  } finally {
+    console.error = original;
+  }
+  assert.ok(errors.some((line) => line.includes('"--tranport"') && line.includes("ignored")), `expected an unknown-flag warning, got: ${errors.join(" | ")}`);
+});
+
 test("mcp add: --auth oauth is accepted only for remote transports", () => {
   const home = scratchHome();
   initCanonical(home, "servers: {}\n");

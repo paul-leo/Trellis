@@ -1,7 +1,8 @@
 /**
  * Write-side helpers for the workspace layer (trellis-workspace-scope
  * tasks 3.3/3.4): scaffolding `.agents/` (`init --workspace`) and
- * upserting a server into `.agents/config.json` (`mcp add --workspace`).
+ * upserting/removing a server in `.agents/config.json`
+ * (`mcp add --workspace` / `mcp remove --workspace`).
  *
  * The read side lives in src/lib/workspace.ts (`loadWorkspaceLayer`) —
  * same file, same schema, one validator (via `toServerDefYaml`, so a
@@ -69,6 +70,24 @@ export function upsertWorkspaceServer(workspaceRoot: string, name: string, def: 
     mcp: { ...(config.mcp ?? {}), servers },
   };
   writeWorkspaceConfigJson(workspaceRoot, next, backup);
+}
+
+/** Delete `mcp.servers.<name>`, preserving every other key (unknown keys
+ * included, same posture as the upsert). Returns false — and writes
+ * nothing — when the entry isn't there. The follow-up `mcp sync` is what
+ * propagates the deletion to the rendered project-level files. */
+export function removeWorkspaceServer(workspaceRoot: string, name: string, backup?: BackupSession): boolean {
+  const config = readWorkspaceConfigJson(workspaceRoot);
+  const servers = config.mcp?.servers;
+  if (!servers || !(name in servers)) return false;
+  const nextServers = { ...servers };
+  delete nextServers[name];
+  const next: WorkspaceConfigJson = {
+    ...config,
+    mcp: { ...(config.mcp ?? {}), servers: nextServers },
+  };
+  writeWorkspaceConfigJson(workspaceRoot, next, backup);
+  return true;
 }
 
 // --- init --workspace scaffold (task 3.3) ---

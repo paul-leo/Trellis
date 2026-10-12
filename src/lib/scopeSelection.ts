@@ -8,6 +8,7 @@
 
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
+import { flagValue } from "./cliArgs.js";
 
 /** Raw, unvalidated flag values — the parser stays a dumb reader and every
  * rule below lives in `resolveScopeSelection`. */
@@ -32,11 +33,11 @@ export type ScopeSelection =
 
 export const SCOPE_SELECTOR_USAGE = "exactly one of --agents <ids>, --all, --none is required";
 
-/** `argv.indexOf`-style reader, same idiom as every other command's flags. */
+/** Shared reader — accepts `--agents <ids>` and `--agents=<ids>`. */
 export function parseScopeArgs(argv: readonly string[]): ScopeSelectorRaw {
-  const i = argv.indexOf("--agents");
+  const agents = flagValue(argv, "--agents");
   return {
-    ...(i >= 0 ? { agents: argv[i + 1] ?? "" } : {}),
+    ...(agents !== undefined ? { agents } : {}),
     all: argv.includes("--all"),
     none: argv.includes("--none"),
   };

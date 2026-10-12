@@ -30,6 +30,7 @@ import { RuntimeMemoryProvider } from "../lib/memoryProvider.js";
 import { SkillProvider } from "../lib/skillProvider.js";
 import { ALL_AGENTS, isOAuthAuth } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
+import { flagValue } from "../lib/cliArgs.js";
 
 const CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-gateway", version: "0.0.0" };
 const SERVER_INFO = { name: "trellis-mcp-gateway", version: "0.0.0" };
@@ -47,11 +48,10 @@ export interface RunMcpGatewayOptions {
 }
 
 export function parseMcpGatewayArgs(argv: readonly string[]): { agentId: AgentId } | { error: string } {
-  const index = argv.indexOf("--agent");
-  if (index === -1 || index === argv.length - 1) {
+  const value = flagValue(argv, "--agent");
+  if (value === undefined) {
     return { error: `mcp-gateway requires --agent <${ALL_AGENTS.join("|")}>` };
   }
-  const value = argv[index + 1];
   if (!(ALL_AGENTS as readonly string[]).includes(value)) {
     return { error: `unknown agent "${value}" — expected one of ${ALL_AGENTS.join(", ")}` };
   }

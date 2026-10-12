@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runInit } from "../../src/commands/init.js";
-import { runMcpAdd } from "../../src/commands/mcp.js";
+import { runMcpAdd, runMcpRemove } from "../../src/commands/mcp.js";
 import { runSkillAdd } from "../../src/commands/skill.js";
 import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
 
@@ -140,4 +140,69 @@ test("skill add --workspace: invalid source (no SKILL.md) exits 1 writing nothin
   const { exitCode } = await runSkillAdd("review", src, { homeDir: home, workspace: true, workspaceDir: proj, json: true });
   assert.equal(exitCode, 1);
   assert.ok(!existsSync(join(proj, ".agents", "skills", "review")));
+});
+
+// --- mcp remove --workspace (v0.15.1: the smoke test found workspace
+// entries had no CLI removal path at all) ---
+
+test("mcp remove --workspace: deletes from .agents/config.json and cascade-syncs the rendered .mcp.json copy away", async () => {
+  const home = scratchHome();
+  const proj = scratchProject();
+  await runInit({ homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  await runMcpAdd("figma", { transport: "http", url: "https://mcp.figma.com/mcp" }, { homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  assert.ok(JSON.parse(readFileSync(join(proj, ".mcp.json"), "utf-8")).mcpServers.figma, "setup: rendered copy exists");
+
+  const { exitCode } = await runMcpRemove("figma", { homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  assert.equal(exitCode, 0);
+
+  const config = JSON.parse(readFileSync(join(proj, ".agents", "config.json"), "utf-8"));
+  assert.equal(config.mcp.servers.figma, undefined, "workspace canonical entry deleted");
+  const rendered = JSON.parse(readFileSync(join(proj, ".mcp.json"), "utf-8"));
+  assert.equal(rendered.mcpServers?.figma, undefined, "ledger-gated sync removed the Trellis-written project copy");
+});
+
+test("mcp remove --workspace: an absent name exits 1 and writes nothing", async () => {
+  const home = scratchHome();
+  const proj = scratchProject();
+  await runInit({ homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  const before = readFileSync(join(proj, ".agents", "config.json"), "utf-8");
+
+  const { exitCode } = await runMcpRemove("nope", { homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  assert.equal(exitCode, 1);
+  assert.equal(readFileSync(join(proj, ".agents", "config.json"), "utf-8"), before, "config.json untouched");
+});
+
+test("mcp remove --workspace: removing a shadow only lifts it — the global entry survives and renders again", async () => {
+  const home = scratchHome();
+  writeFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "servers:\n  figma:\n    transport: http\n    url: https://global.example.com/mcp\n");
+  const proj = scratchProject();
+  await runInit({ homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  await runMcpAdd("figma", { transport: "http", url: "https://workspace.example.com/mcp" }, { homeDir: home, workspace: true, workspaceDir: proj, json: true });
+
+  const { exitCode } = await runMcpRemove("figma", { homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  assert.equal(exitCode, 0);
+
+  assert.equal(JSON.parse(readFileSync(join(proj, ".agents", "config.json"), "utf-8")).mcp.servers.figma, undefined, "workspace shadow deleted");
+  assert.match(readFileSync(join(home, ".trellis", "mcp", "servers.yaml"), "utf-8"), /global\.example\.com/, "global layer untouched");
+});
+
+test("mcp remove (global): a workspace-only name gets a --workspace hint instead of a bare not-found", async () => {
+  const home = scratchHome();
+  const proj = scratchProject();
+  await runInit({ homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  await runMcpAdd("figma", { transport: "http", url: "https://mcp.figma.com/mcp" }, { homeDir: home, workspace: true, workspaceDir: proj, json: true });
+
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (message: string) => errors.push(message);
+  let exitCode: number;
+  try {
+    ({ exitCode } = await runMcpRemove("figma", { homeDir: home, workspaceDir: proj }));
+  } finally {
+    console.error = original;
+  }
+  assert.equal(exitCode, 1, "still not-found on the global layer");
+  assert.ok(errors.some((line) => line.includes("--workspace")), `expected a --workspace hint, got: ${errors.join(" | ")}`);
+  // and the workspace entry was NOT removed by the global command
+  assert.ok(JSON.parse(readFileSync(join(proj, ".agents", "config.json"), "utf-8")).mcp.servers.figma);
 });
