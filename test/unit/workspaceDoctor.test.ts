@@ -136,3 +136,97 @@ test("doctor: no workspace layer → no workspace section (standalone behavior u
   const report = await collectDoctorReport(home, [], false, null);
   assert.equal(report.workspace, undefined);
 });
+
+test("doctor: workspace .codex/config.toml with a TOML syntax error produces a tomlFindings entry and no unmigrated hint for that file", async () => {
+  const home = scratchHome(["claude-code", "codex"]);
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  writeFileSync(join(home, ".codex", "config.toml"), `model = "x"\n`);
+  writeGlobalServers(home, "servers: {}\n");
+  const ws = scratchWorkspace({ version: 1, mcp: { servers: {} } });
+  mkdirSync(join(ws, ".codex"), { recursive: true });
+  // Real shape from the morphix incident: `enabled` declared twice in one table.
+  writeFileSync(join(ws, ".codex", "config.toml"), [
+    "[mcp_servers.morphix_dev]",
+    'url = "http://127.0.0.1:3000/mcp"',
+    "enabled = false",
+    "enabled = true",
+    "",
+  ].join("\n"));
+
+  const report = await collectDoctorReport(home, [], false, ws);
+
+  const findings = report.workspace!.tomlFindings;
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].agent, "codex");
+  assert.equal(findings[0].path, join(ws, ".codex", "config.toml"));
+  assert.equal(typeof findings[0].line, "number");
+  assert.ok(findings[0].reason.length > 0);
+
+  // spec req 2: an unparseable file must not be misreported as unmigrated.
+  assert.equal(report.workspace!.unmigrated.some((h) => h.agent === "codex"), false);
+});
+
+test("doctor: valid workspace .codex/config.toml yields no tomlFindings and keeps the unmigrated hint", async () => {
+  const home = scratchHome(["claude-code", "codex"]);
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  writeFileSync(join(home, ".codex", "config.toml"), `model = "x"\n`);
+  writeGlobalServers(home, "servers: {}\n");
+  const ws = scratchWorkspace({ version: 1, mcp: { servers: {} } });
+  mkdirSync(join(ws, ".codex"), { recursive: true });
+  writeFileSync(join(ws, ".codex", "config.toml"), [
+    "[mcp_servers.hand_written]",
+    'url = "https://example.com/mcp"',
+    "enabled = true",
+    "",
+  ].join("\n"));
+
+  const report = await collectDoctorReport(home, [], false, ws);
+
+  assert.deepEqual(report.workspace!.tomlFindings, []);
+  const hints = report.workspace!.unmigrated.filter((h) => h.agent === "codex");
+  assert.equal(hints.length, 1);
+  assert.deepEqual(hints[0].entries, ["hand_written"]);
+});
+
+test("doctor: workspace TOML failure is promoted to a top-level workspace-toml-invalid finding (exit non-zero basis)", async () => {
+  const home = scratchHome(["claude-code", "codex"]);
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  writeFileSync(join(home, ".codex", "config.toml"), `model = "x"\n`);
+  writeGlobalServers(home, "servers: {}\n");
+  const ws = scratchWorkspace({ version: 1, mcp: { servers: {} } });
+  mkdirSync(join(ws, ".codex"), { recursive: true });
+  writeFileSync(join(ws, ".codex", "config.toml"), [
+    "[mcp_servers.morphix_dev]",
+    "enabled = false",
+    "enabled = true",
+    "",
+  ].join("\n"));
+
+  const report = await collectDoctorReport(home, [], false, ws);
+
+  const topLevel = report.findings.filter((f) => f.kind === "workspace-toml-invalid");
+  assert.equal(topLevel.length, 1);
+  assert.equal(topLevel[0].agent, "codex");
+  assert.match(topLevel[0].message, new RegExp(join(ws, ".codex", "config.toml").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("doctor: workspace TOML finding runs even when the global canonical source has no managedAgents (spec scenario 3)", async () => {
+  const home = sharedScratchHome("ws-doc-nocanon");
+  seedAgentPresence(home, ["codex"]);
+  // Note: no seedCanonical — `~/.trellis/` stays absent.
+  const ws = mkdtempSync(join(tmpdir(), "trellis-ws-proj-"));
+  mkdirSync(join(ws, ".agents", "skills"), { recursive: true });
+  mkdirSync(join(ws, ".codex"), { recursive: true });
+  writeFileSync(join(ws, ".codex", "config.toml"), [
+    "[mcp_servers.broken]",
+    "enabled = false",
+    "enabled = true",
+    "",
+  ].join("\n"));
+
+  const report = await collectDoctorReport(home, [], false, ws);
+
+  assert.ok(report.workspace !== undefined, "workspace section must be present even without canonical");
+  assert.equal(report.workspace!.tomlFindings.length, 1);
+  assert.ok(report.findings.some((f) => f.kind === "workspace-toml-invalid"));
+});

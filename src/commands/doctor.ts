@@ -39,7 +39,8 @@ export type FindingKind =
   | "parse-diagnostic"
   | "runtime-drift"
   | "oauth-expired"
-  | "mcp-unreachable";
+  | "mcp-unreachable"
+  | "workspace-toml-invalid";
 
 export interface Finding {
   kind: FindingKind;
@@ -66,6 +67,10 @@ const EXIT_NONZERO_KINDS: ReadonlySet<FindingKind> = new Set([
   // exists to catch *before* the session does (trellis-mcp-oauth-renew
   // design.md D4).
   "oauth-expired",
+  // A project-level Codex config that fails TOML parsing will fail the
+  // *agent*'s own startup regardless of ownership — catch it here before
+  // the next session does (trellis-doctor-workspace-toml-validation).
+  "workspace-toml-invalid",
 ]);
 
 export interface RunDoctorOptions {
@@ -201,7 +206,53 @@ export async function collectDoctorReport(
       // canonical has not been initialized yet.
     }
   }
-  const workspace = canonical?.workspace ? collectWorkspaceDoctorSection(canonical) : undefined;
+  // Workspace attribution runs whenever a workspace root is in scope —
+  // even when `~/.trellis/` itself failed to load or has never been
+  // initialized. The spec's third scenario: a user managing only project
+  // skills in `.agents/skills/` without a global Trellis install still
+  // gets project-level config validation
+  // (trellis-doctor-workspace-toml-validation design.md D5). When the
+  // canonical source is absent we synthesize the minimal workspace layer
+  // with every map empty — provenance is moot without a global layer, but
+  // `collectWorkspaceDoctorSection`'s per-file inspection is what we want.
+  let workspace: WorkspaceDoctorSection | undefined;
+  if (canonical?.workspace) {
+    workspace = collectWorkspaceDoctorSection(canonical);
+  } else {
+    const workspaceRoot = workspaceDir != null ? findWorkspaceRoot(workspaceDir) : null;
+    if (workspaceRoot) {
+      // `managedAgents` is driven by `~/.trellis/managed.yaml`, which is
+      // absent in this branch — sweep every known agent so codex's TOML
+      // file is still inspected (otherwise an empty list would skip the
+      // file entirely and the spec's scenario-3 finding would never fire).
+      const minimal: CanonicalSource = {
+        instructionsFile: "",
+        managedAgents: ALL_AGENTS,
+        skills: [],
+        agents: [],
+        memories: [],
+        mcp: { servers: {}, knownHostInjected: [] },
+        secretsPolicy: { allowedVars: [], rejectPatterns: [] },
+        diagnostics: [],
+        workspace: { root: workspaceRoot, mcpProvenance: {}, mcpGlobalServers: {}, skillProvenance: {}, globalSkills: [], shadowed: [] },
+      };
+      workspace = collectWorkspaceDoctorSection(minimal);
+    }
+  }
+
+  // Workspace TOML findings become top-level findings so the exit code
+  // and `--json` consumers see them alongside cross-agent findings, not
+  // only inside the workspace section. They keep `agent: "codex"` — the
+  // file layout tells us which agent the file breaks.
+  if (workspace) {
+    for (const finding of workspace.tomlFindings) {
+      findings.push({
+        kind: "workspace-toml-invalid",
+        agent: finding.agent,
+        message: `${finding.path}${finding.line !== undefined ? `:${finding.line}${finding.column !== undefined ? `:${finding.column}` : ""}` : ""} — ${finding.reason} (not rendered by Trellis; fix by hand)`,
+      });
+    }
+  }
 
   const oauth = canonical ? collectOAuthHealth(homeDir, canonical) : [];
   findings.push(
@@ -502,6 +553,10 @@ export function printReport(report: DoctorReport): void {
     }
     for (const hint of ws.unmigrated) {
       console.log(`   ⚠ ${hint.path} holds ${hint.entries.length} entr${hint.entries.length === 1 ? "y" : "ies"} Trellis didn't render (${hint.entries.join(", ")}) — run \`trellis migrate --workspace\``);
+    }
+    for (const finding of ws.tomlFindings) {
+      const location = finding.line !== undefined ? `:${finding.line}${finding.column !== undefined ? `:${finding.column}` : ""}` : "";
+      console.log(`   ⚠ ${finding.path}${location} — ${finding.reason} (not rendered by Trellis — fix by hand and re-run \`trellis doctor\`)`);
     }
     for (const warning of ws.precedenceWarnings) {
       console.log(`   ⚠ ${warning}`);
