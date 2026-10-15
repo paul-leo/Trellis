@@ -13,3 +13,9 @@ packages/gui/playwright-report/
 # Local video production materials (never publish)
 docs/video/
 scripts/video-demo-setup.sh
+
+# Generated agent-collab mailbox store. mailbox-server.mjs resolves its
+# sqlite path from process.cwd(), so merely loading that MCP server with
+# this repo as cwd creates an (empty) .mailbox/ here. Machine-local state,
+# never commit — the real store lives in the agent-collab checkout.
+.mailbox/
