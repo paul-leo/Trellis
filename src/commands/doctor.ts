@@ -19,6 +19,7 @@ import { classifyStoredToken, remediationFor } from "../lib/oauth/renew.js";
 import { readToken } from "../lib/oauth/store.js";
 import type { AgentId, AgentSnapshot, CanonicalSource } from "../core/types.js";
 import { findWorkspaceRoot } from "../lib/workspace.js";
+import { detectCliVersionSplit, findCliEntrypoints, type VersionExecutor } from "../lib/cliEntrypoints.js";
 import { collectWorkspaceDoctorSection, type WorkspaceDoctorSection } from "../lib/workspaceDoctor.js";
 
 /**
@@ -40,7 +41,8 @@ export type FindingKind =
   | "runtime-drift"
   | "oauth-expired"
   | "mcp-unreachable"
-  | "workspace-toml-invalid";
+  | "workspace-toml-invalid"
+  | "cli-version-split";
 
 export interface Finding {
   kind: FindingKind;
@@ -71,6 +73,9 @@ const EXIT_NONZERO_KINDS: ReadonlySet<FindingKind> = new Set([
   // *agent*'s own startup regardless of ownership — catch it here before
   // the next session does (trellis-doctor-workspace-toml-validation).
   "workspace-toml-invalid",
+  // A stale `trellis` that wins on PATH silently changes behavior (e.g.
+  // rejecting config keys a newer copy accepts) — trellis-doctor-cli-version-split.
+  "cli-version-split",
 ]);
 
 export interface RunDoctorOptions {
@@ -103,6 +108,10 @@ export interface RunDoctorOptions {
    * seam. CLI discovery walks up from cwd via `findWorkspaceRoot`;
    * null = no workspace layer. */
   workspaceDir?: string | null;
+  /** PATH to scan for `trellis` entrypoints; defaults to the real one.
+   * Test seam, with `execVersion`. */
+  pathEnv?: string;
+  execVersion?: VersionExecutor;
 }
 
 export interface OAuthHealthEntry {
@@ -140,6 +149,11 @@ export function resolveKnownHostInjected(opts: RunDoctorOptions): readonly strin
 export async function runDoctor(opts: RunDoctorOptions = {}): Promise<{ exitCode: number }> {
   const workspaceDir = opts.workspaceDir !== undefined ? opts.workspaceDir : findWorkspaceRoot(process.cwd());
   const report = await collectDoctorReport(opts.homeDir, resolveKnownHostInjected(opts), opts.probeMcp, workspaceDir);
+  // CLI boundary only: spawning `trellis --version` belongs here, not in
+  // collectDoctorReport, so library callers and their tests never depend
+  // on the developer's real PATH.
+  const split = detectCliVersionSplit(findCliEntrypoints({ pathEnv: opts.pathEnv, execVersion: opts.execVersion }));
+  if (split) report.findings.push({ kind: "cli-version-split", message: split });
   const exitCode = report.findings.some((f) => EXIT_NONZERO_KINDS.has(f.kind)) ? 1 : 0;
 
   if (opts.json) {
