@@ -22,7 +22,11 @@ export interface RefreshOptions {
   lockTimeoutMs?: number;
 }
 
-export class RefreshError extends Error {}
+export class RefreshError extends Error {
+  constructor(message: string, readonly oauthError?: string) {
+    super(message);
+  }
+}
 
 /**
  * Returns a token that is valid now, refreshing first if it isn't.
@@ -83,7 +87,15 @@ export async function performRefresh(serverName: string, token: StoredToken, opt
   });
 
   if (!response.ok) {
-    throw new RefreshError(`refresh_token grant for "${serverName}" failed with HTTP ${response.status}: ${await safeText(response)}`);
+    const detail = await safeText(response);
+    let oauthError: string | undefined;
+    try {
+      const payload = JSON.parse(detail) as { error?: unknown };
+      if (typeof payload?.error === "string") oauthError = payload.error;
+    } catch {
+      // Providers may return plain text or an empty body.
+    }
+    throw new RefreshError(`refresh_token grant for "${serverName}" failed with HTTP ${response.status}: ${detail.slice(0, 200)}`, oauthError);
   }
 
   const payload = (await response.json()) as {
@@ -111,7 +123,7 @@ export async function performRefresh(serverName: string, token: StoredToken, opt
 
 async function safeText(response: { text(): Promise<string> }): Promise<string> {
   try {
-    return (await response.text()).slice(0, 200);
+    return await response.text();
   } catch {
     return "<unreadable body>";
   }

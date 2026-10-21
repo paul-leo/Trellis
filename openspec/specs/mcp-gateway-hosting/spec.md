@@ -202,6 +202,20 @@ OAuth file.
   connection-failure requirement, and does not open a browser to attempt
   re-authorization on its own
 
+#### Scenario: Explicit authorization recovers from a rejected refresh grant
+- **WHEN** the user runs `trellis mcp auth <name>` and the stored token's
+  refresh grant is rejected with OAuth `invalid_grant`
+- **THEN** the command starts a new browser authorization without requiring
+  `--force`, and replaces the stored credential only after authorization
+  succeeds; cancelling leaves the prior credential file unchanged
+
+#### Scenario: A temporary refresh failure does not start another login
+- **WHEN** the user runs `trellis mcp auth <name>` and refreshing fails due
+  to a network error, rate limit, temporary provider outage, or a structured
+  OAuth error other than `invalid_grant`
+- **THEN** the command reports the error and exits non-zero without opening
+  a browser or replacing the stored credential
+
 ### Requirement: Gateway mode and hub mode are independent and mutually exclusive per resolution
 The system SHALL treat the new gateway field and the existing `mcp.hub`
 field as orthogonal settings that MAY both exist in canonical

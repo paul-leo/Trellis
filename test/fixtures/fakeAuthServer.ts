@@ -44,6 +44,8 @@ export interface FakeAuthServerOptions {
   /** Issue a new refresh token on every grant (the common, and more
    * dangerous, real-world behavior). */
   rotateRefreshTokens?: boolean;
+  /** Reject refreshes without changing authorization-code grants. */
+  refreshError?: { status: number; error?: string };
 }
 
 export interface FakeAuthServer {
@@ -196,6 +198,9 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
       }
 
       if (grantType === "refresh_token") {
+        if (options.refreshError) {
+          return json(options.refreshError.status, options.refreshError.error ? { error: options.refreshError.error } : {});
+        }
         const presented = params.get("refresh_token") ?? "";
         if (!validRefreshTokens.has(presented)) {
           return json(400, { error: "invalid_grant", error_description: "refresh token is unknown or has been rotated out" });

@@ -18,6 +18,7 @@
 
 import { existsSync } from "node:fs";
 import { isExpired, readToken, tokenPath, type StoredToken } from "./store.js";
+import { RefreshError } from "./refresh.js";
 
 export type OAuthRenewStatus =
   /** Nothing stored; renewal can do nothing. */
@@ -117,8 +118,13 @@ export function hasRefreshToken(token: StoredToken | undefined): boolean {
  * varies by provider, so message sniffing stays deliberately narrow.
  */
 export function classifyRefreshFailure(err: unknown): OAuthRenewStatus {
+  // A structured OAuth error takes precedence over the HTTP fallback:
+  // invalid_request also uses 400, but another login cannot fix it.
+  if (err instanceof RefreshError && err.oauthError !== undefined) {
+    return err.oauthError === "invalid_grant" ? "needs-auth" : "refresh-failed";
+  }
   const message = err instanceof Error ? err.message : String(err);
-  if (/there is no refresh token/.test(message)) return "needs-auth";
+  if (/there is no refresh token|no recorded token endpoint/.test(message)) return "needs-auth";
   if (/invalid_grant|HTTP 400|HTTP 401/.test(message)) return "needs-auth";
   return "refresh-failed";
 }

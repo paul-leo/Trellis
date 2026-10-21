@@ -175,7 +175,8 @@ Commands:
             Authorize a remote (http/sse) MCP server that uses OAuth —
               opens a browser once, stores the result 0600 under
               ~/.trellis/mcp/oauth/. A still-valid token is a no-op; an
-              expired one is refreshed without a browser. The gateway
+              expired one is refreshed without a browser. If the refresh
+              grant is rejected, this command starts a new login. The gateway
               refreshes silently on its own and never prompts.
               --force   re-authorize even if the stored token is valid
               --json    machine-readable output, no report text

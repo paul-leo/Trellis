@@ -12,7 +12,7 @@ import { mkdtempSync, statSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runMcpAuth } from "../../src/commands/mcpAuth.js";
+import { authorizeMcpServer, runMcpAuth } from "../../src/commands/mcpAuth.js";
 import { readToken, tokenPath, writeToken } from "../../src/lib/oauth/store.js";
 import { LocalBackend } from "../../src/lib/gatewayBackend.js";
 import { startFakeAuthServer, type FakeAuthServer } from "../fixtures/fakeAuthServer.js";
@@ -124,6 +124,115 @@ test("mcp auth: an expired-but-renewable token is refreshed without any browser"
     await as.close();
   }
 });
+
+test("mcp auth: invalid_grant starts a new login without --force and replaces the rejected credential", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const home = homeWithRemote(as);
+    await quietly(() => runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }));
+    const rejected = { ...readToken(home, "remote")!, expiresAt: Date.now() - 1000, refreshToken: "revoked-refresh-token" };
+    writeToken(home, "remote", rejected);
+    const grantsBefore = as.grants.length;
+    let opened = 0;
+    const result = await authorizeMcpServer({
+      serverName: "remote", homeDir: home, timeoutMs: 2000,
+      openBrowser: async (url) => {
+        opened++;
+        assert.deepEqual(readToken(home, "remote"), rejected, "keep the prior credential until login succeeds");
+        await as.authorizeViaBrowser(url);
+      },
+    });
+    assert.equal(result.status, "authorized");
+    assert.equal(opened, 1);
+    assert.deepEqual(as.grants.slice(grantsBefore).map((grant) => grant.grantType), ["refresh_token", "authorization_code"]);
+    const fresh = readToken(home, "remote")!;
+    assert.notEqual(fresh.accessToken, rejected.accessToken);
+    assert.equal(as.isRefreshTokenValid(fresh.refreshToken!), true);
+    assert.equal(statSync(tokenPath(home, "remote")).mode & 0o777, 0o600);
+  } finally {
+    await as.close();
+  }
+});
+
+test("mcp auth: cancelling login after invalid_grant preserves the prior credential", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const home = homeWithRemote(as);
+    await quietly(() => runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }));
+    const rejected = { ...readToken(home, "remote")!, expiresAt: Date.now() - 1000, refreshToken: "revoked-refresh-token" };
+    writeToken(home, "remote", rejected);
+    const controller = new AbortController();
+    let opened = 0;
+    await assert.rejects(() => authorizeMcpServer({
+      serverName: "remote", homeDir: home, signal: controller.signal, timeoutMs: 2000,
+      openBrowser: () => { opened++; controller.abort(new Error("login cancelled")); },
+    }), /login cancelled/);
+    assert.equal(opened, 1);
+    assert.deepEqual(readToken(home, "remote"), rejected);
+  } finally {
+    await as.close();
+  }
+});
+
+test("mcp auth: reauthorization preserves JSON output and reports success", async () => {
+  const as = await startFakeAuthServer();
+  try {
+    const home = homeWithRemote(as);
+    await quietly(() => runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }));
+    writeToken(home, "remote", { ...readToken(home, "remote")!, expiresAt: Date.now() - 1000, refreshToken: "revoked-refresh-token" });
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    let reauthorizations = 0;
+    console.log = (message: string) => logs.push(message);
+    console.error = (message: string) => errors.push(message);
+    try {
+      const result = await runMcpAuth({
+        serverName: "remote", homeDir: home, json: true, timeoutMs: 2000,
+        onReauthorization: () => { reauthorizations++; },
+        openBrowser: (url) => as.authorizeViaBrowser(url),
+      });
+      assert.equal(result.exitCode, 0);
+      assert.equal(reauthorizations, 1);
+      assert.equal(JSON.parse(logs.join("\n")).status, "authorized");
+      assert.deepEqual(errors, []);
+      assert.equal(logs.join("\n").includes(readToken(home, "remote")!.accessToken), false);
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+  } finally {
+    await as.close();
+  }
+});
+
+for (const refreshError of [
+  { status: 503, error: "temporarily_unavailable" },
+  { status: 429, error: "slow_down" },
+  { status: 400, error: "invalid_request" },
+]) {
+  test(`mcp auth: HTTP ${refreshError.status} ${refreshError.error} does not start another login`, async () => {
+    const as = await startFakeAuthServer({ refreshError });
+    try {
+      const home = homeWithRemote(as);
+      await quietly(() => runMcpAuth({ serverName: "remote", homeDir: home, openBrowser: (url) => as.authorizeViaBrowser(url) }));
+      const prior = { ...readToken(home, "remote")!, expiresAt: Date.now() - 1000 };
+      writeToken(home, "remote", prior);
+      const grantsBefore = as.grants.length;
+      let opened = 0;
+      await assert.rejects(() => authorizeMcpServer({
+        serverName: "remote", homeDir: home, timeoutMs: 2000,
+        openBrowser: () => { opened++; },
+      }), new RegExp(`HTTP ${refreshError.status}`));
+      assert.equal(opened, 0);
+      assert.deepEqual(readToken(home, "remote"), prior);
+      assert.deepEqual(as.grants.slice(grantsBefore).map((grant) => grant.grantType), ["refresh_token"]);
+    } finally {
+      await as.close();
+    }
+  });
+}
 
 test("mcp auth: an unknown server name is an error, not a silent no-op", async () => {
   const as = await startFakeAuthServer();

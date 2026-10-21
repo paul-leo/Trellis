@@ -79,6 +79,16 @@ test("classifyRefreshFailure: a transient 5xx stays retryable", () => {
   assert.equal(classifyRefreshFailure(err), "refresh-failed");
 });
 
+test("classifyRefreshFailure: a parsed error takes precedence over HTTP 400 and descriptive text", () => {
+  const message = 'refresh_token grant for "remote" failed with HTTP 400: {"error":"invalid_request","error_description":"not invalid_grant"}';
+  assert.equal(classifyRefreshFailure(new RefreshError(message, "invalid_request")), "refresh-failed");
+  assert.equal(classifyRefreshFailure(new RefreshError(message, "invalid_grant")), "needs-auth");
+});
+
+test("classifyRefreshFailure: a token without a recorded endpoint needs a new authorization", () => {
+  assert.equal(classifyRefreshFailure(new RefreshError('OAuth token for "remote" has no recorded token endpoint')), "needs-auth");
+});
+
 test("failure statuses are exactly the human-required set (design.md D6)", () => {
   assert.deepEqual([...FAILURE_STATUSES].sort(), ["needs-auth", "no-token", "refresh-failed", "unreadable"]);
 });

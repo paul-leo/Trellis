@@ -6,6 +6,16 @@ on a schedule, it refreshes whatever is expiring and reports — with a
 non-zero exit code — anything that needs a human, before an Agent session
 discovers it as a 401.
 
+When a refresh token has expired, been revoked, or been rotated out, the
+provider can reject renewal with OAuth `invalid_grant`. Run
+`trellis mcp auth <name>`: it attempts a silent refresh first, then starts
+a new browser login if the grant is no longer usable. No `--force` is
+required. Network failures, rate limits, and temporary provider failures
+remain errors to retry; they do not trigger another login. The prior
+credential is replaced only after the new authorization succeeds, so
+cancelling login preserves the existing file. Background renewal and the
+gateway report the failure and never open a browser.
+
 ```
 trellis mcp renew              # refresh what's expiring, report health
 trellis mcp renew --dry-run    # report only; no token-endpoint call

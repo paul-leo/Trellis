@@ -13,7 +13,8 @@ import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { discoverAuthorizationServer, parseResourceMetadataUrl } from "../lib/oauth/discovery.js";
 import { authorize, abortable } from "../lib/oauth/flow.js";
-import { ensureFreshToken } from "../lib/oauth/refresh.js";
+import { ensureFreshToken, RefreshError } from "../lib/oauth/refresh.js";
+import { classifyRefreshFailure } from "../lib/oauth/renew.js";
 import { resolveSecretEnv } from "../lib/secretEnv.js";
 import { isExpired, readToken, tokenPath, writeToken } from "../lib/oauth/store.js";
 import { withServerLock } from "../lib/oauth/lock.js";
@@ -30,6 +31,8 @@ export interface RunMcpAuthOptions {
   signal?: AbortSignal;
   onProgress?: (phase: "discovering" | "registering" | "waiting" | "exchanging" | "saving") => void;
   timeoutMs?: number;
+  /** An expired grant was rejected; the explicit auth command will log in again. */
+  onReauthorization?: () => void;
   /** Used by the desktop; native grants belong to each Agent. */
   requireHosted?: boolean;
 }
@@ -46,7 +49,13 @@ export async function runMcpAuth(opts: RunMcpAuthOptions): Promise<{ exitCode: n
 
   let result: McpAuthResult;
   try {
-    result = await authorizeMcpServer(opts);
+    result = await authorizeMcpServer({
+      ...opts,
+      onReauthorization: () => {
+        if (!opts.json) console.error(`OAuth grant for "${opts.serverName}" can no longer be refreshed; starting a new login.`);
+        opts.onReauthorization?.();
+      },
+    });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return { exitCode: 1 };
@@ -102,10 +111,19 @@ export async function authorizeMcpServer(opts: RunMcpAuthOptions): Promise<McpAu
       return { server: opts.serverName, status: "already-valid", tokenFile: file, ...(existing.expiresAt ? { expiresAt: existing.expiresAt } : {}) };
     }
     if (existing?.refreshToken && !opts.requireHosted) {
-      // Expired but renewable — no browser needed.
-      const refreshed = await ensureFreshToken(homeDir, opts.serverName);
-      if (refreshed) {
-        return { server: opts.serverName, status: "refreshed", tokenFile: file, ...(refreshed.expiresAt ? { expiresAt: refreshed.expiresAt } : {}) };
+      try {
+        // Expired but renewable — no browser needed.
+        const refreshed = await ensureFreshToken(homeDir, opts.serverName);
+        if (refreshed) {
+          return { server: opts.serverName, status: "refreshed", tokenFile: file, ...(refreshed.expiresAt ? { expiresAt: refreshed.expiresAt } : {}) };
+        }
+      } catch (err) {
+        if (!(err instanceof RefreshError) || classifyRefreshFailure(err) !== "needs-auth") throw err;
+        opts.signal?.throwIfAborted();
+        // This is an explicit authorization request, so a dead grant can
+        // continue into login. Keep the old file until the new grant is
+        // saved; cancellation must not erase the prior credential.
+        opts.onReauthorization?.();
       }
     }
   }

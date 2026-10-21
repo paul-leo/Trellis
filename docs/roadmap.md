@@ -1,6 +1,6 @@
 # Roadmap
 
-*Current release: v0.14.1 (2026-10-11). This file tracks phase-level scope;
+*Current release: v0.17.1 (2026-10-21). This file tracks phase-level scope;
 per-release detail lives in [`releases/`](releases/).*
 
 Each phase must ship with a `trellis doctor` check that verifies its own
