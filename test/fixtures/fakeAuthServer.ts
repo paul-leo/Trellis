@@ -66,6 +66,11 @@ export interface FakeAuthServer {
   readonly registrations: number;
   /** Refresh tokens this server has invalidated by rotation. */
   isRefreshTokenValid(token: string): boolean;
+  /** Access tokens this server currently honours — every grant (code or
+   * refresh) adds one; `revokeAccessToken` removes it without touching
+   * expiry, which is how a provider-side revocation looks to a client. */
+  isAccessTokenValid(token: string): boolean;
+  revokeAccessToken(token: string): void;
 }
 
 interface PendingAuthorization {
@@ -79,6 +84,7 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
   const clients = new Set<string>();
   const pending = new Map<string, PendingAuthorization>();
   const validRefreshTokens = new Set<string>();
+  const validAccessTokens = new Set<string>();
   const grants: Array<{ grantType: string; at: number }> = [];
   const clientSecretsSeen: string[] = [];
   let registrations = 0;
@@ -188,8 +194,10 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
         pending.delete(code);
         const refreshToken = `refresh-${randomBytes(8).toString("hex")}`;
         validRefreshTokens.add(refreshToken);
+        const accessToken = `access-${randomBytes(8).toString("hex")}`;
+        validAccessTokens.add(accessToken);
         return json(200, {
-          access_token: `access-${randomBytes(8).toString("hex")}`,
+          access_token: accessToken,
           refresh_token: refreshToken,
           token_type: "Bearer",
           expires_in: lifetime,
@@ -205,8 +213,10 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
         if (!validRefreshTokens.has(presented)) {
           return json(400, { error: "invalid_grant", error_description: "refresh token is unknown or has been rotated out" });
         }
+        const accessToken = `access-${randomBytes(8).toString("hex")}`;
+        validAccessTokens.add(accessToken);
         const response: Record<string, unknown> = {
-          access_token: `access-${randomBytes(8).toString("hex")}`,
+          access_token: accessToken,
           token_type: "Bearer",
           expires_in: lifetime,
         };
@@ -239,6 +249,10 @@ export async function startFakeAuthServer(options: FakeAuthServerOptions = {}): 
       return registrations;
     },
     isRefreshTokenValid: (token: string) => validRefreshTokens.has(token),
+    isAccessTokenValid: (token: string) => validAccessTokens.has(token),
+    revokeAccessToken: (token: string) => {
+      validAccessTokens.delete(token);
+    },
     async authorizeViaBrowser(authorizationUrl: string): Promise<void> {
       // What a browser does: GET the authorization URL, then follow the
       // 302 to the client's loopback callback.

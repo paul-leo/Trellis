@@ -13,7 +13,7 @@
  * failures in whatever way suits them.
  */
 
-import { Client, StreamableHTTPClientTransport, SSEClientTransport } from "@modelcontextprotocol/client";
+import { Client, StreamableHTTPClientTransport, SSEClientTransport, type AuthProvider } from "@modelcontextprotocol/client";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { resolveSecretEnv } from "./secretEnv.js";
 import { extractTemplateVarNames } from "./envVarNames.js";
@@ -131,10 +131,18 @@ export async function connectHttp(
   secretsPolicy: SecretsPolicy,
   timeoutMs: number,
   clientInfo: McpClientInfo,
+  authProvider?: AuthProvider,
 ): Promise<Client> {
   const client = new Client(clientInfo, { capabilities: {}, versionNegotiation: { mode: "auto", probe: { timeoutMs } } });
   const headers = resolveHeaders(def, secretsPolicy);
-  const opts = headers ? { requestInit: { headers } } : undefined;
+  // authProvider is the SDK's per-request credential seam: `token()` runs
+  // as each request's headers are assembled and its result overrides
+  // `requestInit`'s Authorization — the alternative to burning a Bearer
+  // into the static headers once at connect time.
+  const opts = {
+    ...(headers ? { requestInit: { headers } } : {}),
+    ...(authProvider ? { authProvider } : {}),
+  };
   return connectWithCleanup(
     client,
     new StreamableHTTPClientTransport(new URL(def.url!), opts),
@@ -148,11 +156,15 @@ export async function connectSse(
   secretsPolicy: SecretsPolicy,
   timeoutMs: number,
   clientInfo: McpClientInfo,
+  authProvider?: AuthProvider,
 ): Promise<Client> {
   // HTTP+SSE is a legacy transport; it cannot carry modern discovery.
   const client = new Client(clientInfo, { capabilities: {} });
   const headers = resolveHeaders(def, secretsPolicy);
-  const opts = headers ? { requestInit: { headers } } : undefined;
+  const opts = {
+    ...(headers ? { requestInit: { headers } } : {}),
+    ...(authProvider ? { authProvider } : {}),
+  };
   return connectWithCleanup(
     client,
     new SSEClientTransport(new URL(def.url!), opts),
@@ -171,8 +183,9 @@ export function connectServer(
   secretsPolicy: SecretsPolicy,
   timeoutMs: number,
   clientInfo: McpClientInfo,
+  authProvider?: AuthProvider,
 ): Promise<Client> {
-  if (def.transport === "http") return connectHttp(def, secretsPolicy, timeoutMs, clientInfo);
-  if (def.transport === "sse") return connectSse(def, secretsPolicy, timeoutMs, clientInfo);
+  if (def.transport === "http") return connectHttp(def, secretsPolicy, timeoutMs, clientInfo, authProvider);
+  if (def.transport === "sse") return connectSse(def, secretsPolicy, timeoutMs, clientInfo, authProvider);
   return connectStdio(def, secretsPolicy, timeoutMs, clientInfo);
 }

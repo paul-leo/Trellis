@@ -20,10 +20,11 @@ import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 import { isOAuthAuth, oauthOwner } from "../core/types.js";
 import { connectServer, type McpClientInfo } from "./mcpConnect.js";
 import { withTimeout } from "./mcpConnect.js";
-import { ensureFreshToken } from "./oauth/refresh.js";
+import { ensureFreshToken, forceRefresh, RefreshError } from "./oauth/refresh.js";
 import { readToken } from "./oauth/store.js";
+import type { FetchLike } from "./oauth/discovery.js";
 import { McpToolRegistry, type AggregatedTool, type ToolUpstream } from "./mcpToolRegistry.js";
-import type { Client, Resource, ReadResourceResult } from "@modelcontextprotocol/client";
+import type { AuthProvider, Client, Resource, ReadResourceResult } from "@modelcontextprotocol/client";
 import type { SkillEntry } from "./skillManifest.js";
 import { UpstreamResources } from "./upstreamResources.js";
 
@@ -133,9 +134,23 @@ export class LocalBackend implements GatewayBackend {
       }
     }
 
+    // Per-request credential resolution: the SDK calls token() as each
+    // request's headers are assembled, so a token refreshed here — by this
+    // process, or written to disk by `trellis mcp auth` in another
+    // terminal — affects the very next request, no restart. The static
+    // header from withOAuthHeader stays as the connect-time fallback.
+    const authProvider = options.homeDir && (transport === "http" || transport === "sse") && oauthAttachApplies(def)
+      ? trellisAuthProvider({
+          homeDir: options.homeDir,
+          serverName: name,
+          onCredentialRecovered: () => this.restoreIfAuthRequired(name),
+          onCredentialFailure: (err) => this.markCredentialFailure(name, transport, err),
+        })
+      : undefined;
+
     let client: ConnectedUpstream;
     try {
-      client = await connectServer(effectiveDef, options.secretsPolicy, options.connectTimeoutMs, options.clientInfo);
+      client = await connectServer(effectiveDef, options.secretsPolicy, options.connectTimeoutMs, options.clientInfo, authProvider);
     } catch (err) {
       this.warn(`trellis-mcp-gateway: failed to connect to MCP server "${name}": ${errorText(err)}`);
       this.statuses.set(name, failureStatus(name, def, err));
@@ -212,6 +227,40 @@ export class LocalBackend implements GatewayBackend {
       this.warn(`trellis-mcp-gateway: failed to close MCP client: ${errorText(err)}`);
     }
   }
+
+  /** A dead grant surfaces mid-session: this upstream's calls now fail,
+   * but its tools stay registered and every other upstream keeps serving.
+   * The credential resolves per request, so the human's re-authorization
+   * takes effect on the next call — no session restart required. */
+  private markCredentialFailure(name: string, transport: UpstreamStatus["transport"], err: unknown): void {
+    const previous = this.statuses.get(name);
+    this.statuses.set(name, {
+      name,
+      transport,
+      status: "auth-required",
+      toolCount: previous?.toolCount,
+      detail: errorText(err).slice(0, 300),
+      remediationKind: "oauth",
+      requiresHuman: true,
+      requiresSessionRestart: false,
+      remediation: `run \`trellis mcp auth ${name}\` in a human terminal — the running gateway picks the new credential up on its next request`,
+    });
+    this.warn(`trellis-mcp-gateway: MCP server "${name}" needs re-authorization: ${errorText(err)}`);
+  }
+
+  private restoreIfAuthRequired(name: string): void {
+    const current = this.statuses.get(name);
+    if (!current || current.status !== "auth-required") return;
+    this.statuses.set(name, {
+      ...current,
+      status: "ready",
+      detail: `credential recovered; ${current.toolCount ?? 0} tool(s) available`,
+      remediation: undefined,
+      remediationKind: undefined,
+      requiresHuman: undefined,
+      requiresSessionRestart: undefined,
+    });
+  }
 }
 
 function failureStatus(name: string, def: McpServerDef, error: unknown): UpstreamStatus {
@@ -263,6 +312,19 @@ function failureStatus(name: string, def: McpServerDef, error: unknown): Upstrea
 }
 
 /**
+ * Whether the gateway manages the OAuth credential for this definition:
+ * Trellis-owned OAuth, and no explicit `Authorization` header — someone
+ * who wrote one in canonical meant it, and silently overriding it with a
+ * stored token would be the kind of invisible precedence that is
+ * impossible to debug. Both `withOAuthHeader` and the per-request
+ * `AuthProvider` attach on exactly this predicate.
+ */
+export function oauthAttachApplies(def: McpServerDef): boolean {
+  return isOAuthAuth(def.auth) && oauthOwner(def.auth) === "trellis"
+    && !Object.keys(def.headers ?? {}).some((key) => key.toLowerCase() === "authorization");
+}
+
+/**
  * Attaches a stored OAuth token, refreshing it first if it has expired.
  *
  * Returns the definition unchanged when nothing is stored for this
@@ -270,14 +332,10 @@ function failureStatus(name: string, def: McpServerDef, error: unknown): Upstrea
  * OAuth at all, or one whose credential lives in `headers` already, and
  * neither should be disturbed.
  *
- * An explicit `Authorization` header in canonical wins. Someone who wrote
- * one meant it, and silently overriding it with a stored token would be
- * the kind of invisible precedence that is impossible to debug.
+ * An explicit `Authorization` header in canonical wins.
  */
 export async function withOAuthHeader(name: string, def: McpServerDef, homeDir: string): Promise<McpServerDef> {
-  if (!isOAuthAuth(def.auth) || oauthOwner(def.auth) !== "trellis") return def;
-  const hasExplicitAuth = Object.keys(def.headers ?? {}).some((key) => key.toLowerCase() === "authorization");
-  if (hasExplicitAuth) return def;
+  if (!oauthAttachApplies(def)) return def;
 
   const stored = readToken(homeDir, name);
   const resource = new URL(def.url!);
@@ -288,6 +346,85 @@ export async function withOAuthHeader(name: string, def: McpServerDef, homeDir: 
   if (!token) return def;
 
   return { ...def, headers: { ...(def.headers ?? {}), Authorization: `Bearer ${token.accessToken}` } };
+}
+
+/**
+ * The early-refresh window on the gateway's per-request path. Minute-scale
+ * on purpose: a request that passes the freshness check must not carry a
+ * token that dies mid-flight. `store.ts`'s 60s default is untouched —
+ * `mcp auth`/`mcp renew` don't have this problem.
+ */
+export const GATEWAY_REFRESH_SKEW_MS = 300_000;
+
+export interface TrellisAuthProviderOptions {
+  homeDir: string;
+  serverName: string;
+  /** Test seam; defaults to the gateway window. */
+  skewMs?: number;
+  fetchImpl?: FetchLike;
+  now?: () => number;
+  /** Fired when pre-request resolution produced a credential while this
+   * server sat in auth-required — the backend restores its status. */
+  onCredentialRecovered?: () => void;
+  /** Fired when the 401-forced refresh failed — the backend marks this
+   * server auth-required with the OAuth remediation. */
+  onCredentialFailure?: (err: unknown) => void;
+}
+
+/**
+ * The SDK `AuthProvider` for one Trellis-owned OAuth upstream: `token()`
+ * runs as each outbound request's headers are assembled, so credentials
+ * resolve per request instead of once at connect time.
+ *
+ * Every read goes back to the token file with no memory cache — that is
+ * what makes a refresh by `trellis mcp auth` in another terminal take
+ * effect on the very next request of a running gateway (D6).
+ */
+export function trellisAuthProvider(opts: TrellisAuthProviderOptions): AuthProvider {
+  let lastIssued: string | undefined;
+  return {
+    token: async () => {
+      try {
+        const token = await ensureFreshToken(opts.homeDir, opts.serverName, {
+          skewMs: opts.skewMs ?? GATEWAY_REFRESH_SKEW_MS,
+          fetchImpl: opts.fetchImpl,
+          now: opts.now,
+        });
+        if (!token) return undefined;
+        lastIssued = token.accessToken;
+        opts.onCredentialRecovered?.();
+        return token.accessToken;
+      } catch {
+        // The pre-request credential check must never abort the request
+        // pipeline (D3): send whatever is stored — possibly stale — and
+        // let the server's 401 path decide the outcome.
+        return readToken(opts.homeDir, opts.serverName)?.accessToken;
+      }
+    },
+    onUnauthorized: async () => {
+      // The server just rejected a token that looked fine locally; the
+      // expiry check is exactly what must be bypassed. The transport
+      // retries the request once after this resolves — and when this
+      // throws instead, the SDK propagates the error to this one call
+      // as-is (pinned by test), so the message names the way out.
+      try {
+        await forceRefresh(opts.homeDir, opts.serverName, {
+          previousAccessToken: lastIssued,
+          fetchImpl: opts.fetchImpl,
+          now: opts.now,
+        });
+      } catch (err) {
+        opts.onCredentialFailure?.(err);
+        const base = err instanceof Error ? err.message : String(err);
+        throw new RefreshError(
+          base.includes("trellis mcp auth")
+            ? base
+            : `${base} — run \`trellis mcp auth ${opts.serverName}\` in a human terminal; the running gateway picks the new credential up on its next request`,
+          err instanceof RefreshError ? err.oauthError : undefined,
+        );
+      }
+    },
+  };
 }
 
 function errorText(err: unknown): string {

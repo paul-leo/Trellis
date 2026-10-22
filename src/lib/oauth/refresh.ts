@@ -68,6 +68,49 @@ export async function ensureFreshToken(homeDir: string, serverName: string, opts
   );
 }
 
+export interface ForceRefreshOptions extends RefreshOptions {
+  /** The access token the caller last saw rejected (e.g. by a 401). When
+   * the stored credential already holds a different access token, another
+   * process refreshed in between and that result is returned as-is. */
+  previousAccessToken?: string;
+}
+
+/**
+ * Refreshes regardless of expiry — the 401 recovery path.
+ *
+ * The server just rejected a token that still looks unexpired locally
+ * (revoked early, clock skew, a stale read), so `ensureFreshToken`'s
+ * freshness check is exactly the thing that must be bypassed. Everything
+ * else matches it: per-server lock, in-lock re-read, rotation persisted.
+ */
+export async function forceRefresh(homeDir: string, serverName: string, opts: ForceRefreshOptions = {}): Promise<StoredToken> {
+  const existing = readToken(homeDir, serverName);
+  if (!existing) {
+    throw new RefreshError(`OAuth token for "${serverName}" is gone — run \`trellis mcp auth ${serverName}\``);
+  }
+
+  return withServerLock(
+    homeDir,
+    serverName,
+    async () => {
+      // Re-read inside the lock. With the expiry check gone, "someone else
+      // got here first" can only be detected by identity: if the stored
+      // access token is no longer the one we saw rejected, a concurrent
+      // refresh already fixed things and rotating again would kill its
+      // result.
+      const current = readToken(homeDir, serverName) ?? existing;
+      if (opts.previousAccessToken !== undefined && current.accessToken !== opts.previousAccessToken) return current;
+      if (!current.refreshToken) {
+        throw new RefreshError(`OAuth token for "${serverName}" has no refresh token — run \`trellis mcp auth ${serverName}\``);
+      }
+      const refreshed = await performRefresh(serverName, current, opts);
+      writeToken(homeDir, serverName, refreshed);
+      return refreshed;
+    },
+    { timeoutMs: opts.lockTimeoutMs, now: opts.now },
+  );
+}
+
 export async function performRefresh(serverName: string, token: StoredToken, opts: RefreshOptions = {}): Promise<StoredToken> {
   const fetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(opts.timeoutMs ?? 10_000) }));
   const now = opts.now ?? Date.now;
