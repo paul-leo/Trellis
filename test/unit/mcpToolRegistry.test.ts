@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { allocateExposedToolNames, EXPOSED_TOOL_NAME_PATTERN, MAX_EXPOSED_TOOL_NAME_LENGTH, McpToolRegistry, prefixedToolName, type AggregatedTool, type ToolUpstream } from "../../src/lib/mcpToolRegistry.js";
+import { allocateExposedToolNames, EXPOSED_TOOL_NAME_PATTERN, MAX_EXPOSED_TOOL_NAME_LENGTH, McpToolRegistry, normalizedToolName, prefixedToolName, type AggregatedTool, type ToolUpstream } from "../../src/lib/mcpToolRegistry.js";
 
 interface FakeUpstream extends ToolUpstream {
   calls: Array<{ name: string; arguments?: Record<string, unknown> }>;
@@ -170,4 +170,37 @@ test("registry: a prefixed-name collision gets deterministic suffixes and keeps 
   await registry.callTool("a__b__c__2");
   assert.equal(first.calls.length, 1);
   assert.equal(third.calls.length, 1);
+});
+
+test("registry: replace swaps a server's whole registration and reflects a changed tool set", async () => {
+  const registry = new McpToolRegistry();
+  const original = fakeUpstream("alpha", []);
+  registry.add("alpha", original, [{ name: "search" }, { name: "extra" }]);
+  assert.deepEqual((await registry.listTools()).map((tool) => tool.name), ["alpha__extra", "alpha__search"]);
+
+  const rebuilt = fakeUpstream("alpha-rebuilt", []);
+  const result = registry.replace("alpha", rebuilt, [{ name: "renamed" }]);
+
+  assert.deepEqual(result.skipped, []);
+  assert.deepEqual((await registry.listTools()).map((tool) => tool.name), ["alpha__renamed"], "old names are gone, the fresh set is registered");
+  assert.deepEqual(registry.servers(), ["alpha"]);
+  await registry.callTool("alpha__renamed", { q: 1 });
+  assert.equal(original.calls.length, 0, "the replaced upstream is never called again");
+  assert.deepEqual(rebuilt.calls, [{ name: "renamed", arguments: { q: 1 } }]);
+});
+
+test("registry: a name freed by replace is re-allocated deterministically to the survivors", async () => {
+  const long = "tool-name-that-is-long-enough-to-force-a-bounded-server-prefix-1234567890";
+  const registry = new McpToolRegistry();
+  registry.add("alpha", fakeUpstream("a", []), [{ name: long }]);
+  registry.add("beta", fakeUpstream("b", []), [{ name: long }]);
+  const withBoth = (await registry.listTools()).map((tool) => tool.name);
+  assert.notEqual(withBoth[0], withBoth[1], "the collision forces two names while both servers hold the tool");
+
+  registry.replace("alpha", fakeUpstream("a2", []), [{ name: "something-else-entirely-long-enough-to-be-unique-abcdefgh" }]);
+
+  // The allocator runs globally, so beta's now-unique tool reclaims the
+  // unprefixed long name deterministically — accepted drift, pinned here.
+  const after = (await registry.listTools()).map((tool) => tool.name);
+  assert.deepEqual(after, ["something-else-entirely-long-enough-to-be-unique-abcdefgh", normalizedToolName(long)]);
 });

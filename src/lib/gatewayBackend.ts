@@ -25,6 +25,7 @@ import { readToken } from "./oauth/store.js";
 import type { FetchLike } from "./oauth/discovery.js";
 import { McpToolRegistry, type AggregatedTool, type ToolUpstream } from "./mcpToolRegistry.js";
 import type { AuthProvider, Client, Resource, ReadResourceResult } from "@modelcontextprotocol/client";
+import { ProtocolError, SdkHttpError } from "@modelcontextprotocol/client";
 import type { SkillEntry } from "./skillManifest.js";
 import { UpstreamResources } from "./upstreamResources.js";
 
@@ -50,7 +51,11 @@ export interface UpstreamSpec {
   def: McpServerDef;
 }
 
-export type UpstreamStatusKind = "ready" | "auth-required" | "unavailable" | "timeout" | "degraded";
+/** `reconnecting` is the transient state between a detected session
+ * invalidation and the recovery outcome (spec: an upstream whose MCP
+ * session is invalidated mid-session is recovered alone, with a status
+ * that never claims ready in the meantime). */
+export type UpstreamStatusKind = "ready" | "auth-required" | "unavailable" | "timeout" | "degraded" | "reconnecting";
 
 export interface UpstreamStatus {
   name: string;
@@ -86,6 +91,10 @@ export interface LocalBackendOptions {
    * no terminal attached (design.md D9).
    */
   homeDir?: string;
+  /** How long a server whose mid-session recovery failed refuses automatic
+   * re-attempts, so a down upstream cannot trigger a reconnect storm. Test
+   * seam; defaults to `SESSION_RECOVERY_COOLDOWN_MS`. */
+  sessionRecoveryCooldownMs?: number;
 }
 
 type ConnectedUpstream = Client;
@@ -101,25 +110,50 @@ type ConnectedUpstream = Client;
  */
 export class LocalBackend implements GatewayBackend {
   private readonly registry = new McpToolRegistry();
-  private readonly connected = new Set<ConnectedUpstream>();
+  /** server name → the client currently serving that upstream. Keyed by
+   * name (not a Set of clients) because recovery swaps the client under a
+   * stable name and callTool must ask "is this still the client I called?"
+   * by comparing against the current registration. */
+  private readonly connected = new Map<string, ConnectedUpstream>();
   private readonly statuses = new Map<string, UpstreamStatus>();
+  /** Saved at connect time so a mid-session recovery can rebuild the
+   * upstream through `addUpstream` itself — the recovery path IS the
+   * startup path, and inherits its OAuth resolution and special cases
+   * (mcp-router) wholesale instead of growing a parallel one. */
+  private readonly upstreamConfigs = new Map<string, { spec: UpstreamSpec; options: LocalBackendOptions }>();
+  /** server name → in-flight session recovery; one recovery per server at
+   * a time, every racing caller awaits the same promise. */
+  private readonly recoveries = new Map<string, Promise<void>>();
+  /** server name → cooldown expiry; a recently failed recovery is not
+   * re-attempted until it lapses, so a down upstream sees one reconnect
+   * attempt per window, not a storm. */
+  private readonly sessionCooldowns = new Map<string, number>();
   private closed = false;
   private readonly resources: UpstreamResources;
 
-  private constructor(private readonly warn: (message: string) => void, timeoutMs: number) {
+  private constructor(
+    private readonly warn: (message: string) => void,
+    timeoutMs: number,
+    private readonly sessionCooldownMs: number,
+  ) {
     this.resources = new UpstreamResources(timeoutMs, warn);
   }
 
   static async connect(upstreams: readonly UpstreamSpec[], options: LocalBackendOptions): Promise<LocalBackend> {
     const warn = options.onWarning ?? ((message: string) => console.error(message));
-    const backend = new LocalBackend(warn, options.connectTimeoutMs);
+    const backend = new LocalBackend(warn, options.connectTimeoutMs, options.sessionRecoveryCooldownMs ?? SESSION_RECOVERY_COOLDOWN_MS);
     await Promise.all(upstreams.map((upstream) => backend.addUpstream(upstream, options)));
     return backend;
   }
 
-  private async addUpstream({ name, def }: UpstreamSpec, options: LocalBackendOptions): Promise<void> {
+  private async addUpstream({ name, def }: UpstreamSpec, options: LocalBackendOptions, replaceOf?: ConnectedUpstream): Promise<void> {
+    this.upstreamConfigs.set(name, { spec: { name, def }, options });
     const transport = def.transport === "http" || def.transport === "sse" ? def.transport : "stdio";
-    this.statuses.set(name, { name, transport, status: "unavailable", detail: "connecting" });
+    // A recovery set `reconnecting` before calling us; a first connect
+    // reports "connecting". The recovery's status stays until the outcome.
+    if (replaceOf === undefined) {
+      this.statuses.set(name, { name, transport, status: "unavailable", detail: "connecting" });
+    }
     let effectiveDef = def;
     if (options.homeDir && def.url) {
       try {
@@ -139,6 +173,10 @@ export class LocalBackend implements GatewayBackend {
     // process, or written to disk by `trellis mcp auth` in another
     // terminal — affects the very next request, no restart. The static
     // header from withOAuthHeader stays as the connect-time fallback.
+    // (A mid-session recovery rebuilds this provider, so its `lastIssued`
+    // starts empty again: the first post-recovery 401 force-refreshes with
+    // no previous-token guard — at most one extra rotation, and safe,
+    // because forceRefresh re-reads the token file under its lock.)
     const authProvider = options.homeDir && (transport === "http" || transport === "sse") && oauthAttachApplies(def)
       ? trellisAuthProvider({
           homeDir: options.homeDir,
@@ -153,10 +191,19 @@ export class LocalBackend implements GatewayBackend {
       client = await connectServer(effectiveDef, options.secretsPolicy, options.connectTimeoutMs, options.clientInfo, authProvider);
     } catch (err) {
       this.warn(`trellis-mcp-gateway: failed to connect to MCP server "${name}": ${errorText(err)}`);
+      // A failed recovery keeps the replaced client: its dead session is
+      // what keeps surfacing the error that re-triggers recovery once the
+      // cooldown expires — close-after-success, never orphaned mid-failure.
+      if (replaceOf !== undefined) this.connected.set(name, replaceOf);
       this.statuses.set(name, failureStatus(name, def, err));
       return;
     }
-    this.connected.add(client);
+    this.connected.set(name, client);
+
+    // Routes (and any skill registrations) a previous incarnation of this
+    // source left behind would route reads at the replaced client — forget
+    // the source entirely; the fresh registration re-adds its routes below.
+    this.resources.removeSource(name);
 
     let tools: AggregatedTool[];
     try {
@@ -166,12 +213,19 @@ export class LocalBackend implements GatewayBackend {
       tools = result.tools;
     } catch (err) {
       this.warn(`trellis-mcp-gateway: failed to list tools for MCP server "${name}": ${errorText(err)}`);
-      await this.closeUpstream(client);
+      this.connected.delete(name);
+      if (replaceOf !== undefined) this.connected.set(name, replaceOf);
+      await this.closeClient(client);
       this.statuses.set(name, failureStatus(name, def, err));
       return;
     }
 
-    const { skipped } = this.registry.add(name, client, tools);
+    // A recovery swaps this server's whole registration: its previous
+    // candidates are dropped first, so a changed upstream tool set is
+    // reflected exactly rather than accumulated.
+    const { skipped } = replaceOf !== undefined
+      ? this.registry.replace(name, client, tools)
+      : this.registry.add(name, client, tools);
     this.resources.add(name, client);
     for (const collided of skipped) {
       this.warn(`trellis-mcp-gateway: tool "${collided}" from server "${name}" collides with an already-registered tool and was skipped`);
@@ -191,6 +245,11 @@ export class LocalBackend implements GatewayBackend {
     } else {
       this.statuses.set(name, { name, transport, status: "ready", toolCount: tools.length, detail: `connected; ${tools.length} tool(s) available` });
     }
+    // The fresh registration serves; only now is the replaced client
+    // retired. Callers mid-flight on it finish against it — their stale
+    // session errors are guarded in callTool and never start a second
+    // recovery — and a failed recovery left the old client connected.
+    if (replaceOf !== undefined) await this.closeClient(replaceOf);
   }
 
   async listTools(): Promise<AggregatedTool[]> {
@@ -198,7 +257,44 @@ export class LocalBackend implements GatewayBackend {
   }
 
   async callTool(name: string, args?: Record<string, unknown>): Promise<unknown> {
-    return this.registry.callTool(name, args);
+    let target = this.registry.resolve(name);
+    if (!target) throw new Error(`unknown tool "${name}"`);
+    // A server inside its recovery cooldown fails hard and immediately:
+    // its automatic recovery is known to be failing, and a reconnect
+    // storm against a down upstream buys nothing (D3).
+    const blocked = this.sessionCooldownBlock(target.serverName);
+    if (blocked) throw blocked;
+    // A recovery already in flight — started by a concurrent caller.
+    // Wait it out and aim at whatever registration it lands.
+    const pending = this.recoveries.get(target.serverName);
+    if (pending) {
+      await pending;
+      target = this.registry.resolve(name);
+      if (!target) throw new Error(`unknown tool "${name}"`);
+    }
+    try {
+      return await target.upstream.callTool({ name: target.toolName, arguments: args });
+    } catch (err) {
+      const { serverName } = target;
+      if (this.closed || !isSessionInvalidation(err)) throw this.upstreamCallError(serverName, err);
+      // A completed recovery already replaced the client this error came
+      // from (a racing caller's reconnect won): the stale error must not
+      // start a second recovery — just aim at the fresh registration.
+      const current = this.connected.get(serverName);
+      if (current === undefined || current === target.upstream) {
+        await this.ensureSessionRecovered(serverName, err);
+      }
+      const retried = this.registry.resolve(name);
+      if (!retried) throw new Error(`unknown tool "${name}"`);
+      try {
+        return await retried.upstream.callTool({ name: retried.toolName, arguments: args });
+      } catch (retryErr) {
+        // The fresh session failed the same way: an honest terminal state
+        // plus a cooldown — never a stale ready (D4).
+        if (isSessionInvalidation(retryErr)) this.markRetrySessionFailure(retried.serverName, retryErr);
+        throw this.upstreamCallError(retried.serverName, retryErr);
+      }
+    }
   }
 
   listResources(): Promise<Resource[]> { return this.resources.listResources(); }
@@ -213,13 +309,12 @@ export class LocalBackend implements GatewayBackend {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    const pending = [...this.connected];
+    const pending = [...this.connected.values()];
     this.connected.clear();
-    await Promise.all(pending.map((client) => this.closeUpstream(client)));
+    await Promise.all(pending.map((client) => this.closeClient(client)));
   }
 
-  private async closeUpstream(client: ConnectedUpstream): Promise<void> {
-    this.connected.delete(client);
+  private async closeClient(client: ConnectedUpstream): Promise<void> {
     try {
       await client.close();
     } catch (err) {
@@ -261,6 +356,158 @@ export class LocalBackend implements GatewayBackend {
       requiresSessionRestart: undefined,
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // Mid-session recovery (spec: an upstream whose MCP session is invalidated
+  // is recovered alone, in flight — restart is the remediation of last
+  // resort, not the default)
+  // ---------------------------------------------------------------------------
+
+  /** The pre-call hard failure for a server inside its recovery cooldown. */
+  private sessionCooldownBlock(serverName: string): Error | undefined {
+    const until = this.sessionCooldowns.get(serverName);
+    if (until === undefined || Date.now() >= until) return undefined;
+    return new Error(sessionRecoveryHint(serverName, "a recovery attempt failed recently and its cooldown has not expired"));
+  }
+
+  private enterSessionCooldown(serverName: string): void {
+    this.sessionCooldowns.set(serverName, Date.now() + this.sessionCooldownMs);
+  }
+
+  /** Join the server's in-flight recovery, or start exactly one. */
+  private ensureSessionRecovered(serverName: string, trigger: unknown): Promise<void> {
+    const blocked = this.sessionCooldownBlock(serverName);
+    if (blocked) return Promise.reject(blocked);
+    const existing = this.recoveries.get(serverName);
+    if (existing) return existing;
+    const pending = this.reconnectUpstream(serverName, trigger);
+    this.recoveries.set(serverName, pending);
+    const cleanup = () => {
+      if (this.recoveries.get(serverName) === pending) this.recoveries.delete(serverName);
+    };
+    pending.then(cleanup, cleanup);
+    return pending;
+  }
+
+  /** Drop and rebuild one upstream through the exact startup path
+   * (`addUpstream`), keeping the old client connected until the fresh
+   * registration serves — so a failed recovery still surfaces the old
+   * session errors that re-trigger recovery after the cooldown, and the
+   * replaced connection is never closed before its successor exists. */
+  private async reconnectUpstream(serverName: string, trigger: unknown): Promise<void> {
+    const config = this.upstreamConfigs.get(serverName);
+    if (!config) throw new Error(sessionRecoveryHint(serverName, "no saved connection config exists for it"));
+    // Preserve the tool count through reconnecting and failure: Agents
+    // reasoning about capability see the same number on both sides of a
+    // recovery, whatever its outcome (a success overwrites it with the
+    // fresh count inside addUpstream).
+    const toolCount = this.statuses.get(serverName)?.toolCount;
+    this.statuses.set(serverName, {
+      name: serverName,
+      transport: transportOf(config.spec.def),
+      status: "reconnecting",
+      toolCount,
+      detail: `MCP session invalidated; reconnecting (${errorText(trigger).slice(0, 160)})`,
+    });
+    try {
+      await this.addUpstream(config.spec, config.options, this.connected.get(serverName));
+    } catch (err) {
+      // addUpstream isolates its own failures into statuses; reaching here
+      // is a bug guard, not the expected failure path.
+      this.statuses.set(serverName, { ...failureStatus(serverName, config.spec.def, err), toolCount, remediation: sessionRestartRemediation(serverName) });
+      this.enterSessionCooldown(serverName);
+      throw new Error(sessionRecoveryHint(serverName, errorText(err)));
+    }
+    const status = this.statuses.get(serverName);
+    if (status?.status === "ready" || status?.status === "degraded") {
+      this.sessionCooldowns.delete(serverName);
+      return;
+    }
+    // A failed recovery already landed in its classified failure status;
+    // sharpen its remediation to the restart hint and open the cooldown.
+    this.statuses.set(serverName, { ...status!, toolCount, remediation: sessionRestartRemediation(serverName) });
+    this.enterSessionCooldown(serverName);
+    throw new Error(sessionRecoveryHint(serverName, status?.detail ?? "the reconnect failed"));
+  }
+
+  /** The retried request failed on the fresh session too: an honest
+   * terminal state plus a cooldown — never a stale ready (D4). */
+  private markRetrySessionFailure(serverName: string, err: unknown): void {
+    const config = this.upstreamConfigs.get(serverName);
+    const previous = this.statuses.get(serverName);
+    const base = config
+      ? failureStatus(serverName, config.spec.def, err)
+      : {
+          name: serverName,
+          transport: "http" as const,
+          status: "unavailable" as const,
+          detail: errorText(err).slice(0, 300),
+          requiresHuman: true,
+          requiresSessionRestart: true,
+        };
+    this.statuses.set(serverName, {
+      ...base,
+      toolCount: previous?.toolCount,
+      remediation: sessionRestartRemediation(serverName),
+    });
+    this.enterSessionCooldown(serverName);
+  }
+
+  /** Upstream-originated failures name their server (spec: call errors
+   * name the failing upstream server). */
+  private upstreamCallError(serverName: string, err: unknown): Error {
+    return new Error(
+      `upstream "${serverName}" tool call failed: ${errorText(err)}`,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
+}
+
+/**
+ * How long a server whose session recovery failed refuses automatic
+ * re-attempts. Fixed by design: a reconnect storm against a down upstream
+ * buys nothing; the honest failure state plus this window is the v1
+ * answer, to be revisited with real-world data.
+ */
+export const SESSION_RECOVERY_COOLDOWN_MS = 30_000;
+
+function transportOf(def: McpServerDef): UpstreamStatus["transport"] {
+  if (def.transport === "sse") return "sse";
+  return def.url ? "http" : "stdio";
+}
+
+function sessionRestartRemediation(serverName: string): string {
+  return `restart the Agent session to re-establish the MCP session for "${serverName}"`;
+}
+
+function sessionRecoveryHint(serverName: string, reason: string): string {
+  return `upstream "${serverName}" MCP session invalidated and automatic recovery failed (${reason}) — ${sessionRestartRemediation(serverName)}`;
+}
+
+/**
+ * Whether an upstream error means "your MCP session no longer exists".
+ *
+ * The official TypeScript server SDK rejects an unknown session with HTTP
+ * 404 carrying the JSON-RPC error "Session not found", and pairs 401/403
+ * with -32000 for authentication rejections — so 401/403 gate the match
+ * out first, and an auth rejection can never enter recovery. The body
+ * reaches us inside the client SDK's `Error POSTing to endpoint: …`
+ * wrapper, so a word match covers custom upstream wordings (the real-world
+ * one says "MCP session no longer exists"). Real-machine verification
+ * (2026-10-23) showed custom upstreams also answer with other non-auth
+ * statuses — a 400 carrying that same -32000 body took the plain
+ * `SdkHttpError` path, not the enveloped `ProtocolError` one — hence the
+ * status gate is "not an auth rejection" rather than "exactly 404". A
+ * stray non-auth response that merely mentions "session" costs one
+ * idempotent-safe reconnect+retry, an acceptable price for covering every
+ * upstream wording. The `ProtocolError` branch covers the HTTP-200
+ * JSON-RPC error case, where the client SDK parses the envelope and
+ * rejects with the upstream's error code instead.
+ */
+export function isSessionInvalidation(err: unknown): boolean {
+  if (err instanceof SdkHttpError) return err.status !== 401 && err.status !== 403 && /session/i.test(err.message);
+  if (err instanceof ProtocolError) return err.code === -32000 && /session/i.test(err.message);
+  return false;
 }
 
 function failureStatus(name: string, def: McpServerDef, error: unknown): UpstreamStatus {

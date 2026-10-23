@@ -51,6 +51,15 @@ export class UpstreamResources {
 
   add(source: string, client: Client): void { this.clients.set(source, client); }
 
+  /** Forget one source entirely: its client and every file route it
+   * registered. Called before a source is re-added mid-session — stale
+   * routes would otherwise route reads at the closed previous client
+   * (`listResources`/`listSkills` re-register the fresh client's routes). */
+  removeSource(source: string): void {
+    this.clients.delete(source);
+    for (const [uri, route] of this.files) if (route.source === source) this.files.delete(uri);
+  }
+
   private skillsEnabled(client: Client): boolean {
     return Boolean(client.getServerCapabilities()?.resources && client.getDiscoverResult()?.capabilities.extensions?.[EXTENSION]);
   }

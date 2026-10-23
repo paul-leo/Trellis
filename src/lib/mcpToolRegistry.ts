@@ -185,6 +185,25 @@ export class McpToolRegistry {
     return { added, skipped: [] };
   }
 
+  /**
+   * Swap one server's entire registration — the mid-session recovery path.
+   * Every candidate the server previously contributed is dropped before the
+   * fresh tool set is added, so a changed upstream tool set is reflected
+   * exactly rather than accumulated. Exposed names are re-allocated across
+   * the whole registry, so a name this server frees may be re-assigned
+   * deterministically to another server's colliding tool — accepted drift,
+   * pinned by the spec scenario.
+   */
+  replace(serverName: string, upstream: ToolUpstream, tools: readonly AggregatedTool[]): AddResult {
+    const kept = this.candidates.filter((candidate) => candidate.serverName !== serverName);
+    this.candidates.length = 0;
+    this.candidates.push(...kept);
+    for (const tool of tools) this.candidates.push({ serverName, toolName: tool.name, upstream, tool });
+    this.rebuild();
+    const added = tools.map((tool) => this.exposedNameFor(serverName, tool.name)).filter((name): name is string => name !== undefined);
+    return { added, skipped: [] };
+  }
+
   private exposedNameFor(serverName: string, toolName: string): string | undefined {
     for (const [name, entry] of this.entries) {
       if (entry.serverName === serverName && entry.toolName === toolName) return name;
