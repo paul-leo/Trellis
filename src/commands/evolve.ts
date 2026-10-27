@@ -6,22 +6,26 @@
  * 删除;hostingIndependence.test.ts 的 CONSUMER_OWNED/CONSUMER_WIRING
  * 登记了这条移出清单。
  *
- * `trellis evolve <status | pending | approve | reject | enable | disable | rollback>`
+ * `trellis evolve <status | report | pending | approve | reject | apply | enable | disable | rollback>`
  *
  * 批准只走这里,且**仅限交互式终端**(spec"批准只走带外通道"):非交互
  * 环境一律拒绝,提案保持 pending。不存在任何 `--yes` / `--confirm` 之类的
  * 非交互批准捷径 —— agent 传入的"确认"参数不构成批准,加了也只会被当
- * 未知参数忽略。全部子命令零循环副作用:不写信号、不拉起作业、不触发
- * 同步(status/pending 纯读;approve/reject 只做状态迁移 + 档案;enable/
- * disable 写 canonical 级别策略,并按 design 8.1 同步扩展清单条目——
- * 级别升至 observe 及以上时写入、置回 off 时移除;rollback 转发既有备份
- * 会话回滚)。
+ * 未知参数忽略。循环副作用边界:不写信号、不触发观察/提案/probe。approve
+ * 决策后**立即应用**(spec"批准即应用与显式应用入口":持单飞作业锁经
+ * 备份会话写入,锁忙暂缓并告知);apply 幂等应用全部已批准未应用的编辑
+ * (失败重试与滞留消化入口);reject 只做状态迁移 + 档案;enable/disable
+ * 写 canonical 级别策略,并按 design 8.1 同步扩展清单条目——级别升至
+ * observe 及以上时写入、置回 off 时移除;rollback 转发既有备份会话回滚。
  */
 
 import { homedir } from "node:os";
 import {
+  classifyManagedObservation,
+  HostEditError,
   LEVELS,
   loadEvolveLevelPolicy,
+  triggerRenderSync,
   writeEvolveLevelPolicy,
   type EvolveLevelPolicy,
   type Level,
@@ -30,6 +34,8 @@ import { removeExtensionEntry, upsertExtensionEntry } from "../lib/hostExtension
 import { EVOLVE_EXTENSION_ID, evolveExtensionLoadSpecifier } from "../evolve/extension.js";
 import { ensureEvolveStateDir, ensureStateGitignored } from "../evolve/stateDir.js";
 import { buildEvolveReport, type EvolveReport } from "../evolve/reportView.js";
+import { applyApprovedProposals, type ApplyAgent, type ApplyApprovedResult } from "../evolve/apply.js";
+import { acquireJobLock, releaseJobLock } from "../evolve/trigger.js";
 import { runRollback } from "./rollback.js";
 import {
   decideProposal,
@@ -46,6 +52,10 @@ export interface EvolveCommandOptions {
   readonly isTTY?: boolean;
   /** 时间源(毫秒);缺省 Date.now。 */
   readonly now?: () => number;
+  /** 应用阶段的 agent 分类(测试/sandbox 注入缝;缺省按 delivery 分类)。 */
+  readonly applyAgents?: readonly ApplyAgent[];
+  /** 原生渲染同步触发缝(测试注入;缺省 host `triggerRenderSync`)。 */
+  readonly triggerSync?: () => Promise<{ exitCode: number }>;
 }
 
 const USAGE = [
@@ -54,8 +64,10 @@ const USAGE = [
   "  status [--json]                 级别与提案状态总览(只读,零副作用)",
   "  report [--json]                 进化报告:时间线/前后测量/趋势(只读,零副作用)",
   "  pending                         列出待批提案(摘要/证据/风险级别)",
-  "  approve <id>                    批准提案(仅交互式终端;批准≠应用)",
+  "  approve <id>                    批准并应用提案(仅交互式终端;批准即应用)",
   "  reject <id>                     拒绝提案(仅交互式终端)",
+  "  apply                           应用全部已批准未应用的提案(幂等;",
+  "                                  失败重试与滞留消化入口)",
   "  enable [--level <level>]        开启进化(default level,缺省 observe);",
   "                                  同步写入扩展清单条目(observe 及以上)",
   "  disable                         关闭进化(default level = off);移除扩展清单条目",
@@ -135,6 +147,11 @@ function renderStatusText(report: EvolveReport): void {
     console.log(`workspace ${root}: ${level}`);
   }
   console.log(`proposals: ${report.counts.pending} pending, ${report.counts.approved} approved, ${report.counts.rejected} rejected`);
+  if (report.counts.approvedUnapplied > 0) {
+    console.log(
+      `approved 未应用 ${report.counts.approvedUnapplied} 条:运行 \`trellis evolve apply\` 立即写入(或等待下次作业应用阶段)。`,
+    );
+  }
   if (report.notices.length > 0) {
     console.log("最近的自动采纳通知:");
     for (const notice of report.notices.slice(-3)) console.log(`  ${notice}`);
@@ -173,12 +190,12 @@ function renderReportText(report: EvolveReport): void {
   }
 }
 
-function runDecision(
+async function runDecision(
   homeDir: string,
   id: string,
   decision: ProposalDecision,
   options: EvolveCommandOptions,
-): number {
+): Promise<number> {
   if (id === undefined || id === "") {
     console.error(`trellis evolve: ${decision === "approved" ? "approve" : "reject"} 需要提案 id`);
     console.error(USAGE);
@@ -209,10 +226,70 @@ function runDecision(
     return 1;
   }
   if (decision === "approved") {
-    console.log(`已批准提案 ${id}(risk=${result.record.riskClass})。`);
-    console.log("批准不等于应用:已批准编辑将在应用阶段同一备份会话内写入,回滚用 `trellis evolve rollback --list`。");
-  } else {
-    console.log(`已拒绝提案 ${id}。`);
+    console.log(`已批准提案 ${id}(risk=${result.record.riskClass});批准即应用。`);
+    return await applyApprovedAndReport(homeDir, options);
+  }
+  console.log(`已拒绝提案 ${id}。`);
+  return 0;
+}
+
+/**
+ * 应用全部已批准未应用的提案并汇报(spec"批准即应用与显式应用入口")。
+ * 与作业应用阶段互斥:复用单飞作业锁防并发双写;锁忙时暂缓并如实告知
+ * (决策已完成、提案保持 approved,由本入口或作业应用阶段收尾)。
+ */
+async function applyApprovedAndReport(homeDir: string, options: EvolveCommandOptions): Promise<number> {
+  const agents: readonly ApplyAgent[] =
+    options.applyAgents ??
+    classifyManagedObservation(homeDir).map((entry) => ({
+      agent: entry.agent,
+      observation: entry.observation,
+    }));
+  const triggerSync = options.triggerSync ?? (async () => await triggerRenderSync({ homeDir }));
+  if (!acquireJobLock(homeDir, process.pid, Date.now())) {
+    console.log(
+      "已有作业在运行:本次应用暂缓(决策已完成,提案保持 approved)。" +
+        "作业的应用阶段会写入,也可稍后运行 `trellis evolve apply`。",
+    );
+    return 0;
+  }
+  try {
+    const result = await applyApprovedProposals({ homeDir, agents, triggerSync });
+    return renderApplyResult(result);
+  } catch (err) {
+    if (err instanceof HostEditError) {
+      console.error(`应用部分失败:${err.message}`);
+      console.error(
+        `已应用部分可回滚:trellis evolve rollback ${err.runId}。` +
+          "提案保持 approved,可经 `trellis evolve apply` 重试(编辑幂等重放)。",
+      );
+      return 1;
+    }
+    throw err;
+  } finally {
+    releaseJobLock(homeDir, process.pid);
+  }
+}
+
+function renderApplyResult(result: ApplyApprovedResult): number {
+  for (const id of result.skippedInvalidIds) {
+    console.log(`跳过 ${id}:应用前重校验不通过(pending 磁盘状态漂移?),未写入。`);
+  }
+  if (result.appliedProposalIds.length === 0) {
+    console.log(
+      result.alreadyAppliedIds.length > 0
+        ? "没有已批准未应用的提案(已应用过的不重复写入)。"
+        : "没有已批准未应用的提案。",
+    );
+    return 0;
+  }
+  console.log(`已应用 ${result.appliedProposalIds.length} 条提案:${result.appliedProposalIds.join(", ")}。`);
+  console.log(`备份会话 ${result.runId}。回滚:trellis evolve rollback ${result.runId}`);
+  for (const effect of result.effects) {
+    console.log(`生效时点 ${effect.agent}(${effect.observation}):${effect.effect}`);
+  }
+  if (result.syncError !== null) {
+    console.log(`注意:渲染同步触发失败:${result.syncError};可手动运行 \`trellis sync\`。`);
   }
   return 0;
 }
@@ -261,8 +338,17 @@ export async function runEvolveCommand(
     if (subcommand === "approve" || subcommand === "reject") {
       const id = rest.find((arg) => !arg.startsWith("-"));
       return {
-        exitCode: runDecision(homeDir, id ?? "", subcommand === "approve" ? "approved" : "rejected", options),
+        exitCode: await runDecision(
+          homeDir,
+          id ?? "",
+          subcommand === "approve" ? "approved" : "rejected",
+          options,
+        ),
       };
+    }
+
+    if (subcommand === "apply") {
+      return { exitCode: await applyApprovedAndReport(homeDir, options) };
     }
 
     if (subcommand === "enable" || subcommand === "disable") {

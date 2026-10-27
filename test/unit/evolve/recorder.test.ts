@@ -34,6 +34,7 @@ test("载荷不入库:字段白名单 + secrets 擦除,任何凭据形态不落�
     }),
   );
 
+  recorder.flush();
   const raw = readFileSync(recorder.filePath, "utf-8");
   assert.ok(!raw.includes(secret), "凭据形态不得出现在信号文件");
   assert.ok(!raw.includes(secretAssign), "key=value 凭据形态不得出现在信号文件");
@@ -58,7 +59,7 @@ test("并发两会话互不阻塞且不丢信号;跨进程各自分文件", () =
 
   recorder.handle(sessionStartEvent({ ts: 1, agent: "a", session: "sa", workspaceRoot: null }));
   recorder.handle(sessionStartEvent({ ts: 1, agent: "b", session: "sb", workspaceRoot: "/tmp/ws-b" }));
-  // 交错写入 100 + 100(同步 append 逐行原子,无锁、无等待)。
+  // 交错入队 100 + 100(队列化批量落盘,无锁、无等待)。
   for (let i = 0; i < 100; i++) {
     recorder.handle(toolCallEvent({ ts: 2, agent: "a", session: "sa", provider: "p", tool: "t", durationMs: 1, result: "ok" }));
     recorder.handle(toolCallEvent({ ts: 2, agent: "b", session: "sb", provider: "p", tool: "t", durationMs: 1, result: "ok" }));
@@ -74,8 +75,39 @@ test("并发两会话互不阻塞且不丢信号;跨进程各自分文件", () =
   // 跨进程:另一个 recorder(另一次 now → 另一文件)互不覆盖。
   const other = createSignalRecorder({ homeDir: home, now: () => 2000 });
   other.handle(toolCallEvent({ ts: 4, agent: "c", session: "sc", provider: "p", tool: "t", durationMs: 1, result: "ok" }));
+  other.flush();
   assert.notEqual(other.filePath, recorder.filePath);
   assert.equal(readSignals(recorder.filePath).length, 204);
+  assert.equal(readSignals(other.filePath).length, 1);
+});
+
+test("异步落盘契约:热路径不同步写盘;flush() 收口;会话边界事件同步落盘", async () => {
+  const home = scratchHome("recorder-async");
+  const recorder = createSignalRecorder({ homeDir: home });
+
+  // 会话边界事件(session_start)同步收口:补偿判定(订阅者顺序在后)
+  // 读盘时看得到含本事件在内的全部信号。
+  recorder.handle(sessionStartEvent({ ts: 1, agent: "a", session: "s", workspaceRoot: null }));
+  assert.equal(readSignals(recorder.filePath).length, 1, "边界事件同步落盘");
+
+  // 热路径(工具调用)不碰磁盘:同一同步块内不追加(review-fixes ❌4)。
+  recorder.handle(toolCallEvent({ ts: 2, agent: "a", session: "s", provider: "p", tool: "t", durationMs: 1, result: "ok" }));
+  assert.equal(readSignals(recorder.filePath).length, 1, "工具调用热路径不同步写盘");
+
+  // flush() 收口(测试/收尾语义)。
+  recorder.flush();
+  assert.equal(readSignals(recorder.filePath).length, 2);
+
+  // session_end 边界同步落盘:触发判定看得见本会话信号。
+  recorder.handle(toolCallEvent({ ts: 3, agent: "a", session: "s", provider: "p", tool: "t", durationMs: 1, result: "ok" }));
+  recorder.handle(sessionEndEvent({ ts: 4, agent: "a", session: "s" }));
+  assert.equal(readSignals(recorder.filePath).length, 4);
+
+  // setImmediate 合并当轮:turn 结束后批量可见。
+  const other = createSignalRecorder({ homeDir: home, now: () => 5000 });
+  other.handle(toolCallEvent({ ts: 5, agent: "b", session: "sb", provider: "p", tool: "t", durationMs: 1, result: "ok" }));
+  assert.equal(readSignals(other.filePath).length, 0);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(readSignals(other.filePath).length, 1);
 });
 
@@ -99,6 +131,7 @@ test("层归属派生:session 的 workspace 归属贯穿该会话信号,无归�
   // 无 session_start 的会话:全局层。
   recorder.handle(toolCallEvent({ ts: 2, agent: "a", session: "orphan", provider: "p", tool: "t", durationMs: 1, result: "error" }));
 
+  recorder.flush();
   const signals = readSignals(recorder.filePath);
   assert.deepEqual(signals[0]!.layer, { kind: "workspace", root: "/tmp/ws-alpha" });
   assert.deepEqual(signals[1]!.layer, { kind: "workspace", root: "/tmp/ws-alpha" });

@@ -5,7 +5,7 @@
 
 ## 接手指南
 
-**一句话现状**:阶段一(tasks 第 1–14 组)已交付:引擎移植为 workspace 内部包 `packages/evolve-engine/`(golden 对照 175/175)、托管扩展点、TrellisSubstrate 适配层、observe/触发、L4 治理与 fixture 端到端,宿主测试 1216/1216、`tsc` 干净、`openspec validate --strict` 通过、真机冒烟确认默认 `off` 零副作用。**生产接线已补齐(2026-10-26 收口)**:enable/disable 同步扩展清单、`activate` 订阅者包装(recorder + 触发器)、作业体引擎循环,见下文"生产接线"。后续是 `auto-A` 准入、L2/探针任务集、阶段二公开包。
+**一句话现状**:阶段一(tasks 第 1–14 组)已交付:引擎移植为 workspace 内部包 `packages/evolve-engine/`(golden 对照 175/175)、托管扩展点、TrellisSubstrate 适配层、observe/触发、L4 治理与 fixture 端到端,宿主测试 1216/1216、`tsc` 干净、`openspec validate --strict` 通过、真机冒烟确认默认 `off` 零副作用。**生产接线已补齐(2026-10-26 收口)**:enable/disable 同步扩展清单、`activate` 订阅者包装(recorder + 触发器)、作业体 rule-based 治理流水(引擎内核 golden 锚定、生产未消费,随 L2/探针任务集接入)。后续是 `auto-A` 准入、L2/探针任务集、阶段二公开包。
 
 **文档地图(各管什么,避免重复维护)**
 
@@ -208,13 +208,13 @@ harness2 的评分是**两段式且互相隔离**:选择(匿名对比、无 grou
 
 1. **`evolve enable|disable` 同步扩展清单**(design 8.1):级别升至 `observe` 及以上时向 `~/.trellis/mcp/extensions.yaml` 幂等写入条目(`id: evolve`,`load` 指向 `src/evolve/extension.ts` 的 activate 模块,dist/tsx 两种运行形态同款解析),置回 `off` 时移除;任一粒度(default/agent/workspace)仍有 observe+ 时条目保留(any-of 规则,细粒度闸在订阅者逐会话判定)。
 2. **`activate(ctx)` 订阅者包装**(`src/evolve/extension.ts`):`off` 零订阅;`observe` 只挂 recorder(事件 → 信号,含 secrets 擦除与层归属);`propose`/`auto-A` 另挂触发器订阅者(会话结束判定拉起作业、会话启动补偿)。与真实清单 loader(`loadHostExtensions`)的结构契约兼容有集成测试。
-3. **作业体引擎循环**(`src/evolve/jobRun.ts`,`jobMain` 调用):可选源探测 → 信号合并(自上次作业结束)→ runChecks 发现 → rule-based 提案 → 机械校验 → L1 前闸 → 风险分类 → 采纳门(A 仅 auto-A 且闸通过自动采纳并通知)→ pending 呈现/自动采纳 → 应用阶段(全部已批准编辑同一备份会话 + 按 delivery 分类对原生渲染 agent 触发同步)→ lesson(记忆启用走记忆管道,否则只留档案)。fixture E2E 的同链流水现由生产入口承载。
+3. **作业体治理流水(rule-based)**(`src/evolve/jobRun.ts`,`jobMain` 调用):可选源探测 → 信号合并(自上次作业结束)→ runChecks 发现 → rule-based 提案 → 机械校验 → L1 前闸 → 风险分类 → 采纳门(A 仅 auto-A 且闸通过自动采纳并通知)→ pending 呈现/自动采纳 → 应用阶段(全部已批准编辑同一备份会话 + 按 delivery 分类对原生渲染 agent 触发同步)→ lesson(记忆启用走记忆管道,否则只留档案)。fixture E2E 的同链流水现由生产入口承载。**口径澄清(review 纠偏)**:这是 rule-based 治理流水,不是引擎循环——移植引擎的 schedule/recursion/proposer/selection/judge golden 锚定但生产未经此消费,接入随 L2/探针任务集一并启动。
 
 接线后仍要知晓的边界(如实记录,不是缺口):
 
 - **editor/spawn 提案通道未接**:`runDelegatedCall` 就绪前作业只走 rule-based 兜底(design D7 的降级路径);harness2 引擎的 proposer spawn 面在引擎包内已移植并 golden 锚定,生产接入随 L2/探针任务集一并启动。
 - **发现面=观察面**:作业只扫描信号层归属出现过、或级别策略声明过的 workspace;没进过观察面的 workspace 不会被发现(与"信号是观察记录"一致)。
-- **批准后降级的边界**:`propose` 下批准、随后整机降回 `observe` 时,应用阶段暂停到下次 propose+ 作业(`observe` 只采集);`trellis evolve status` 可见 approved 计数。
+- **批准即应用与降级边界**(trellis-evolve-review-fixes):`approve` 成功即在同一命令内经备份会话应用(单飞锁互斥;锁忙/失败时如实告知、提案保持 approved)。滞留的已批准提案经 `trellis evolve apply` 随时消化(显式管理面命令,执行用户已批准的决策,不属循环触发、不写信号),或由下次 propose+ 作业的应用阶段消费;`trellis evolve status` 显示 approved 未应用计数。
 - **生效侧判定**:`triggerRenderSync` 只在存在原生渲染 agent 且本次有编辑被应用时触发一次;`isMemoryDeliveryEnabled` 按 memory MCP server 的显式配置(`staticEnv.MEMORY_FILE_PATH`)判定记忆管道开关。
 - **agent 粒度只闸观察与触发**:提案产出按提案目标层粒度(workspace > default)判定——发现来自 doctor 检查面,不归属某个 agent 的行为;只设 `agents: {x: propose}` 时作业会被拉起但不产提案(spec 已就此澄清)。
 - **agent 接口面 transport 后置**:`agentView.listPendingSummaries` 与 `reportUserCorrection` 函数与约束(只读、无批准能力、secrets 擦除)已交付并有测试,但本期不进 MCP/CLI/provider——真实会话中的 agent 尚无可达通道,接入随 editor/spawn 通道一并启动。

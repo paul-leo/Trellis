@@ -18,6 +18,10 @@
  * 不开第二个会话;部分失败的 HostEditError 批次照记档案(failed 标记,
  * 不计入查重),提案不标已应用,重试重放(编辑幂等:write-file 整文件
  * 写,remove-symlink 对已不存在目标视为成功)。
+ *
+ * 生效时点说明(effects)与同步结果随 apply-run 档案入档(trellis-
+ * evolve-review-fixes:此前算完即弃,报告不可回放)。同步触发失败收口
+ * 为效果文本并入档,不丢应用档案——编辑已写入,同步可人工补。
  */
 
 import { appendArchiveRecord, readArchiveRecords } from "./archive.js";
@@ -63,6 +67,8 @@ export interface ApplyApprovedResult {
   readonly effects: AgentEffectiveness[];
   /** 原生渲染同步的退出码;未触发为 null。 */
   readonly syncExitCode: number | null;
+  /** 同步触发抛错时的错误文本(收口为效果文本,不中断应用);无为 null。 */
+  readonly syncError: string | null;
   /** 应用前重校验不通过而跳过的提案 id(纵深防御,见实现注释)。 */
   readonly skippedInvalidIds: string[];
 }
@@ -81,7 +87,12 @@ function appliedIdsFromArchive(homeDir: string): Set<string> {
   return applied;
 }
 
-function effectivenessFor(agent: ApplyAgent, syncExitCode: number | null, syncTriggered: boolean): AgentEffectiveness {
+function effectivenessFor(
+  agent: ApplyAgent,
+  syncExitCode: number | null,
+  syncTriggered: boolean,
+  syncError: string | null,
+): AgentEffectiveness {
   if (agent.observation === "events") {
     return {
       agent: agent.agent,
@@ -94,6 +105,13 @@ function effectivenessFor(agent: ApplyAgent, syncExitCode: number | null, syncTr
       agent: agent.agent,
       observation: agent.observation,
       effect: `已触发渲染同步(exit ${String(syncExitCode ?? "?")}),同步完成后生效`,
+    };
+  }
+  if (syncError !== null) {
+    return {
+      agent: agent.agent,
+      observation: agent.observation,
+      effect: `触发渲染同步失败:${syncError};需运行 \`trellis sync\` 后生效`,
     };
   }
   return {
@@ -135,7 +153,15 @@ export async function applyApprovedProposals(options: ApplyApprovedOptions): Pro
   }
 
   if (appliedProposalIds.length === 0) {
-    return { runId: null, appliedProposalIds: [], alreadyAppliedIds, effects: [], syncExitCode: null, skippedInvalidIds };
+    return {
+      runId: null,
+      appliedProposalIds: [],
+      alreadyAppliedIds,
+      effects: [],
+      syncExitCode: null,
+      syncError: null,
+      skippedInvalidIds,
+    };
   }
 
   let runId: string;
@@ -156,22 +182,39 @@ export async function applyApprovedProposals(options: ApplyApprovedOptions): Pro
     }
     throw err;
   }
-  appendArchiveRecord(
-    homeDir,
-    { kind: APPLY_ARCHIVE_KIND, payload: { runId, proposalIds: appliedProposalIds } },
-    options.now ?? (() => new Date()),
-  );
-
   // 生效:原生渲染 agent 触发同步(runtime agent 无需——9.4 实时读取)。
+  // 同步失败收口为效果文本(syncError),不丢应用档案:编辑已写入,同步可人工补。
   const agents = options.agents ?? [];
   const needsSync = agents.some((a) => a.observation === "doctor-only");
   let syncExitCode: number | null = null;
   let syncTriggered = false;
+  let syncError: string | null = null;
   if (needsSync && options.triggerSync !== undefined) {
-    syncExitCode = (await options.triggerSync()).exitCode;
-    syncTriggered = true;
+    try {
+      syncExitCode = (await options.triggerSync()).exitCode;
+      syncTriggered = true;
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : String(err);
+    }
   }
 
-  const effects = agents.map((agent) => effectivenessFor(agent, syncExitCode, syncTriggered));
-  return { runId, appliedProposalIds, alreadyAppliedIds, effects, syncExitCode, skippedInvalidIds };
+  const effects = agents.map((agent) => effectivenessFor(agent, syncExitCode, syncTriggered, syncError));
+  // 档案记会话标识 + 逐 agent 生效时点 + 同步结果(review-fixes ❌3:此前
+  // effects 算完即弃);单条 apply-run 记录承载全部应用元数据,报告回放同源。
+  appendArchiveRecord(
+    homeDir,
+    {
+      kind: APPLY_ARCHIVE_KIND,
+      payload: {
+        runId,
+        proposalIds: appliedProposalIds,
+        effects,
+        syncExitCode,
+        ...(syncError !== null ? { syncError } : {}),
+      },
+    },
+    options.now ?? (() => new Date()),
+  );
+
+  return { runId, appliedProposalIds, alreadyAppliedIds, effects, syncExitCode, syncError, skippedInvalidIds };
 }

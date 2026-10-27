@@ -32,6 +32,8 @@ test("作业运行期间的调用不产生信号:进化自身标识被过滤", (
   // 用户会话照常记录。
   recorder.handle(toolCallEvent({ ts: 2, agent: "claude-code", session: "user-1", provider: "p", tool: "t", durationMs: 1, result: "ok" }));
 
+  // 异步落盘契约:读盘前先 flush(热路径 handle 不同步写盘)。
+  recorder.flush();
   const signals = readSignals(recorder.filePath);
   assert.equal(signals.length, 1);
   assert.equal(signals[0]!.session, "user-1");

@@ -94,6 +94,8 @@ export interface EvolveReport {
     readonly pending: number;
     readonly approved: number;
     readonly rejected: number;
+    /** 已批准但未应用(可经 `trellis evolve apply` 消化)。 */
+    readonly approvedUnapplied: number;
   };
   readonly timeline: readonly ProposalTrace[];
   readonly trends: readonly TrendMetric[];
@@ -240,6 +242,16 @@ export function buildEvolveReport(homeDir: string): EvolveReport {
             draft.applied = true;
             draft.backupRunId = runId;
             draft.chain.push({ stage: "applied", at: isoTime(entry), note: `应用完成(备份会话 ${runId},可回滚)` });
+            // 生效时点回放(review-fixes ❌3):effects 随 apply-run 档案入档;
+            // 旧档案无此字段如实跳过,不伪造。
+            const effects = (payload.effects as { agent?: unknown; effect?: unknown }[] | undefined) ?? [];
+            for (const effect of effects) {
+              draft.chain.push({
+                stage: "applied",
+                at: isoTime(entry),
+                note: `生效时点 ${String(effect.agent ?? "?")}:${String(effect.effect ?? "")}`,
+              });
+            }
           }
         }
         break;
@@ -381,6 +393,7 @@ export function buildEvolveReport(homeDir: string): EvolveReport {
     pending: pending.filter((record) => record.status === "pending").length,
     approved: pending.filter((record) => record.status === "approved").length,
     rejected: pending.filter((record) => record.status === "rejected").length,
+    approvedUnapplied: timeline.filter((trace) => trace.status === "approved").length,
   };
   const hasPolicy = policy.defaultLevel !== undefined ||
     Object.keys(policy.agents).length > 0 ||

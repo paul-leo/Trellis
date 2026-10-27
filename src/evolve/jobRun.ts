@@ -1,6 +1,9 @@
 /**
- * 一次性作业的作业体(trellis-evolve 任务 11.5 括注"作业即运行移植引擎";
- * 14.1 fixture E2E 的流水在此落地为生产入口)。
+ * 一次性作业的作业体(trellis-evolve 任务 11.5;14.1 fixture E2E 的流水
+ * 在此落地为生产入口)。作业体是下述 rule-based 治理流水;引擎内核
+ * (packages/evolve-engine 的 schedule/recursion/proposer/selection/judge)
+ * golden 锚定但生产未经此消费,待 L2/探针任务集接入(review-fixes 纠偏
+ * 旧注"作业即运行移植引擎"的名不副实)。
  *
  * 流水(顺序即依赖,与 fixtureE2e 同链):
  *   0. 级别闸:没有任何 propose/auto-A 设置 → 零副作用返回(触发器只在
@@ -43,7 +46,7 @@ import {
   type Level,
 } from "../host/index.js";
 import { appendArchiveRecord, readArchiveRecords } from "./archive.js";
-import { applyApprovedProposals, type ApplyAgent, type ApplyApprovedResult } from "./apply.js";
+import { applyApprovedProposals, type AgentEffectiveness, type ApplyAgent, type ApplyApprovedResult } from "./apply.js";
 import { dispatchProposalDomain, evaluateL1Proposal, type EvaluateL1Options, type L1GateResult } from "./gate.js";
 import { recordLesson } from "./lesson.js";
 import {
@@ -55,7 +58,7 @@ import {
 } from "./pending.js";
 import { proposeFromSignals, ruleBasedProposal } from "./propose.js";
 import { readAllSignals } from "./recorder.js";
-import { classifyProposalRisk, evaluateAdoptionGate } from "./risk.js";
+import { classifyProposalRisk, evaluateAdoptionGate, retargetNotificationRollback, type AdoptionNotification } from "./risk.js";
 import { probeAgentBridgeSource, type OptionalSourceProbe } from "./sources.js";
 import {
   PROPOSAL_ARCHIVE_KIND,
@@ -97,6 +100,10 @@ export interface EvolveJobSummary {
     readonly runId: string | null;
     readonly appliedProposalIds: readonly string[];
     readonly syncExitCode: number | null;
+    /** 同步触发失败文本(收口为效果文本);无为 null。 */
+    readonly syncError: string | null;
+    /** 逐 agent 生效时点(review-fixes ❌3:随 job-run 档案入档)。 */
+    readonly effects: readonly AgentEffectiveness[];
   };
   readonly lessonIds: string[];
   readonly notices: string[];
@@ -164,7 +171,7 @@ export async function runEvolveJob(
     autoAdoptedIds: [],
     discarded: [],
     skippedNotes: [],
-    applied: { runId: null, appliedProposalIds: [], syncExitCode: null },
+    applied: { runId: null, appliedProposalIds: [], syncExitCode: null, syncError: null, effects: [] },
     lessonIds: [],
     notices: [],
     optionalSources: [],
@@ -207,6 +214,9 @@ export async function runEvolveJob(
   const discarded: { id: string; code: string; reason: string }[] = [];
   const skippedNotes: string[] = [];
   const notices: string[] = [];
+  // 自动采纳通知先收集、应用后定稿:决策时备份会话尚不存在,回滚行只能
+  // 是泛化占位,拿到真实 runId 再重写(review-fixes ❌5)。
+  const adoptedNotifications: AdoptionNotification[] = [];
   const known = new Set(readPendingRecords(homeDir).map((record) => record.id));
 
   for (const draft of drafts) {
@@ -272,7 +282,7 @@ export async function runEvolveJob(
     if (adoption.action === "auto-adopt") {
       decideProposal({ homeDir, id: proposal.id, decision: "approved", now });
       autoAdoptedIds.push(proposal.id);
-      notices.push(adoption.notification.message);
+      adoptedNotifications.push(adoption.notification);
     } else {
       enqueuedIds.push(proposal.id);
     }
@@ -293,6 +303,16 @@ export async function runEvolveJob(
   });
   for (const id of applied.skippedInvalidIds) {
     skippedNotes.push(`${id}:应用前重校验不通过(pending 磁盘状态漂移?),跳过`);
+  }
+
+  // 自动采纳通知定稿:回滚行重写为真实备份会话标识(应用失败/未开会话时
+  // 保留泛化占位——没有真实 runId 可指)。
+  for (const notification of adoptedNotifications) {
+    notices.push(
+      applied.runId === null
+        ? notification.message
+        : retargetNotificationRollback(notification, `trellis evolve rollback ${applied.runId}`).message,
+    );
   }
 
   // ── 7. lesson(本次应用的每条提案蒸馏一条)───────────────────────────
@@ -327,6 +347,8 @@ export async function runEvolveJob(
       runId: applied.runId,
       appliedProposalIds: applied.appliedProposalIds,
       syncExitCode: applied.syncExitCode,
+      syncError: applied.syncError,
+      effects: applied.effects,
     },
     lessonIds,
     notices,

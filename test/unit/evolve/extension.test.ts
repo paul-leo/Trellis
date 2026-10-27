@@ -132,6 +132,8 @@ test("清单装载集成:loadHostExtensions 装载本扩展(结构契约兼容)"
       result: "ok",
     }),
   );
+  // 异步落盘契约:热路径(工具调用)setImmediate 合并落盘,turn 结束后可见。
+  await new Promise((resolve) => setImmediate(resolve));
   const signals = readAllSignals(home, null);
   assert.equal(signals.length, 1);
   assert.equal(signals[0]!.kind, "tool-call");

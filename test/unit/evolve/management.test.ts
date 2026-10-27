@@ -4,14 +4,17 @@
  * 场景映射(spec):
  *   - "非交互环境拒绝批准" → 非 TTY approve 被拒,提案保持 pending
  *     (含 `--yes` 类确认参数被无视的回归);
- *   - "命令不触发循环" → status/enable 后信号目录与档案零新增。
+ *   - "命令不触发循环" → status/enable 后信号目录与档案零新增;
+ *   - "批准即应用与显式应用入口"(trellis-evolve-review-fixes)→ 批准即应用 /
+ *     应用失败保持 approved 可重试 / 显式应用幂等零副作用 / 作业运行中暂缓。
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { runEvolveCommand } from "../../../src/commands/evolve.js";
+import { APPLY_ARCHIVE_KIND } from "../../../src/evolve/apply.js";
 import { readArchiveRecords } from "../../../src/evolve/archive.js";
 import {
   enqueueProposal,
@@ -20,6 +23,7 @@ import {
   readProposalsByStatus,
 } from "../../../src/evolve/pending.js";
 import { evolveStateDir } from "../../../src/evolve/stateDir.js";
+import { acquireJobLock, releaseJobLock } from "../../../src/evolve/trigger.js";
 import { loadEvolveLevelPolicy, writeEvolveLevelPolicy } from "../../../src/host/index.js";
 import { extensionsManifestPath } from "../../../src/lib/hostExtensions.js";
 import type { Proposal } from "../../../src/evolve/types.js";
@@ -54,19 +58,46 @@ after(() => {
   }
 });
 
-function enqueue(h: string, id: string): void {
+/** 合法 workspace 层提案(真实 scratch 目录;批准即应用会真实写入)。
+ * 返回编辑目标路径,供断言写入/暂缓时的文件状态。 */
+function enqueue(h: string, id: string): string {
+  const ws = join(h, "ws");
+  const path = join(ws, ".agents", `${id}.md`);
+  mkdirSync(join(ws, ".agents"), { recursive: true });
   const proposal: Proposal = {
     id,
     createdAt: 1_700_000_000_000,
     kind: "workspace-config-fix",
-    target: "/tmp/ws/.codex/config.toml",
-    layer: { kind: "workspace", root: "/tmp/ws" },
+    target: path,
+    layer: { kind: "workspace", root: ws },
     evidence: [{ kind: "doctor-finding", findingId: `doctor:workspace-toml-invalid:${id}` }],
     riskClass: "B",
     summary: "fix toml",
-    edits: [{ op: "write-file", path: "/tmp/ws/.codex/config.toml", content: "# bad = [\n" }],
+    edits: [{ op: "write-file", path, content: "# fixed = true\n" }],
   };
   enqueueProposal({ homeDir: h, proposal, riskClass: "B", riskRuleId: "workspace-config-fix/any" });
+  return path;
+}
+
+/** 任意编辑组合的入队捷径(应用失败/幂等重放测试用;target 用编辑首路径)。 */
+function enqueueEdits(h: string, id: string, ws: string, edits: Proposal["edits"]): void {
+  mkdirSync(join(ws, ".agents"), { recursive: true });
+  const proposal: Proposal = {
+    id,
+    createdAt: 1_700_000_000_000,
+    kind: "workspace-config-fix",
+    target: edits[0]!.path,
+    layer: { kind: "workspace", root: ws },
+    evidence: [{ kind: "doctor-finding", findingId: `doctor:workspace-toml-invalid:${id}` }],
+    riskClass: "B",
+    summary: `fix ${id}`,
+    edits,
+  };
+  enqueueProposal({ homeDir: h, proposal, riskClass: "B", riskRuleId: "workspace-config-fix/any" });
+}
+
+function applyRunCount(h: string): number {
+  return readArchiveRecords(h).filter((e) => e.kind === APPLY_ARCHIVE_KIND).length;
 }
 
 function signalsInventory(h: string): string[] {
@@ -266,5 +297,121 @@ describe("12.4 管理面命令", () => {
     assert.match(text.text, /p-text/);
     assert.match(text.text, /无测量记录/);
     assert.match(text.text, /趋势/);
+  });
+
+  it("场景:批准即应用——决策后同一命令内经备份会话写入,输出真实回滚命令与生效时点", async () => {
+    const h = home("trellis-evolve-approve-apply-");
+    const path = enqueue(h, "p-aa");
+    let syncCalls = 0;
+    const out = await captureOutput(() =>
+      runEvolveCommand(["approve", "p-aa"], {
+        homeDir: h,
+        isTTY: true,
+        applyAgents: [{ agent: "claude-code", observation: "doctor-only" }],
+        triggerSync: async () => {
+          syncCalls += 1;
+          return { exitCode: 0 };
+        },
+      }),
+    );
+    assert.equal(out.exitCode, 0);
+    assert.equal(readPendingRecord(h, "p-aa")?.status, "approved");
+    assert.equal(readFileSync(path, "utf-8"), "# fixed = true\n", "编辑在同一命令内写入,不滞留待应用");
+
+    const run = readArchiveRecords(h).find((e) => e.kind === APPLY_ARCHIVE_KIND);
+    assert.ok(run !== undefined, "apply-run 档案记录备份会话");
+    const runId = (run!.payload as { runId: string }).runId;
+    assert.match(out.text, /已应用 1 条提案:p-aa/);
+    assert.match(out.text, new RegExp(`备份会话 ${runId}。回滚:trellis evolve rollback ${runId}`));
+    assert.equal(syncCalls, 1);
+    assert.match(out.text, /生效时点 claude-code\(doctor-only\):已触发渲染同步\(exit 0\)/);
+  });
+
+  it("场景:应用失败保持已批准——输出真实回滚,显式 apply 重试按编辑幂等重放", async () => {
+    const h = home("trellis-evolve-apply-retry-");
+    const ws = join(h, "ws");
+    const blocker = join(ws, ".agents", "blocker.md");
+    mkdirSync(join(ws, ".agents"), { recursive: true });
+    writeFileSync(join(ws, "target-a"), "");
+    writeFileSync(join(ws, "target-b"), "");
+    writeFileSync(blocker, "regular file\n");
+    // repair-symlink 打在普通文件上 → 应用抛 HostEditError(部分失败形态)。
+    enqueueEdits(h, "p-retry", ws, [{ op: "repair-symlink", path: blocker, target: join(ws, "target-b") }]);
+
+    const failed = await captureOutput(() =>
+      runEvolveCommand(["approve", "p-retry"], { homeDir: h, isTTY: true, applyAgents: [] }),
+    );
+    assert.equal(failed.exitCode, 1);
+    assert.equal(readPendingRecord(h, "p-retry")?.status, "approved", "应用失败不回滚决策");
+    assert.match(failed.text, /应用部分失败/);
+    assert.match(failed.text, /trellis evolve rollback /);
+    assert.match(failed.text, /提案保持 approved/);
+    assert.equal(applyRunCount(h), 1, "部分失败也落 apply-run 档案(failed)");
+    assert.equal(readFileSync(blocker, "utf-8"), "regular file\n", "阻塞编辑未写入");
+
+    // 修好阻塞(普通文件换回 symlink)后显式重试:编辑幂等重放完成。
+    rmSync(blocker);
+    symlinkSync(join(ws, "target-a"), blocker);
+    const retry = await captureOutput(() =>
+      runEvolveCommand(["apply"], { homeDir: h, isTTY: true, applyAgents: [] }),
+    );
+    assert.equal(retry.exitCode, 0);
+    assert.match(retry.text, /已应用 1 条提案:p-retry/);
+    assert.equal(readlinkSync(blocker), join(ws, "target-b"));
+  });
+
+  it("场景:显式应用幂等——无事可做零副作用;已应用过的不重复写入", async () => {
+    const h = home("trellis-evolve-apply-idem-");
+    let syncCalls = 0;
+    const triggerSync = async (): Promise<{ exitCode: number }> => {
+      syncCalls += 1;
+      return { exitCode: 0 };
+    };
+
+    // 无已批准提案:不开备份会话、不写档案、不触发同步(spec 零副作用)。
+    const empty = await captureOutput(() =>
+      runEvolveCommand(["apply"], { homeDir: h, isTTY: true, applyAgents: [], triggerSync }),
+    );
+    assert.equal(empty.exitCode, 0);
+    assert.match(empty.text, /没有已批准未应用的提案/);
+    assert.equal(applyRunCount(h), 0);
+    assert.equal(archiveLineCount(h), 0);
+    assert.equal(syncCalls, 0);
+
+    // 批准即应用后,重复 apply:已应用过的不重复写入(幂等)。
+    const path = enqueue(h, "p-once");
+    await captureOutput(() => runEvolveCommand(["approve", "p-once"], { homeDir: h, isTTY: true, applyAgents: [], triggerSync }));
+    assert.equal(readFileSync(path, "utf-8"), "# fixed = true\n");
+    const again = await captureOutput(() =>
+      runEvolveCommand(["apply"], { homeDir: h, isTTY: true, applyAgents: [], triggerSync }),
+    );
+    assert.equal(again.exitCode, 0);
+    assert.match(again.text, /没有已批准未应用的提案\(已应用过的不重复写入\)/);
+    assert.equal(applyRunCount(h), 1, "不为已应用提案开第二个备份会话");
+  });
+
+  it("场景:作业运行中暂缓应用——决策照常完成,暂缓如实告知,显式应用收尾", async () => {
+    const h = home("trellis-evolve-apply-lock-");
+    const path = enqueue(h, "p-lock");
+    // 测试侧持活锁(本进程 pid 存活 → 作业锁视为被占用)。
+    assert.equal(acquireJobLock(h, process.pid, Date.now()), true);
+
+    const out = await captureOutput(() =>
+      runEvolveCommand(["approve", "p-lock"], { homeDir: h, isTTY: true, applyAgents: [] }),
+    );
+    assert.equal(out.exitCode, 0);
+    assert.equal(readPendingRecord(h, "p-lock")?.status, "approved", "决策照常完成");
+    assert.match(out.text, /已有作业在运行:本次应用暂缓/);
+    assert.equal(existsSync(path), false, "暂缓:编辑未写入");
+    assert.equal(applyRunCount(h), 0, "暂缓:不开备份会话");
+
+    // 作业结束后显式应用收尾。
+    releaseJobLock(h, process.pid);
+    const done = await captureOutput(() =>
+      runEvolveCommand(["apply"], { homeDir: h, isTTY: true, applyAgents: [] }),
+    );
+    assert.equal(done.exitCode, 0);
+    assert.match(done.text, /已应用 1 条提案:p-lock/);
+    assert.equal(readFileSync(path, "utf-8"), "# fixed = true\n");
   });
 });

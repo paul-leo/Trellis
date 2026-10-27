@@ -4,7 +4,8 @@
  * 场景映射(spec):
  *   - "原子运行与回滚":三条编辑在同一备份会话内写入,标准回滚逐字节还原;
  *   - "采纳的生效边界":runtime 投递 agent 新会话读到新版本且无需同步;
- *     原生渲染 agent 触发同步并报告结果。
+ *     原生渲染 agent 触发同步并报告结果;生效说明入档可回放;
+ *   - "批准即应用与显式应用入口":应用幂等(重复调用跳过)。
  */
 
 import assert from "node:assert/strict";
@@ -212,6 +213,62 @@ describe("12.5 应用与生效", () => {
     assert.equal(result.runId, null, "全部记录重校验失败 → 不开备份会话");
     assert.equal(existsSync(join(h, "outside.txt")), false, "层外路径未被写入");
     assert.equal(applyRunCount(h), 0);
+  });
+
+  it("场景:生效说明入档可回放(effects 与同步结果随 apply-run 档案)", async () => {
+    const h = home("trellis-apply-effects-");
+    const ws = workspace(h);
+    const path = join(ws, ".agents", "eff.md");
+    writeFileSync(path, "old\n");
+    approve(h, "p-eff", path, "new\n", ws);
+
+    const result = await applyApprovedProposals({
+      homeDir: h,
+      agents: [
+        { agent: "claude-code", observation: "doctor-only" },
+        { agent: "kimi-code", observation: "events" },
+      ],
+      triggerSync: async () => ({ exitCode: 0 }),
+    });
+    const runs = readArchiveRecords(h).filter((e) => e.kind === APPLY_ARCHIVE_KIND);
+    const payload = runs[0]!.payload as {
+      effects?: { agent: string; effect: string }[];
+      syncExitCode?: number | null;
+    };
+    assert.equal(payload.syncExitCode, 0);
+    assert.ok(Array.isArray(payload.effects));
+    assert.equal(payload.effects!.length, 2);
+    assert.deepEqual(
+      payload.effects!.map((e) => e.agent),
+      ["claude-code", "kimi-code"],
+    );
+    assert.equal(payload.effects![0]!.effect, result.effects[0]!.effect);
+    assert.match(payload.effects![1]!.effect, /无需同步/);
+  });
+
+  it("同步触发失败收口为效果文本:应用照常完成,档案记 syncError", async () => {
+    const h = home("trellis-apply-syncfail-");
+    const ws = workspace(h);
+    const path = join(ws, ".agents", "sf.md");
+    writeFileSync(path, "old\n");
+    approve(h, "p-sf", path, "new\n", ws);
+
+    const result = await applyApprovedProposals({
+      homeDir: h,
+      agents: [{ agent: "claude-code", observation: "doctor-only" }],
+      triggerSync: async () => {
+        throw new Error("sync exploded");
+      },
+    });
+    assert.ok(result.runId !== null, "编辑已写入:同步失败不吞应用");
+    assert.equal(readFileSync(path, "utf-8"), "new\n");
+    assert.equal(result.syncError, "sync exploded");
+    assert.match(result.effects[0]!.effect, /触发渲染同步失败:sync exploded/);
+    assert.match(result.effects[0]!.effect, /trellis sync/);
+    const runs = readArchiveRecords(h).filter((e) => e.kind === APPLY_ARCHIVE_KIND);
+    const payload = runs[0]!.payload as { syncError?: string; effects?: { effect: string }[] };
+    assert.equal(payload.syncError, "sync exploded");
+    assert.ok(payload.effects !== undefined && payload.effects.length === 1);
   });
 
   it("部分失败:failed 档案落盘且不计入查重,重试按幂等重放完成", async () => {

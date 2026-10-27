@@ -1005,9 +1005,13 @@ exists) into the workspace-internal package `packages/evolve-engine`
 move as agent-framework integration and waits for a second real consumer).
 Phase one covers the engine port, generic hosting extension points, the
 TrellisSubstrate adapter, observe/trigger, L4 governance, and a fixture
-end-to-end run; enabling `observe` for real still needs a few production
-wiring closures. Evolution visibility (timeline, before/after
-measurements, honest trends — no synthetic scores) is landing as
+end-to-end run; the production wiring closed on 2026-10-26 (extension
+manifest sync, `activate` subscribers, and the job pipeline). The job
+body runs a rule-based governance pipeline — the ported engine's
+schedule/recursion/proposer/selection/judge loop is golden-anchored but
+not yet consumed in production, awaiting the L2 probe task set.
+Evolution visibility (timeline, before/after
+measurements, honest trends — no synthetic scores) landed as
 `trellis-evolve-visualization`. See [`self-evolution.md`](self-evolution.md) for the full
 idea, what is verified versus assumed, and the open decisions; the
 verifiable contract is at `openspec/changes/trellis-evolve/` (one change,

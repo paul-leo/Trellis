@@ -15,7 +15,8 @@
  *
  * 判定纯函数是 `evaluateTrigger`;`tryLaunchJob` 负责收集状态(信号、
  * 档案、锁)、判定、spawn、把判定写入档案。拉起的作业入口是
- * `jobMain.ts`(作业体即移植引擎运行,12.x 起填充)。
+ * `jobMain.ts`(作业体是 rule-based 治理流水的一次运行;引擎内核 golden
+ * 锚定但生产未消费,待 L2/探针任务集接入)。
  */
 
 import { spawn } from "node:child_process";

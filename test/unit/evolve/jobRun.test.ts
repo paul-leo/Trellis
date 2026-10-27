@@ -1,6 +1,6 @@
 /**
- * 作业体 `runEvolveJob`(11.5 括注"作业即运行移植引擎";14.1 fixture E2E
- * 流水的生产入口)。真实 runChecks / staging / applyEdits(host 门面),
+ * 作业体 `runEvolveJob`(rule-based 治理流水;14.1 fixture E2E 流水的
+ * 生产入口)。真实 runChecks / staging / applyEdits(host 门面),
  * fixture 机器无模型(rule-based 通道);全程不 spawn 真实 agent CLI。
  * auto-A 分支经 proposeFn/evaluateL1Fn 注入缝直达治理层(真实分类/校验/
  * 应用/lesson)。
@@ -191,7 +191,7 @@ test("auto-A:Class A 闸通过 → 自动采纳并通知,应用 + lesson", async
 
   const run = await runEvolveJob(fx.home, {
     now: () => FIXED_TS,
-    applyAgents: [],
+    applyAgents: [{ agent: "kimi-code", observation: "events" }],
     proposeFn: () => [draft],
     evaluateL1Fn: async () => acceptable,
   });
@@ -200,7 +200,13 @@ test("auto-A:Class A 闸通过 → 自动采纳并通知,应用 + lesson", async
   assert.deepEqual(run.enqueuedIds, []);
   assert.equal(run.notices.length, 1);
   assert.match(run.notices[0]!, /自动采纳 Class A 提案 rule-autoa-1/);
-  assert.match(run.notices[0]!, /回滚:/);
+  // 回滚行是真实备份会话标识,不是泛化指引(review-fixes ❌5)。
+  assert.match(run.notices[0]!, /回滚:trellis evolve rollback /);
+  assert.ok(run.applied.runId !== null && run.notices[0]!.includes(run.applied.runId));
+  // effects 随摘要入档(review-fixes ❌3;jobMain 整体入 job-run 档案)。
+  assert.equal(run.applied.syncError, null);
+  assert.equal(run.applied.effects.length, 1);
+  assert.match(run.applied.effects[0]!.effect, /无需同步/);
 
   const records = readPendingRecords(fx.home);
   assert.equal(records.length, 1);

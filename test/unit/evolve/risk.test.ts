@@ -19,6 +19,7 @@ import {
   RISK_RULES,
   classifyProposalRisk,
   evaluateAdoptionGate,
+  retargetNotificationRollback,
   type RiskClassification,
 } from "../../../src/evolve/risk.js";
 
@@ -344,5 +345,33 @@ describe("12.3 采纳门四个过门场景", () => {
     if (decision.action !== "auto-adopt") return;
     assert.equal(decision.notification.rollbackPath, "trellis rollback --session run-42");
     assert.match(decision.notification.message, /run-42/);
+  });
+
+  it("应用后回滚行重写为真实备份会话标识(其余行不动)", () => {
+    const home = scratchHome("trellis-risk-g8-");
+    const proposal = classAOnHome(home);
+    const classification = classifyProposalRisk(proposal, { homeDir: home });
+    const decision = evaluateAdoptionGate({
+      level: "auto-A",
+      classification,
+      probePassed: true,
+      proposal,
+    });
+    assert.equal(decision.action, "auto-adopt");
+    if (decision.action !== "auto-adopt") return;
+    const before = decision.notification.message;
+    assert.match(before, /回滚:trellis rollback --list/);
+
+    const retargeted = retargetNotificationRollback(decision.notification, "trellis evolve rollback run-77");
+    assert.equal(retargeted.rollbackPath, "trellis evolve rollback run-77");
+    assert.match(retargeted.message, /回滚:trellis evolve rollback run-77/);
+    // 只重写回滚行:其余内容逐行不变。
+    const beforeLines = before.split("\n");
+    const afterLines = retargeted.message.split("\n");
+    assert.equal(afterLines.length, beforeLines.length);
+    beforeLines.forEach((line, i) => {
+      if (line.startsWith("回滚:")) return;
+      assert.equal(afterLines[i], line);
+    });
   });
 });

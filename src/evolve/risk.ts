@@ -244,6 +244,23 @@ function buildNotification(input: AdoptionGateInput, reason: string): AdoptionNo
 }
 
 /**
+ * 应用后用真实备份会话标识重写通知的回滚行(review-fixes ❌5)。决策时
+ * 备份会话尚不存在,回滚行只能是泛化占位;应用拿到真实 runId 后由调用
+ * 方经本函数回填。只重写 `回滚:` 行,其余行不动;格式由 buildNotification
+ * 单点控制。
+ */
+export function retargetNotificationRollback(
+  notification: AdoptionNotification,
+  rollbackPath: string,
+): AdoptionNotification {
+  const message = notification.message
+    .split("\n")
+    .map((line) => (line.startsWith("回滚:") ? `回滚:${rollbackPath}` : line))
+    .join("\n");
+  return { ...notification, message, rollbackPath };
+}
+
+/**
  * 采纳门:A 仅在级别 `auto-A` 且 probe 通过时自动采纳(并产出通知);
  * B 永远需要显式批准,不受级别影响;C 不可达(校验阶段已拒)防御性按
  * 待批准收口。probe 未通过或级别低于 `auto-A` 时 Class A 也不自动采纳。

@@ -5,9 +5,11 @@
  * N 毫秒后再收尾,供集成测试观察"作业运行中"的锁状态;生产不传,作业
  * 即时完成)。锁由作业自身持有(拉起方 spawn 前只做活锁检查,本入口再
  * 权威抢一次以防并发双拉起竞态,抢不到立即退出、不做任何工作、不排队)。
- * 作业体即移植引擎的一次运行:`runEvolveJob`(信号 → rule-based 提案 →
- * 机械校验 → L1 前闸 → 风险/采纳门 → 应用 → lesson,14.1 的 fixture
- * E2E 同链)。级别 off/observe 时作业体零副作用早退。
+ * 作业体是 rule-based 治理流水的一次运行:`runEvolveJob`(信号 →
+ * rule-based 提案 → 机械校验 → L1 前闸 → 风险/采纳门 → 应用 → lesson,
+ * 14.1 的 fixture E2E 同链)。引擎内核(packages/evolve-engine 的
+ * schedule/recursion/proposer/selection/judge)golden 锚定但生产未经
+ * 此消费,待 L2/探针任务集接入。级别 off/observe 时作业体零副作用早退。
  *
  * 注意:本文件是入口脚本,被 import 时顶层即执行;测试只应 spawn 它,
  * 不应 import(需要锁原语请从 `trigger.js` 取,作业体从 `jobRun.js` 取)。
@@ -38,7 +40,7 @@ if (!acquireJobLock(homeDir, pid, Date.now())) {
 
 const startedAtMs = Date.now();
 try {
-  // 作业体:移植引擎的一次运行(12.x 治理流水;14.1 同链)。
+  // 作业体:治理流水的一次运行(12.x;14.1 同链;引擎内核待 L2 接入)。
   if (holdMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, holdMs));
   }

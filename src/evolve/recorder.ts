@@ -9,7 +9,13 @@
  *     信号归属该 workspace 层,无归属记全局层;
  *   - 按进程分文件、只追加:每个 gateway 进程一个
  *     `signals/<pid>-<startMs>.jsonl`,进程内并发会话写同一文件
- *     (Node 同步 append 逐行原子),跨进程各写各文件,无全局锁;
+ *     (单次 append 合并当轮缓冲,逐行 JSON),跨进程各写各文件,无全局锁;
+ *   - 异步落盘(review-fixes ❌4):`handle` 只入内存队列,事件循环内
+ *     批量落盘,热路径(工具调用事件)不碰磁盘;会话边界事件
+ *     (session_start/session_end)同步收口——边界事件正是触发判定的
+ *     运行点(补偿判定/会话结束判定),判定必须看得到含当前边界事件
+ *     在内的全部已记录信号;`flush()` 供测试与收尾。信号非审计级
+ *     (读取侧坏行容错同源),崩溃丢当轮缓冲可接受;
  *   - off 零副作用:`enabled()` 为 false 时连目录与文件都不创建。
  */
 
@@ -32,8 +38,10 @@ export interface SignalRecorderOptions {
 export interface SignalRecorder {
   /** 本进程的信号文件路径(首写前文件不存在)。 */
   readonly filePath: string;
-  /** 事件总线订阅者形态;返回值忽略(写入是同步的)。 */
+  /** 事件总线订阅者形态;返回值忽略(写入为队列化批量落盘)。 */
   handle(event: HostEvent): void;
+  /** 立即落盘当轮缓冲(测试与收尾用;平时 setImmediate 批量落盘)。 */
+  flush(): void;
 }
 
 /** 进化自身活动的 agent 标识(作业/探针会话以此自称)。 */
@@ -95,13 +103,34 @@ export function createSignalRecorder(options: SignalRecorderOptions): SignalReco
     }
   }
 
+  // 队列化批量落盘:handle 只入队,一个事件循环 turn 内合并为一次 append
+  // (热路径不碰磁盘)。会话边界事件在边界同步收口——边界事件正是触发
+  // 判定的运行点(订阅者顺序在 recorder 之后),判定读盘时必须看得到含
+  // 本事件在内的全部信号;其余事件靠 setImmediate 合并。
+  const pending: Signal[] = [];
+  let flushScheduled = false;
+  function flush(): void {
+    flushScheduled = false;
+    if (pending.length === 0) return;
+    const batch = pending.splice(0, pending.length);
+    appendSignalLines(filePath, batch);
+  }
   return {
     filePath,
     handle(event: HostEvent): void {
       if (!enabled()) return;
       if (isEvolveSelfActivity(event)) return;
-      appendSignalLine(filePath, toSignal(event));
+      pending.push(toSignal(event));
+      if (event.kind === "session_end" || event.kind === "session_start") {
+        flush();
+        return;
+      }
+      if (!flushScheduled) {
+        flushScheduled = true;
+        setImmediate(flush);
+      }
     },
+    flush,
   };
 }
 
@@ -112,10 +141,17 @@ export function signalFilePath(homeDir: string, startMs: number): string {
 
 /** 只追加一行信号(单行 JSON;JSON.stringify 转义字符串内换行,行边界
  * 天然成立;新建文件 0600——信号含 workspace 路径等机器信息,不收世界
- * 可读)。11.2 的用户纠正上报与 recorder 共用这一条写入路径。 */
+ * 可读)。11.2 的用户纠正上报走本单行入口;recorder 经批量入口
+ * `appendSignalLines`(同一写入路径)。 */
 export function appendSignalLine(filePath: string, signal: Signal): void {
+  appendSignalLines(filePath, [signal]);
+}
+
+/** 批量只追加(同一 turn 的信号合并为一次 append;recorder 异步落盘用)。 */
+export function appendSignalLines(filePath: string, signals: readonly Signal[]): void {
+  if (signals.length === 0) return;
   mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
-  appendFileSync(filePath, JSON.stringify(signal) + "\n", { mode: 0o600 });
+  appendFileSync(filePath, signals.map((signal) => JSON.stringify(signal) + "\n").join(""), { mode: 0o600 });
 }
 
 /**

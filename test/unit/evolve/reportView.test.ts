@@ -132,6 +132,49 @@ describe("进化可视化聚合层", () => {
     assert.equal(trace.edits.length, 1);
   });
 
+  it("生效说明入档可回放:apply-run 的 effects 进入时间线;旧档案无字段如实跳过", () => {
+    const h = home("report-effects-");
+    const id = "rule-effects";
+    enqueueProposal({ homeDir: h, proposal: proposal(id), riskClass: "B", riskRuleId: "r" });
+    appendArchiveRecord(h, { kind: PROPOSAL_ARCHIVE_KIND, payload: { proposalId: id, riskClass: "B", riskRuleId: "r" } }, () => new Date(TS));
+    assert.equal(decideProposal({ homeDir: h, id, decision: "approved", now: () => TS }).ok, true);
+    appendArchiveRecord(
+      h,
+      {
+        kind: "apply-run",
+        payload: {
+          runId: "run-fx",
+          proposalIds: [id],
+          effects: [
+            { agent: "claude-code", observation: "doctor-only", effect: "已触发渲染同步(exit 0),同步完成后生效" },
+            { agent: "kimi-code", observation: "events", effect: "后续会话读取 canonical 时自然生效(runtime 投递,无需同步)" },
+          ],
+          syncExitCode: 0,
+        },
+      },
+      () => new Date(TS + 1),
+    );
+
+    const trace = buildEvolveReport(h).timeline.find((t) => t.id === id);
+    assert.ok(trace !== undefined);
+    const effectNotes = trace.chain.filter((step) => step.note.startsWith("生效时点"));
+    assert.equal(effectNotes.length, 2);
+    assert.match(effectNotes[0]!.note, /claude-code:已触发渲染同步/);
+    assert.match(effectNotes[1]!.note, /kimi-code:后续会话读取/);
+  });
+
+  it("approved 未应用计数:已批准未应用计入,应用后清零", () => {
+    const h = home("report-unapplied-");
+    const id = "rule-unapplied";
+    enqueueProposal({ homeDir: h, proposal: proposal(id), riskClass: "B", riskRuleId: "r" });
+    appendArchiveRecord(h, { kind: PROPOSAL_ARCHIVE_KIND, payload: { proposalId: id, riskClass: "B", riskRuleId: "r" } }, () => new Date(TS));
+    assert.equal(decideProposal({ homeDir: h, id, decision: "approved", now: () => TS }).ok, true);
+    assert.equal(buildEvolveReport(h).counts.approvedUnapplied, 1);
+
+    appendArchiveRecord(h, { kind: "apply-run", payload: { runId: "run-u", proposalIds: [id] } }, () => new Date(TS + 1));
+    assert.equal(buildEvolveReport(h).counts.approvedUnapplied, 0);
+  });
+
   it("中途终止的链如实呈现:L1 丢弃只到 verdict/丢弃环,不伪造后续", () => {
     const h = home("report-truncated-");
     appendArchiveRecord(
