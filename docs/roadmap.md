@@ -971,7 +971,12 @@ health, honest credential status in `trellis.mcp.status`, browser callback
 page). v0.14.0 — pi native MCP delivery (pi ≥ 1.1.0 `mcp.json` writes,
 bridge retirement in the same sync; supersedes P4's default path).
 v0.14.1 — canonical `auth.client_name` for providers that gate OAuth dynamic
-client registration by client name (Figma).
+client registration by client name (Figma). v0.15.0 — workspace scope: a
+second canonical layer in the repo itself (`<repo>/.agents/`), merged
+workspace-wins-by-ID, delivered layer-preserving to all six agents.
+v0.15.1 — `--flag=value` accepted everywhere; `mcp remove --workspace`.
+v0.16.0 — doctor validates workspace `.codex/config.toml` TOML syntax.
+v0.17.0 — doctor reports diverging `trellis` entrypoints on PATH.
 
 **Cross-machine / cloud sharing — confirmed future direction, not yet
 scoped as a phase.** Surveyed 2026-09-15 (`docs/research.md`'s "Cross-

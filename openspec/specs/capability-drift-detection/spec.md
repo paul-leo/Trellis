@@ -1,7 +1,7 @@
 # capability-drift-detection Specification
 
 ## Purpose
-TBD - created by archiving change trellis-doctor-p0. Update Purpose after archive.
+Defines what `trellis doctor` checks when comparing agents' current state against each other and against canonical: cross-agent skill/MCP drift, duplication, host-injected name collisions, case mismatches, runtime and parse diagnostics, OAuth credential health, workspace layer attribution (including workspace Codex config TOML validity), and diverging `trellis` CLI entrypoints on PATH — all read-only by default (MCP handshake probing is opt-in via `--probe-mcp`), with findings driving a non-zero exit so doctor works as a CI or pre-commit gate.
 
 ## Requirements
 
