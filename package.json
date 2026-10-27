@@ -18,7 +18,11 @@
       "types": "./dist/sdk.d.ts",
       "import": "./dist/sdk.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "import": "./dist/host/index.js"
+    }
   },
   "files": [
     "dist",
@@ -53,6 +57,7 @@
     "agents.md"
   ],
   "devDependencies": {
+    "@trellis/evolve-engine": "*",
     "@types/node": "^22.0.0",
     "esbuild": "^0.28.2",
     "tsx": "^4.19.0",

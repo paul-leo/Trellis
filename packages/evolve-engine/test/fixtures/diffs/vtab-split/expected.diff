@@ -1,0 +1,7 @@
+--- current/vtab-split.txt
++++ pool/vtab-split.txt
+@@ -1,4 +1,4 @@
+ before
+ before2-after
++AFTER
+ last

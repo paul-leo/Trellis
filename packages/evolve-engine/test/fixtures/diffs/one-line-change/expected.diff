@@ -1,0 +1,10 @@
+--- current/one-line-change.txt
++++ pool/one-line-change.txt
+@@ -1,6 +1,6 @@
+ one
+ two
+-three
++THREE
+ four
+ five
+ six

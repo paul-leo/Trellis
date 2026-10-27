@@ -1,0 +1,6 @@
+--- current/empty-to-content.txt
++++ pool/empty-to-content.txt
+@@ -0,0 +1,3 @@
++born-1
++born-2
++born-3

@@ -993,6 +993,26 @@ coordination, evaluated only after the simpler pieces are proven). See
 and `daytonaio/daytona` were both evaluated and not adopted (preview-only
 API instability, and unmaintained-as-of-June-2026, respectively).
 
+**Self-evolution — phase one delivered 2026-10-26, default off.** Trellis
+is two decoupled subsystems: hosting (delivery and consistency of
+canonical content) and self-evolution (content that improves with use,
+running ambiently on the runtime substrate, opt-in and graded off →
+observe → propose → auto-A). Dependency runs one way, evolution → hosting,
+through a narrow port; uninstalling evolution leaves hosting
+byte-identical. Engine ported from google-research/harness2 (no usable SDK
+exists) into the workspace-internal package `packages/evolve-engine`
+(stage one: not published to npm; stage two — publishing it — is the same
+move as agent-framework integration and waits for a second real consumer).
+Phase one covers the engine port, generic hosting extension points, the
+TrellisSubstrate adapter, observe/trigger, L4 governance, and a fixture
+end-to-end run; enabling `observe` for real still needs a few production
+wiring closures. Evolution visibility (timeline, before/after
+measurements, honest trends — no synthetic scores) is landing as
+`trellis-evolve-visualization`. See [`self-evolution.md`](self-evolution.md) for the full
+idea, what is verified versus assumed, and the open decisions; the
+verifiable contract is at `openspec/changes/trellis-evolve/` (one change,
+two capabilities: `host-extension-points` and `self-evolution`).
+
 No dates. This is scoped by verification milestones, not calendar time.
 Execution order for P11–P16: P11 → P12 → P13 → P14 → P15 → P16 — CRUD
 (P12) lands before the larger features (P14, P15, P16) so each can be

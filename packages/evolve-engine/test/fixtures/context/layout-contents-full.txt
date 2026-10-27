@@ -1,0 +1,8 @@
+context/task.md                  the task as the agent received it
+context/source/                 task source materials
+context/decisions/              earlier edits and composition decisions
+context/rollouts/               FULL trajectories: agg1.md, agg2.md, b1.md, b2.md
+context/deliverables/<label>/    the files each rollout produced, one per artifact (browse INDEX.md for the set)
+context/harness/                the harness you are editing (5 files)
+context/pool/                   2 candidates, each with its harness and its rollout
+context/library/                earlier tasks in this area -- browse INDEX.md first, then open what looks relevant

@@ -1,0 +1,20 @@
+--- current/multi-hunk.txt
++++ pool/multi-hunk.txt
+@@ -2,7 +2,7 @@
+ line-02
+ line-03
+ line-04
+-line-05
++line-05-CHANGED
+ line-06
+ line-07
+ line-08
+@@ -32,7 +32,7 @@
+ line-32
+ line-33
+ line-34
+-line-35
++line-35-CHANGED
+ line-36
+ line-37
+ line-38

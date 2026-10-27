@@ -1,0 +1,11 @@
+--- current/middle-hunk.txt
++++ pool/middle-hunk.txt
+@@ -17,7 +17,7 @@
+ line-17
+ line-18
+ line-19
+-line-20
++line-20-CHANGED
+ line-21
+ line-22
+ line-23

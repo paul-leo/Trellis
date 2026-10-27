@@ -1,0 +1,6 @@
+--- current/no-trailing-newline.txt
++++ pool/no-trailing-newline.txt
+@@ -1,3 +1,3 @@
+ one
+ two
+-three-no-newline+three-CHANGED-no-newline

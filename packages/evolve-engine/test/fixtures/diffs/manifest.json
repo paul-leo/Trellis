@@ -1,0 +1,62 @@
+[
+  {
+    "case": "identical",
+    "fromfile": "current/identical.txt",
+    "tofile": "pool/identical.txt"
+  },
+  {
+    "case": "one-line-change",
+    "fromfile": "current/one-line-change.txt",
+    "tofile": "pool/one-line-change.txt"
+  },
+  {
+    "case": "middle-hunk",
+    "fromfile": "current/middle-hunk.txt",
+    "tofile": "pool/middle-hunk.txt"
+  },
+  {
+    "case": "multi-hunk",
+    "fromfile": "current/multi-hunk.txt",
+    "tofile": "pool/multi-hunk.txt"
+  },
+  {
+    "case": "insert-only",
+    "fromfile": "current/insert-only.txt",
+    "tofile": "pool/insert-only.txt"
+  },
+  {
+    "case": "delete-only",
+    "fromfile": "current/delete-only.txt",
+    "tofile": "pool/delete-only.txt"
+  },
+  {
+    "case": "empty-to-content",
+    "fromfile": "current/empty-to-content.txt",
+    "tofile": "pool/empty-to-content.txt"
+  },
+  {
+    "case": "content-to-empty",
+    "fromfile": "current/content-to-empty.txt",
+    "tofile": "pool/content-to-empty.txt"
+  },
+  {
+    "case": "no-trailing-newline",
+    "fromfile": "current/no-trailing-newline.txt",
+    "tofile": "pool/no-trailing-newline.txt"
+  },
+  {
+    "case": "append-at-end",
+    "fromfile": "current/append-at-end.txt",
+    "tofile": "pool/append-at-end.txt"
+  },
+  {
+    "case": "vtab-split",
+    "fromfile": "current/vtab-split.txt",
+    "tofile": "pool/vtab-split.txt"
+  },
+  {
+    "case": "autojunk",
+    "fromfile": "current/autojunk.txt",
+    "tofile": "pool/autojunk.txt"
+  }
+]

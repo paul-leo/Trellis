@@ -1,0 +1,10 @@
+--- current/append-at-end.txt
++++ pool/append-at-end.txt
+@@ -8,3 +8,7 @@
+ line-08
+ line-09
+ line-10
++appended-1
++appended-2
++appended-3
++appended-4

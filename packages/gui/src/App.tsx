@@ -8,6 +8,7 @@ import { SkillsView } from "./views/SkillsView";
 import { MemoryView } from "./views/MemoryView";
 import { SecretsView } from "./views/SecretsView";
 import { BackupsView } from "./views/BackupsView";
+import { EvolutionView } from "./views/EvolutionView";
 import { DelegationView } from "./views/DelegationView";
 import { OnboardView } from "./views/OnboardView";
 import { ChatView } from "./views/ChatView";
@@ -19,6 +20,7 @@ const TABS: ReadonlyArray<{ id: string; labelKey: TranslationKey; render: () => 
   { id: "memory", labelKey: "nav.memory", render: () => <MemoryView /> },
   { id: "secrets", labelKey: "nav.secrets", render: () => <SecretsView /> },
   { id: "backups", labelKey: "nav.backups", render: () => <BackupsView /> },
+  { id: "evolve", labelKey: "nav.evolve", render: () => <EvolutionView /> },
   { id: "delegation", labelKey: "nav.delegation", render: () => <DelegationView /> },
   { id: "onboard", labelKey: "nav.onboard", render: () => <OnboardView /> },
   { id: "chat", labelKey: "nav.chat", render: () => <ChatView /> },

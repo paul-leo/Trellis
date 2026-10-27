@@ -19,6 +19,10 @@ import { runMcpAuth } from "./commands/mcpAuth.js";
 import { runMcpRenew } from "./commands/mcpRenew.js";
 import { runSecretsAudit } from "./commands/secretsAudit.js";
 import { runRollback } from "./commands/rollback.js";
+// consumer-wiring(8.7):`trellis evolve` 管理面挂载。这条 import 是
+// 托管层仅有的消费者接线,登记在 test/unit/hostingIndependence.test.ts
+// 的 CONSUMER_WIRING;物理移出自我进化时与下文 evolve 分支一并删除。
+import { runEvolveCommand } from "./commands/evolve.js";
 import { runSkillList, runSkillAdd, runSkillRemove, runSkillScope, runSkillUpdateBuiltin } from "./commands/skill.js";
 import { runRemoteSkillAdd, runRemoteSkillList, runRemoteSkillUpdate } from "./commands/remoteSkill.js";
 import { collectMemoryList, runMemoryExtraction, runMemorySync } from "./commands/memory.js";
@@ -28,7 +32,7 @@ import { TRELLIS_VERSION } from "./lib/cliMetadata.js";
 import { flagValue } from "./lib/cliArgs.js";
 import { parseSyncArgs } from "./lib/syncArgs.js";
 
-const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "add", "update", "memory", "manage", "kimi", "secrets", "rollback"] as const;
+const KNOWN_COMMANDS = ["onboard", "init", "migrate", "doctor", "sync", "mcp", "mcp-gateway", "mcp-runtime", "skill", "add", "update", "memory", "manage", "kimi", "secrets", "rollback", "evolve"] as const;
 
 function printUsage(): void {
   console.log(`trellis - a single source of capability for every coding agent
@@ -639,6 +643,14 @@ async function main(argv: string[]): Promise<void> {
     const json = rest.includes("--json");
     const runId = rest.find((arg) => !arg.startsWith("--"));
     const { exitCode } = await runRollback({ runId, list, dryRun, json });
+    process.exitCode = exitCode;
+    return;
+  }
+
+  if (command === "evolve") {
+    // 自我进化管理面(trellis-evolve 12.4):批准仅限交互式终端,由
+    // runEvolveCommand 内部检测;argv 原样传入,不拼 shell。
+    const { exitCode } = await runEvolveCommand(rest);
     process.exitCode = exitCode;
     return;
   }

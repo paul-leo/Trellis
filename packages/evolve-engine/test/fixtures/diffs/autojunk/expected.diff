@@ -1,0 +1,21 @@
+--- current/autojunk.txt
++++ pool/autojunk.txt
+@@ -102,6 +102,8 @@
+ b-097
+ b-098
+ b-099
++b-100
++b-101
+ b-102
+ b-103
+ b-104
+@@ -200,5 +202,8 @@
+ b-197
+ b-198
+ b-199
+-a-only
++JUNK
++JUNK
++JUNK
++JUNK
+ b-tail

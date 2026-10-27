@@ -5,6 +5,8 @@
  * throughout docs/research.md's investigation, now formalized.
  */
 
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import * as claudeCodeProbe from "../probes/claude-code.js";
 import * as codexProbe from "../probes/codex.js";
@@ -14,13 +16,46 @@ import * as kimiCodeProbe from "../probes/kimi-code.js";
 import * as zcodeProbe from "../probes/zcode.js";
 import { loadCanonicalSource } from "../core/canonical.js";
 import { GATEWAY_ENTRY_NAME, RUNTIME_ENTRY_NAME, resolveMcpPlan } from "../adapters/mcpPlan.js";
-import { ALL_AGENTS, isOAuthAuth, oauthOwner } from "../core/types.js";
+import { ALL_AGENTS, capabilityDeliveryForAgent, isOAuthAuth, oauthOwner } from "../core/types.js";
 import { classifyStoredToken, remediationFor } from "../lib/oauth/renew.js";
 import { readToken } from "../lib/oauth/store.js";
 import type { AgentId, AgentSnapshot, CanonicalSource } from "../core/types.js";
 import { findWorkspaceRoot } from "../lib/workspace.js";
 import { detectCliVersionSplit, findCliEntrypoints, type VersionExecutor } from "../lib/cliEntrypoints.js";
 import { collectWorkspaceDoctorSection, type WorkspaceDoctorSection } from "../lib/workspaceDoctor.js";
+import {
+  describeEvolveLevels,
+  loadEvolveLevelPolicy,
+  type EvolveLevelSection,
+  type EvolveObservation,
+} from "../host/levels.js";
+
+/**
+ * Pending proposal count via the on-disk data contract (8.1 状态目录 /
+ * 12.4 pending 存储:`~/.trellis/evolve/pending/<safeId>.json`,记录含
+ * `status` 字段)。doctor 属托管层,只读数据、不 import 自我进化代码,
+ * 物理移出消费者后 doctor 仍自洽(目录不存在 → 0)。
+ */
+function countPendingProposalRecords(homeDir: string): number {
+  const dir = join(homeDir, ".trellis", "evolve", "pending");
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, name), "utf-8")) as { status?: string };
+      if (parsed.status === "pending") count += 1;
+    } catch {
+      // 坏文件不阻塞 doctor 扫描。
+    }
+  }
+  return count;
+}
 
 /**
  * Interim default until P1 wires this from `.trellis/mcp/servers.yaml`'s
@@ -131,6 +166,13 @@ export interface DoctorReport {
   /** Per-entry layer attribution when a `.agents/` workspace layer
    * participated (trellis-workspace-scope task 3.5). */
   workspace?: WorkspaceDoctorSection;
+  /** Self-evolution levels when `~/.trellis/evolve.yaml` has any explicit
+   * setting (trellis-evolve task 10.2). Absent when unconfigured — a
+   * machine that never enabled evolution sees byte-identical output. */
+  evolve?: EvolveLevelSection;
+  /** Pending proposal count (trellis-evolve task 12.4; spec: doctor SHALL
+   * list it). Present when > 0 or the evolve section is shown. Read-only. */
+  evolvePending?: number;
 }
 
 /** Exported so tests can assert on this resolution directly, without
@@ -280,7 +322,45 @@ export async function collectDoctorReport(
     ...oauth.flatMap((entry) => (entry.status === "valid" ? [] : [oauthFinding(entry)])),
   );
 
-  return { snapshots, findings, ...(oauth.length > 0 ? { oauth } : {}), ...(workspace ? { workspace } : {}) };
+  // 分级开启(trellis-evolve 10.2):级别策略是显式用户选择,读取零副作用。
+  // 未配置(或全空)时整段缺席 —— 从未开启自我进化的机器输出与未安装时
+  // 一致;损坏的策略文件不拖垮扫描,降级为段内诊断呈现。
+  let evolve: EvolveLevelSection | undefined;
+  try {
+    const policy = loadEvolveLevelPolicy(homeDir);
+    // 整段只在存在显式设置时出现(与未安装时输出一致);托管 agent 的
+    // 列表只是展示面,不构成出现理由。
+    const hasExplicitSetting =
+      policy.defaultLevel !== undefined || Object.keys(policy.agents).length > 0 || Object.keys(policy.workspaces).length > 0;
+    if (hasExplicitSetting) {
+      // 11.4:观测形态按 capability delivery 分类——runtime 交付
+      // ("mcp"/"both")的 agent 走 gateway 事件观察;仅原生渲染
+      // ("native"/未配置)只有 doctor/sync 信号。
+      const observationOf = (agent: AgentId): EvolveObservation =>
+        canonical !== undefined && capabilityDeliveryForAgent(agent, canonical.mcp) !== "native"
+          ? "events"
+          : "doctor-only";
+      evolve = describeEvolveLevels(
+        policy,
+        (canonical?.managedAgents ?? []).map((agent) => ({ agent, observation: observationOf(agent) })),
+      );
+    }
+  } catch (err) {
+    evolve = { agents: [], workspaces: [], diagnostics: [(err as Error).message] };
+  }
+
+  // 12.4:pending 提案数量(spec "trellis doctor SHALL 同样列出")。
+  // 只读状态目录;未开启进化且无存储时为 0,输出保持零噪音。
+  const evolvePending = countPendingProposalRecords(homeDir);
+
+  return {
+    snapshots,
+    findings,
+    ...(oauth.length > 0 ? { oauth } : {}),
+    ...(workspace ? { workspace } : {}),
+    ...(evolve ? { evolve } : {}),
+    ...(evolve || evolvePending > 0 ? { evolvePending } : {}),
+  };
 }
 
 /**
@@ -575,5 +655,24 @@ export function printReport(report: DoctorReport): void {
     for (const warning of ws.precedenceWarnings) {
       console.log(`   ⚠ ${warning}`);
     }
+  }
+
+  if (report.evolve) {
+    const ev = report.evolve;
+    console.log(`\nSelf-evolution (evolve.yaml):`);
+    if (ev.defaultLevel !== undefined) console.log(`   default level: ${ev.defaultLevel}`);
+    for (const entry of ev.agents) {
+      console.log(`   agent ${entry.agent}: ${entry.level} (${entry.observation})`);
+    }
+    for (const entry of ev.workspaces) {
+      console.log(`   workspace ${entry.root}: ${entry.level}`);
+    }
+    for (const diagnostic of ev.diagnostics) {
+      console.log(`   ⚠ ${diagnostic}`);
+    }
+    console.log(`   pending proposals: ${report.evolvePending ?? 0}`);
+  } else if ((report.evolvePending ?? 0) > 0) {
+    // 无级别配置但有 pending 存储:同样列出(spec SHALL),单行提示。
+    console.log(`\nSelf-evolution: ${report.evolvePending} pending proposal(s) — run \`trellis evolve pending\``);
   }
 }

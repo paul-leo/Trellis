@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trellis 自我进化方案 · harness2 引擎 TS 移植</title>
+<style>
+  :root {
+    --ink: #0f172a;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --bg: #f8fafc;
+    --blue: #1d4ed8;
+    --blue-bg: #dbeafe;
+    --orange: #b45309;
+    --orange-bg: #fef3c7;
+    --green: #047857;
+    --green-bg: #d1fae5;
+    --purple: #6d28d9;
+    --purple-bg: #ede9fe;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #0b1220; overflow: hidden; }
+  body { font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; color: var(--ink); }
+
+  .stage {
+    position: absolute; left: 50%; top: 50%;
+    width: 1280px; height: 720px;
+    transform-origin: center center;
+  }
+  .slide {
+    position: absolute; inset: 0; display: none;
+    flex-direction: column;
+    background: var(--bg);
+    padding: 52px 64px 58px;
+  }
+  .slide.active { display: flex; }
+
+  .kicker { font-size: 15px; font-weight: 600; letter-spacing: .18em; color: var(--blue); text-transform: uppercase; margin-bottom: 10px; }
+  h1 { font-size: 30px; font-weight: 700; line-height: 1.25; margin-bottom: 22px; }
+  .content { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+  .footer {
+    position: absolute; left: 64px; right: 64px; bottom: 20px;
+    display: flex; justify-content: space-between;
+    font-size: 13px; color: var(--muted);
+  }
+
+  code { font-family: var(--mono); font-size: .92em; background: #eef2f7; padding: 1px 6px; border-radius: 5px; }
+
+  /* ---------- 标题页 ---------- */
+  .cover { background: #0f172a; color: #f1f5f9; justify-content: center; }
+  .cover .kicker { color: #93c5fd; }
+  .cover h1 { font-size: 56px; margin-bottom: 18px; }
+  .cover .sub { font-size: 24px; color: #cbd5e1; margin-bottom: 8px; }
+  .cover .sub2 { font-size: 17px; color: #64748b; }
+  .cover .badges { margin-top: 44px; display: flex; gap: 14px; }
+  .cover .badge { font-size: 15px; padding: 8px 18px; border: 1px solid #334155; border-radius: 999px; color: #cbd5e1; }
+
+  /* ---------- 通用卡片/表格 ---------- */
+  .cards { display: grid; gap: 18px; }
+  .cards.c2 { grid-template-columns: 1fr 1fr; }
+  .cards.c4 { grid-template-columns: repeat(4, 1fr); }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+  .card .num { font-family: var(--mono); font-size: 13px; font-weight: 700; color: #fff; background: var(--blue); width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px; }
+  .card h3 { font-size: 19px; margin-bottom: 8px; }
+  .card p { font-size: 15.5px; line-height: 1.55; color: #334155; }
+  .card p code { font-size: 13.5px; }
+
+  .banner { margin-top: 22px; background: var(--blue); color: #fff; border-radius: 12px; padding: 16px 24px; font-size: 19px; font-weight: 600; }
+  .banner small { font-weight: 400; opacity: .85; font-size: 15px; display: block; margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+  th, td { padding: 11px 16px; text-align: left; font-size: 15.5px; border-bottom: 1px solid var(--line); }
+  th { background: #f1f5f9; font-size: 14px; color: var(--muted); letter-spacing: .04em; }
+  tr:last-child td { border-bottom: none; }
+  td.mono, th.mono { font-family: var(--mono); font-size: 14px; }
+  .tag { display: inline-block; font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .tag.keep   { background: var(--blue-bg); color: var(--blue); }
+  .tag.proto  { background: var(--purple-bg); color: var(--purple); }
+  .tag.thin   { background: #e0f2fe; color: #0369a1; }
+  .tag.drop   { background: #fee2e2; color: #b91c1c; }
+  .tag.build  { background: var(--orange-bg); color: var(--orange); }
+  .tag.cli    { background: #f1f5f9; color: var(--muted); }
+
+  /* ---------- 分层架构 ---------- */
+  .layers { display: flex; flex-direction: column; gap: 8px; flex: 1; justify-content: center; }
+  .layer { display: flex; align-items: center; gap: 18px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 13px 20px; }
+  .layer .lname { font-family: var(--mono); font-size: 14px; font-weight: 700; width: 52px; color: var(--muted); flex-shrink: 0; }
+  .layer .lbody { flex: 1; }
+  .layer .ltitle { font-size: 17px; font-weight: 700; }
+  .layer .lmods { font-size: 14px; color: #475569; margin-top: 2px; }
+  .layer .lmods code { background: transparent; padding: 0; font-size: 13.5px; color: #475569; }
+  .layer .ltag { font-size: 13px; font-weight: 700; padding: 4px 12px; border-radius: 999px; flex-shrink: 0; }
+  .layer.blue   { border-left: 5px solid var(--blue); }   .layer.blue .ltag   { background: var(--blue-bg); color: var(--blue); }
+  .layer.purple { border-left: 5px solid var(--purple); } .layer.purple .ltag { background: var(--purple-bg); color: var(--purple); }
+  .layer.orange { border-left: 5px solid #d97706; }       .layer.orange .ltag { background: var(--orange-bg); color: var(--orange); }
+  .layer.green  { border-left: 5px solid var(--green); }  .layer.green .ltag  { background: var(--green-bg); color: var(--green); }
+  .layer.seam   { border-style: dashed; border-color: var(--purple); background: #faf5ff; }
+  .layer.seam .ltitle { color: var(--purple); }
+
+  /* ---------- 组件架构图 ---------- */
+  .arch { display: flex; flex-direction: column; gap: 0; flex: 1; justify-content: center; }
+  .panel { border-radius: 16px; padding: 16px 20px 18px; }
+  .panel .phead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .panel .pname { font-size: 17px; font-weight: 700; }
+  .panel .pnote { font-size: 13.5px; opacity: .75; }
+  .panel.engine  { background: var(--blue-bg); border: 1.5px solid #93c5fd; }
+  .panel.engine .pname, .panel.engine .pnote { color: #1e3a8a; }
+  .panel.adapter { background: var(--orange-bg); border: 1.5px solid #fcd34d; }
+  .panel.adapter .pname, .panel.adapter .pnote { color: #78350f; }
+  .panel.host    { background: var(--green-bg); border: 1.5px solid #6ee7b7; }
+  .panel.host .pname, .panel.host .pnote { color: #064e3b; }
+  .chips { display: flex; gap: 10px; flex-wrap: wrap; }
+  .chip { background: #fff; border: 1px solid rgba(15,23,42,.12); border-radius: 9px; padding: 8px 13px; font-size: 14.5px; font-weight: 600; box-shadow: 0 1px 2px rgba(15,23,42,.05); }
+  .chip small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .chipgrp { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+  .chipgrp .glabel { font-family: var(--mono); font-size: 12px; font-weight: 700; color: #1e40af; letter-spacing: .05em; }
+  .enginegroups { display: flex; gap: 16px; }
+  .seamarrow { display: flex; align-items: center; gap: 14px; padding: 8px 0 8px 46px; }
+  .seamarrow .arr { font-size: 24px; color: var(--purple); line-height: 1; }
+  .seamarrow .lbl { font-size: 14.5px; color: var(--purple); font-weight: 600; }
+  .archnote { margin-top: 14px; font-size: 14.5px; color: var(--muted); text-align: center; }
+  .archnote b { color: var(--ink); }
+
+  /* ---------- 机制页 ---------- */
+  .invariant { display: flex; gap: 18px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; align-items: flex-start; }
+  .invariant .inum { font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--blue); background: var(--blue-bg); border-radius: 8px; padding: 5px 11px; flex-shrink: 0; }
+  .invariant h3 { font-size: 18px; margin-bottom: 5px; }
+  .invariant p { font-size: 15px; line-height: 1.5; color: #334155; }
+  .invariant p code { font-size: 13px; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+
+  /* ---------- 移植顺序 ---------- */
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; flex: 1; align-content: center; }
+  .step { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 16px; position: relative; }
+  .step .snum { position: absolute; top: -13px; left: 16px; background: var(--blue); color: #fff; font-family: var(--mono); font-size: 13px; font-weight: 700; border-radius: 8px; padding: 3px 10px; }
+  .step h3 { font-size: 16.5px; margin: 8px 0 6px; font-family: var(--mono); }
+  .step p { font-size: 13.5px; line-height: 1.5; color: #475569; }
+  .steps-row2 { margin-top: 26px; }
+  .step.hl { border-color: #d97706; }
+  .step.hl .snum { background: #d97706; }
+
+  /* ---------- 映射页 ---------- */
+  .mapgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; align-content: center; }
+  .mapcol { border-radius: 14px; padding: 18px 22px; }
+  .mapcol h3 { font-size: 18px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
+  .mapcol ul { list-style: none; }
+  .mapcol li { font-size: 15px; line-height: 1.55; padding: 7px 0 7px 20px; position: relative; border-bottom: 1px dashed rgba(15,23,42,.08); }
+  .mapcol li:last-child { border-bottom: none; }
+  .mapcol li::before { content: "▸"; position: absolute; left: 2px; opacity: .5; }
+  .mapcol.keep   { background: #eff6ff; border: 1px solid #bfdbfe; } .mapcol.keep h3 { color: var(--blue); }
+  .mapcol.rewrite{ background: #faf5ff; border: 1px solid #ddd6fe; } .mapcol.rewrite h3 { color: var(--purple); }
+  .mapcol.incr   { background: #fffbeb; border: 1px solid #fde68a; } .mapcol.incr h3 { color: var(--orange); }
+  .mapcol.rebase { background: #f8fafc; border: 1px solid var(--line); } .mapcol.rebase h3 { color: var(--muted); }
+  .mapcol li code { font-size: 13px; }
+
+  /* ---------- 拍板页 ---------- */
+  .decide { display: flex; flex-direction: column; gap: 14px; flex: 1; justify-content: center; }
+  .dq { display: flex; gap: 18px; align-items: flex-start; background: #fff; border: 1px solid var(--line); border-left: 5px solid var(--blue); border-radius: 12px; padding: 16px 22px; }
+  .dq .dn { font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--blue); flex-shrink: 0; padding-top: 2px; }
+  .dq h3 { font-size: 17.5px; margin-bottom: 4px; }
+  .dq p { font-size: 14.5px; color: #475569; line-height: 1.5; }
+  .dq p b { color: var(--ink); }
+  .next { margin-top: 6px; background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 15px 22px; font-size: 15.5px; }
+  .next b { color: #93c5fd; }
+
+  /* ---------- 导航 ---------- */
+  .nav {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px; z-index: 10;
+    background: rgba(15,23,42,.82); border-radius: 999px; padding: 8px 18px;
+    backdrop-filter: blur(6px);
+  }
+  .nav button { background: none; border: none; color: #cbd5e1; font-size: 17px; cursor: pointer; padding: 2px 8px; }
+  .nav button:hover { color: #fff; }
+  .nav .cnt { font-family: var(--mono); font-size: 13.5px; color: #94a3b8; min-width: 52px; text-align: center; }
+  .hint { position: fixed; right: 20px; bottom: 24px; color: #475569; font-size: 12.5px; z-index: 10; }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage">
+
+<!-- ========== 1 封面 ========== -->
+<section class="slide cover active">
+  <div class="kicker">Trellis · Self-Evolution</div>
+  <h1>自我进化方案</h1>
+  <div class="sub">harness2 引擎 TypeScript 移植 —— 移植引擎,而非再造形态</div>
+  <div class="sub2">调研结论 · 架构视图 · 实施路径</div>
+  <div class="badges">
+    <div class="badge">core ≈ 5,650 行直译</div>
+    <div class="badge">零第三方依赖</div>
+    <div class="badge">macOS 可跑</div>
+    <div class="badge">唯一新写:TrellisSubstrate</div>
+  </div>
+  <div class="footer" style="color:#64748b"><span>内部讨论稿 · 2026-10</span><span>2026-10-24 方向已定 · 草案文档已同步</span></div>
+</section>
+
+<!-- ========== 2 背景与裁决 ========== -->
+<section class="slide">
+  <div class="kicker">01 · 背景与裁决</div>
+  <h1>从"借方法论自设形态"改为"移植引擎"</h1>
+  <div class="content">
+    <div class="cards c2" style="flex:1;align-content:center">
+      <div class="card" style="border-left:5px solid #94a3b8">
+        <h3>原方向(已被推翻)</h3>
+        <p>trellis-evolve 草案:<b>借 harness2 的方法论</b>,重新设计一套自己的形态 —— HostPort 接口、五环术语、分级开启,均属自造。</p>
+      </div>
+      <div class="card" style="border-left:5px solid var(--blue)">
+        <h3>新裁决(当前方向)</h3>
+        <p>我们要做的是 <b>harness2 的 TS 版本</b>:把它的引擎<b>原样移植</b>,宿主适配层(TrellisSubstrate)是唯一重设计的点。</p>
+      </div>
+    </div>
+    <div class="banner" style="background:#334155">
+      调研要回答的问题
+      <small>harness2 引擎里有多少是纯逻辑可直接翻译?多少绑死 Python / Vertex / Docker / Linux?哪些根本不是代码而是资产?</small>
+    </div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>02 / 11</span></div>
+</section>
+
+<!-- ========== 3 决定性事实 ========== -->
+<section class="slide">
+  <div class="kicker">02 · 调研结论</div>
+  <h1>四个决定性事实:移植可行,且比预想顺利</h1>
+  <div class="content">
+    <div class="cards c2" style="flex:1;align-content:center">
+      <div class="card"><div class="num">1</div>
+        <h3><code>dependencies = []</code></h3>
+        <p>pyproject.toml 声明<b>运行时零第三方依赖</b>,core 全部只用 Python 标准库 —— TS/Node 全部有直接对应物。这是可行性的决定性证据。</p>
+      </div>
+      <div class="card"><div class="num">2</div>
+        <h3>Vertex 只是环境变量</h3>
+        <p>core 里<b>没有任何 Google SDK import</b>。LLM 调用 = spawn CLI 子进程 + 注入凭据环境变量。移植时只是换凭据形态。</p>
+      </div>
+      <div class="card"><div class="num">3</div>
+        <h3>无 Linux-only 代码</h3>
+        <p>全库没有平台 gate。README 的 Linux 是内部环境取舍;Docker 只有 WorkBuddy benchmark 需要 —— <b>不移植它就不需要 Docker</b>。core 在 macOS 可跑。</p>
+      </div>
+      <div class="card"><div class="num">4</div>
+        <h3>引擎与 benchmark 彻底分层</h3>
+        <p>依赖方向单向:<code>benchmarks → substrate → core</code>,core 不反向依赖任何东西。<b>引擎可整体移植而完全不碰 Google 的三个 benchmark。</b></p>
+      </div>
+    </div>
+    <div class="banner">核心移植规模:约 6,000 – 7,000 行 TypeScript<small>core ≈ 5,650 行 + substrate 协议 83 行 + config/cli 瘦身移植</small></div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>03 / 11</span></div>
+</section>
+
+<!-- ========== 4 移植分层表 ========== -->
+<section class="slide">
+  <div class="kicker">03 · 移植分层</div>
+  <h1>每一块去哪:直译 / 新写 / 不移植</h1>
+  <div class="content" style="justify-content:center">
+    <table>
+      <tr><th>层</th><th>内容</th><th class="mono">行数</th><th>处置</th></tr>
+      <tr><td><b>直译层</b> core/</td><td>tree · runmark · ledger · spec · prompts · judge · context · library · selection · proposer · schedule · recursion · report</td><td class="mono">~5,650</td><td><span class="tag keep">整体 TS 化</span></td></tr>
+      <tr><td><b>协议层</b> substrate/base.py</td><td>Substrate 协议 5 方法:surface / materialise / execute / read_trajectory / preflight</td><td class="mono">83</td><td><span class="tag proto">原样翻译 + 新实现</span></td></tr>
+      <tr><td><b>配置层</b> config.py</td><td>环境变量汇聚、路径约定</td><td class="mono">189</td><td><span class="tag thin">瘦身移植</span></td></tr>
+      <tr><td><b>评测资产</b> benchmarks/</td><td>Google 三个评测任务集(jobbench / workbuddy / lab)</td><td class="mono">4,170</td><td><span class="tag drop">不移植 → 自建探针</span></td></tr>
+      <tr><td><b>外围</b> third_party + dependencies + install</td><td>外部 pinned 仓库、runner、环境安装</td><td class="mono">~800+</td><td><span class="tag drop">全删</span></td></tr>
+      <tr><td><b>自建</b> 探针任务集</td><td>benchmarks 的 Trellis 对应物(真实事故复现题、纠正转化题)</td><td class="mono">0 → ?</td><td><span class="tag build">真正的前置资产</span></td></tr>
+      <tr><td><b>薄封装</b> cli/</td><td>7 个 console script(docstring 自述 thin argparse over core)</td><td class="mono">数百</td><td><span class="tag cli">TS bin + 子命令</span></td></tr>
+    </table>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>04 / 11</span></div>
+</section>
+
+<!-- ========== 5 分层架构 ========== -->
+<section class="slide">
+  <div class="kicker">04 · 分层架构</div>
+  <h1>六层:接缝之上直译,接缝之下新写</h1>
+  <div class="content">
+    <div class="layers">
+      <div class="layer purple"><div class="lname">L4</div><div class="lbody"><div class="ltitle">治理层(Trellis 增量,harness2 没有)</div><div class="lmods">分级开启(off→observe→propose→auto) · 带外批准 · L1 doctor-oracle 差集(确定性验收器)</div></div><div class="ltag">产品护栏</div></div>
+      <div class="layer blue"><div class="lname">L3</div><div class="lbody"><div class="ltitle">编排层(直译)</div><div class="lmods"><code>schedule</code> 五环循环 · <code>recursion</code> 树回写与回滚 · <code>report</code></div></div><div class="ltag">直译</div></div>
+      <div class="layer blue"><div class="lname">L2</div><div class="lbody"><div class="ltitle">核心层(直译)</div><div class="lmods"><code>selection</code> 两段式 · <code>proposer</code> 会话调用 · <code>judge</code> · <code>context</code> 穷人沙盒 · <code>prompts</code> · <code>library</code></div></div><div class="ltag">直译</div></div>
+      <div class="layer blue"><div class="lname">L1</div><div class="lbody"><div class="ltitle">基础层(直译)</div><div class="lmods"><code>tree</code> 可编辑树 · <code>runmark</code> 指纹 · <code>ledger</code> 预算恒等式 · <code>spec</code> 类型声明</div></div><div class="ltag">直译</div></div>
+      <div class="layer seam"><div class="lname">―</div><div class="lbody"><div class="ltitle">Substrate 协议(5 方法接缝)</div><div class="lmods">surface · materialise · execute · read_trajectory · preflight —— harness2 已验证的签名,原样翻译,<b>不自造接口</b></div></div><div class="ltag">接缝</div></div>
+      <div class="layer orange"><div class="lname">L0</div><div class="lbody"><div class="ltitle">宿主适配层(新写)</div><div class="lmods">TrellisSubstrate 实现 · 凭据注入(spawn CLI + env) · 探针任务集</div></div><div class="ltag">新写</div></div>
+      <div class="layer green"><div class="lname">L-1</div><div class="lbody"><div class="ltitle">现有宿主(不动)</div><div class="lmods">~/.trellis canonical(agents/skills/mcp/memories) · Agent 原生 staging · 会话记录/doctor</div></div><div class="ltag">复用</div></div>
+    </div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>05 / 11</span></div>
+</section>
+
+<!-- ========== 6 组件架构图 ========== -->
+<section class="slide">
+  <div class="kicker">05 · 组件架构</div>
+  <h1>引擎只认识协议,不认识 Trellis</h1>
+  <div class="content">
+    <div class="arch">
+      <div class="panel engine">
+        <div class="phead"><span class="pname">TS 引擎(内部包 packages/evolve-engine,从 harness2 直译 ~6,000 行)</span><span class="pnote">阶段一不发 npm · golden 对照锚定 Python 原版</span></div>
+        <div class="enginegroups">
+          <div class="chipgrp"><div class="glabel">编排</div><div class="chips"><div class="chip">schedule<small>五环循环</small></div><div class="chip">recursion<small>树回写/回滚</small></div><div class="chip">report</div></div></div>
+          <div class="chipgrp"><div class="glabel">核心</div><div class="chips"><div class="chip">selection<small>两段式:提案+评分</small></div><div class="chip">proposer<small>缓存/重试/并发闸</small></div><div class="chip">judge</div><div class="chip">context<small>穷人沙盒</small></div><div class="chip">prompts</div></div></div>
+          <div class="chipgrp"><div class="glabel">基础</div><div class="chips"><div class="chip">tree</div><div class="chip">runmark<small>指纹缓存</small></div><div class="chip">ledger<small>预算恒等式</small></div><div class="chip">spec</div><div class="chip">library</div></div></div>
+        </div>
+      </div>
+      <div class="seamarrow">
+        <span class="arr">▲</span>
+        <span class="lbl">implements —— Substrate 协议(5 方法 interface,83 行原样翻译)</span>
+      </div>
+      <div class="panel adapter">
+        <div class="phead"><span class="pname">适配层 ★ 唯一新写部分</span><span class="pnote">将来换宿主只重写这一层</span></div>
+        <div class="chips">
+          <div class="chip">TrellisSubstrate<small>实现 5 方法协议</small></div>
+          <div class="chip">凭据注入<small>spawn CLI + env(替代 Vertex env)</small></div>
+          <div class="chip">探针任务集<small>替代 benchmarks 4,170 行</small></div>
+        </div>
+      </div>
+      <div class="panel host">
+        <div class="phead"><span class="pname">现有宿主(不重写)</span></div>
+        <div class="chips">
+          <div class="chip">~/.trellis canonical<small>agents / skills / mcp / memories</small></div>
+          <div class="chip">Agent 原生 staging</div>
+          <div class="chip">会话记录 / doctor</div>
+        </div>
+      </div>
+      <div class="archnote">依赖方向单向:<b>engine → protocol ← adapter → host</b>。引擎对 Trellis 零感知;阶段二(第二个消费者出现)把引擎提升为公开包,与 agent-framework 整合是同一动作。</div>
+    </div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>06 / 11</span></div>
+</section>
+
+<!-- ========== 7 四大不变式 ========== -->
+<section class="slide">
+  <div class="kicker">06 · 关键机制</div>
+  <h1>四个引擎不变式 —— 移植时必须保真</h1>
+  <div class="content">
+    <div class="stack" style="flex:1;justify-content:center">
+      <div class="invariant"><div class="inum">01</div><div><h3>指纹缓存(runmark)在发子进程之前拦</h3><p>调用键 = <code>_call_fingerprint(label, mission, system, context_dir)</code>。命中即直接返回历史结果,<b>不产生任何模型调用费用</b> —— 省的是真金白银。</p></div></div>
+      <div class="invariant"><div class="inum">02</div><div><h3>穷人沙盒:每次调用独立 mkdtemp + copytree</h3><p>临时目录销毁前由 <code>harvest</code> 把子路径(如 <code>context/harness</code>)复制回来。无 Docker、无 VM,靠文件系统隔离,macOS 原生成立。</p></div></div>
+      <div class="invariant"><div class="inum">03</div><div><h3>失败收口:超时/异常统一为 Reply(ok=false)</h3><p>重试退避 <code>10s × (attempt-1)</code>,失败后循环继续而非崩溃 —— 单个会话失败不拖垮整轮 sweep。</p></div></div>
+      <div class="invariant"><div class="inum">04</div><div><h3>judge 预检先行</h3><p>真跑前先检查 judge 可用:换 judge 模型会被<b>拒绝评分</b> —— 避免花钱跑完才发现评分链缺失。</p></div></div>
+    </div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>07 / 11</span></div>
+</section>
+
+<!-- ========== 8 时序图 ========== -->
+<section class="slide">
+  <div class="kicker">07 · 时序图</div>
+  <h1>一轮 evolve 循环(五环,直到预算用尽)</h1>
+  <div class="content" style="align-items:center">
+    <svg viewBox="0 0 1240 648" style="width:100%;max-height:570px" font-family="inherit">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#1e40af"/>
+        </marker>
+        <marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+        </marker>
+      </defs>
+      <!-- 参与者 -->
+      <g font-size="13.5" font-weight="700" text-anchor="middle">
+        <g><rect x="18" y="6" width="144" height="40" rx="9" fill="#e2e8f0" stroke="#94a3b8"/><text x="90" y="23" fill="#0f172a">CLI(用户)</text><text x="90" y="39" fill="#64748b" font-weight="400" font-size="11.5">入口/成本闸</text></g>
+        <g><rect x="168" y="6" width="144" height="40" rx="9" fill="#dbeafe" stroke="#93c5fd"/><text x="240" y="31" fill="#1e3a8a">schedule</text></g>
+        <g><rect x="318" y="6" width="144" height="40" rx="9" fill="#dbeafe" stroke="#93c5fd"/><text x="390" y="31" fill="#1e3a8a">proposer</text></g>
+        <g><rect x="468" y="6" width="144" height="40" rx="9" fill="#f1f5f9" stroke="#cbd5e1"/><text x="540" y="23" fill="#0f172a">claude CLI</text><text x="540" y="39" fill="#64748b" font-weight="400" font-size="11.5">spawn 子进程</text></g>
+        <g><rect x="618" y="6" width="150" height="40" rx="9" fill="#fef3c7" stroke="#fcd34d"/><text x="693" y="23" fill="#78350f">TrellisSubstrate</text><text x="693" y="39" fill="#92400e" font-weight="400" font-size="11.5">适配层·新写</text></g>
+        <g><rect x="782" y="6" width="130" height="40" rx="9" fill="#fef3c7" stroke="#fcd34d"/><text x="847" y="23" fill="#78350f">探针沙盒</text><text x="847" y="39" fill="#92400e" font-weight="400" font-size="11.5">临时目录</text></g>
+        <g><rect x="926" y="6" width="120" height="40" rx="9" fill="#dbeafe" stroke="#93c5fd"/><text x="986" y="31" fill="#1e3a8a">judge</text></g>
+        <g><rect x="1060" y="6" width="150" height="40" rx="9" fill="#dbeafe" stroke="#93c5fd"/><text x="1135" y="23" fill="#1e3a8a">ledger/tree</text><text x="1135" y="39" fill="#1e40af" font-weight="400" font-size="11.5">runmark·预算·树</text></g>
+      </g>
+      <!-- 生命线 -->
+      <g stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4 4">
+        <line x1="90" y1="50" x2="90" y2="622"/><line x1="240" y1="50" x2="240" y2="622"/><line x1="390" y1="50" x2="390" y2="622"/><line x1="540" y1="50" x2="540" y2="622"/><line x1="693" y1="50" x2="693" y2="622"/><line x1="847" y1="50" x2="847" y2="622"/><line x1="986" y1="50" x2="986" y2="622"/><line x1="1135" y1="50" x2="1135" y2="622"/>
+      </g>
+      <!-- loop 框 -->
+      <rect x="222" y="150" width="1002" height="424" rx="10" fill="none" stroke="#a5b4fc" stroke-width="1.5"/>
+      <rect x="222" y="150" width="248" height="22" rx="7" fill="#e0e7ff"/>
+      <text x="232" y="165" font-size="12.5" font-weight="700" fill="#3730a3">loop · 每个 cycle(直到预算用尽)</text>
+
+      <!-- 消息 -->
+      <g font-size="12.5" fill="#0f172a" text-anchor="middle">
+        <line x1="90" y1="76" x2="236" y2="76" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="163" y="68">run --dry-run(先估成本)</text>
+
+        <line x1="240" y1="103" x2="689" y2="103" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="464" y="95">preflight()</text>
+
+        <line x1="693" y1="130" x2="244" y2="130" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+        <text x="464" y="122">健康 / 否则抛错+修复命令(未启动任何模型链)</text>
+
+        <line x1="240" y1="196" x2="1131" y2="196" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="686" y="188">查 runmark 指纹</text>
+
+        <line x1="1135" y1="223" x2="244" y2="223" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+        <text x="686" y="215">已评分任务 → 跳过(缓存,零成本)</text>
+
+        <line x1="240" y1="250" x2="689" y2="250" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="464" y="242">surface() → 可编辑树 schema</text>
+
+        <line x1="240" y1="277" x2="386" y2="277" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="313" y="269">请求提案</text>
+
+        <rect x="400" y="288" width="300" height="20" rx="5" fill="#fffbeb" stroke="#fcd34d"/>
+        <text x="550" y="302" font-size="11.5" fill="#92400e">缓存未命中 → mkdtemp + copytree(穷人沙盒)</text>
+
+        <line x1="390" y1="322" x2="536" y2="322" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="463" y="314">spawn + env 注入凭据(并发闸)</text>
+
+        <line x1="540" y1="349" x2="394" y2="349" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+        <text x="467" y="341">候选改动 / 超时·异常</text>
+
+        <rect x="400" y="360" width="290" height="20" rx="5" fill="#fffbeb" stroke="#fcd34d"/>
+        <text x="545" y="374" font-size="11.5" fill="#92400e">失败收口 Reply(ok=false) · 重试 10s×n</text>
+
+        <line x1="390" y1="398" x2="244" y2="398" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+        <text x="317" y="390">候选树(ok / ok=false)</text>
+
+        <line x1="240" y1="425" x2="689" y2="425" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="464" y="417">materialise(候选)</text>
+
+        <line x1="693" y1="452" x2="843" y2="452" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="768" y="444">execute(探针任务 × N runs)</text>
+
+        <line x1="847" y1="479" x2="697" y2="479" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+        <text x="772" y="471">轨迹文件</text>
+
+        <line x1="693" y1="506" x2="244" y2="506" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+        <text x="464" y="498">read_trajectory(渲染为共享语法)</text>
+
+        <line x1="240" y1="533" x2="982" y2="533" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="613" y="525">评分(轨迹)· judge 同样经 CLI spawn</text>
+
+        <line x1="986" y1="560" x2="1131" y2="560" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+        <text x="1060" y="552">入账(预算恒等式校验)</text>
+
+        <line x1="240" y1="590" x2="1131" y2="590" stroke="#1e40af" stroke-width="1.8" marker-end="url(#ah)"/>
+        <text x="686" y="582">recursion:胜者写回 base / 失败回滚</text>
+      </g>
+
+      <line x1="240" y1="616" x2="94" y2="616" stroke="#64748b" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ahr)"/>
+      <text x="167" y="608" font-size="12.5" fill="#0f172a" text-anchor="middle">report(分数/成本/树 diff)</text>
+    </svg>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>08 / 11</span></div>
+</section>
+
+<!-- ========== 9 移植顺序 ========== -->
+<section class="slide">
+  <div class="kicker">08 · 实施路径</div>
+  <h1>移植顺序:按依赖图,每层可独立测试</h1>
+  <div class="content">
+    <div class="steps">
+      <div class="step"><div class="snum">1</div><h3>tree → runmark → ledger</h3><p>零依赖基础层。可编辑树、指纹、预算恒等式 —— 纯数据结构,最先翻译、最先测。</p></div>
+      <div class="step"><div class="snum">2</div><h3>spec → prompts</h3><p>声明层。类型 + 1,163 行 prompt 模板资产(建议原样保留英文,降低移植偏差)。</p></div>
+      <div class="step"><div class="snum">3</div><h3>context → library</h3><p>中间层。穷人沙盒(mkdtemp/copytree → fs 原生)与库管理。</p></div>
+      <div class="step"><div class="snum">4</div><h3>proposer → selection</h3><p>核心层。spawn+env 凭据注入、信号量并发闸、缓存与重试 —— 语义映射最密集处。</p></div>
+      <div class="step steps-row2"><div class="snum">5</div><h3>schedule → recursion → report</h3><p>编排层。五环循环、树回写/回滚、报表。ThreadPoolExecutor → Promise 并发池。</p></div>
+      <div class="step hl"><div class="snum">6</div><h3>Substrate 接口 + TrellisSubstrate</h3><p>83 行协议原样翻译;宿主实现:surface 声明树 / materialise 渲染 staging / execute 拉探针会话 / read_trajectory 读会话记录 / preflight = doctor。</p></div>
+      <div class="step"><div class="snum">7</div><h3>凭据适配</h3><p>Vertex env 注入 → 现有凭据形态(agent-bridge 或本机 CLI 登录态)。不移植任何 Google 凭据变量。</p></div>
+      <div class="step"><div class="snum">8</div><h3>golden 对照验收</h3><p>借 harness2 tests/ 的 fixture,Python/TS 双实现<b>同输入比输出</b> —— 移植正确性的锚。</p></div>
+    </div>
+    <div class="banner" style="background:#334155;margin-top:24px">探针任务集与移植并行建设 —— 先用 fake benchmark 跑通管线,任务集是 execute() 真正有活干的前提</div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>09 / 11</span></div>
+</section>
+
+<!-- ========== 10 草案映射 ========== -->
+<section class="slide">
+  <div class="kicker">09 · 与 trellis-evolve 草案的映射</div>
+  <h1>旧草案怎么处置:保留 / 改写 / 保留为增量 / 性质改变</h1>
+  <div class="content">
+    <div class="mapgrid">
+      <div class="mapcol keep">
+        <h3>✓ 保留</h3>
+        <ul>
+          <li>D12 穷人沙盒(mkdtemp + copytree)</li>
+          <li>两段式选择/评分(improver 提案 + judge 评分)</li>
+          <li>失败收口(Reply(ok=false),循环继续)</li>
+          <li>D13 指纹缓存 · SurfaceSpec 思想</li>
+          <li>三个刻意偏差:不 bypass 沙盒 / base 留池 / 不绑 Vertex</li>
+        </ul>
+      </div>
+      <div class="mapcol rewrite">
+        <h3>✎ 改写</h3>
+        <ul>
+          <li>D2 <code>HostPort</code> 接口倒置 → <b>作废</b>,改用已验证的 Substrate 5 方法签名</li>
+          <li>五环等术语 → 对齐 harness2 的 stages 命名</li>
+          <li>"移植方法论,不移植代码"结论 → 修正为<b>"移植引擎"</b></li>
+        </ul>
+      </div>
+      <div class="mapcol incr">
+        <h3>★ 保留为 Trellis 增量(引擎之外)</h3>
+        <ul>
+          <li>L1 doctor-oracle 差集 —— harness2 之外的确定性 oracle 验收器,叠在 L4 治理层</li>
+          <li>分级开启 / 带外批准 —— 产品护栏,不侵入引擎</li>
+        </ul>
+      </div>
+      <div class="mapcol rebase">
+        <h3>↻ 性质改变</h3>
+        <ul>
+          <li>原 tasks 第 1 组(三个只读前置验证)→ 改为<b>移植前置</b>:先在 fixture 上跑通原版,拿到 golden 基线</li>
+          <li>新增前置资产:探针任务集(与移植并行)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>10 / 11</span></div>
+</section>
+
+<!-- ========== 11 决议与下一步 ========== -->
+<section class="slide">
+  <div class="kicker">10 · 决议与下一步</div>
+  <h1>方向已定,两阶段落地</h1>
+  <div class="content">
+    <div class="decide">
+      <div class="dq" style="border-left-color:var(--green)"><div class="dn" style="color:var(--green)">已定</div><div><h3>方向:移植引擎,而非再造形态</h3><p>TS 移植 harness2 引擎(<code>packages/evolve-engine</code>)+ TrellisSubstrate 适配层;L4 治理(确定性 L1 前闸 + 分级采纳)保留为引擎外增量。原 HostPort 接口作废,改用已验证的 Substrate 5 方法签名。</p></div></div>
+      <div class="dq" style="border-left-color:var(--green)"><div class="dn" style="color:var(--green)">已定</div><div><h3>打包:两阶段 —— 内部包先行,公开包后置</h3><p>阶段一:workspace 内部包,<b>不发 npm</b>,拿到库边界全部好处而不付发布维护税。阶段二:第二个真实消费者出现时(首先是 agent-framework)提升为公开包 —— 框架以依赖方式消费引擎并写自己的 Substrate 实现,<b>整合与公开化是同一动作</b>。</p></div></div>
+      <div class="dq"><div class="dn">默认</div><div><h3>prompt 模板语言</h3><p>1,163 行模板<b>原样保留英文</b>(已验证资产,降低移植偏差);如有异议请在移植开始前提出,中文化须重建 golden 对照集。</p></div></div>
+      <div class="next"><b>文档已同步(2026-10-24):</b>proposal / design / tasks 已按"移植引擎 + 两阶段"修订,specs 行为契约不变。下一步 = golden 基线 → 按依赖图移植(每层对照)→ 适配层与托管扩展点 → 治理端到端;探针任务集并行。</div>
+    </div>
+  </div>
+  <div class="footer"><span>Trellis · 自我进化方案</span><span>11 / 11</span></div>
+</section>
+
+</div>
+
+<div class="nav">
+  <button id="prev" title="上一页">‹</button>
+  <span class="cnt" id="cnt">1 / 11</span>
+  <button id="next" title="下一页">›</button>
+</div>
+<div class="hint">← → 翻页 · Home/End 首尾</div>
+
+<script>
+(function () {
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const cnt = document.getElementById('cnt');
+  const stage = document.getElementById('stage');
+  let i = 0;
+
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    cnt.textContent = (i + 1) + ' / ' + slides.length;
+    location.hash = '#' + (i + 1);
+  }
+
+  function fit() {
+    const s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    stage.style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+
+  document.getElementById('prev').onclick = () => show(i - 1);
+  document.getElementById('next').onclick = () => show(i + 1);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') show(i + 1);
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') show(i - 1);
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+  });
+  window.addEventListener('resize', fit);
+
+  const h = parseInt(location.hash.slice(1), 10);
+  show(isNaN(h) ? 0 : h - 1);
+  fit();
+})();
+</script>
+</body>
+</html>

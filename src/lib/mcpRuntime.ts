@@ -4,6 +4,7 @@ import type { CallToolResult, GetPromptResult, Implementation, Prompt, ReadResou
 import type { AgentId } from "../core/types.js";
 import type { GatewayBackend } from "./gatewayBackend.js";
 import type { SkillEntry } from "./skillManifest.js";
+import type { ToolCallInfo, ToolResultCategory } from "../host/hostEvents.js";
 import { allocateExposedToolNames } from "./mcpToolRegistry.js";
 import { withoutUpstreamServerInfo } from "./upstreamResources.js";
 
@@ -34,6 +35,17 @@ function providerError(provider: string, error: unknown): string {
   return `trellis-mcp-runtime: provider "${provider}" failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
+function resultCategory(result: CallToolResult | undefined): ToolResultCategory {
+  if (!result?.isError) return "ok";
+  const text = JSON.stringify(result.content ?? "");
+  return /timed? ?out/i.test(text) ? "timeout" : "error";
+}
+
+function thrownCategory(err: unknown): ToolResultCategory {
+  const message = err instanceof Error ? `${err.name} ${err.message}` : String(err);
+  return /timed? ?out/i.test(message) ? "timeout" : "error";
+}
+
 export class BuiltinRegistry {
   private readonly toolOwners = new Map<string, TrellisProvider>();
   private readonly originalToolOwners = new Map<string, TrellisProvider>();
@@ -41,7 +53,13 @@ export class BuiltinRegistry {
   private readonly resourceOwners = new Map<string, TrellisProvider>();
   private readonly promptOwners = new Map<string, TrellisProvider>();
 
-  constructor(private readonly providers: readonly TrellisProvider[], private readonly warn: (message: string) => void = console.error) {}
+  constructor(
+    private readonly providers: readonly TrellisProvider[],
+    private readonly warn: (message: string) => void = console.error,
+    /** Event choke point (host-extension-points): called after every routed
+     * tool call with metadata only. Absent = pre-event behavior, unchanged. */
+    private readonly onToolCall?: (info: ToolCallInfo) => void,
+  ) {}
 
   async listTools(context: RuntimeContext): Promise<Tool[]> {
     const candidates: Array<{ provider: TrellisProvider; tool: Tool }> = [];
@@ -86,10 +104,26 @@ export class BuiltinRegistry {
       if (!provider) provider = this.originalToolOwners.get(name);
     }
     if (!provider) return { content: [{ type: "text", text: `unknown Trellis tool "${name}"` }], isError: true };
+    const started = Date.now();
     try {
-      return await provider.callTool(originalName, args, context);
+      const result = await provider.callTool(originalName, args, context);
+      this.emitToolCall({ provider: provider.id, tool: name, durationMs: Date.now() - started, result: resultCategory(result) });
+      return result;
     } catch (err) {
+      this.emitToolCall({ provider: provider.id, tool: name, durationMs: Date.now() - started, result: thrownCategory(err) });
       return { content: [{ type: "text", text: providerError(provider.id, err) }], isError: true };
+    }
+  }
+
+  /** Metadata-only event emission at the call choke point. Fully
+   * transparent: a failing observer never changes the tool call's result or
+   * error semantics (host-events transparency requirement). */
+  private emitToolCall(info: ToolCallInfo): void {
+    if (!this.onToolCall) return;
+    try {
+      this.onToolCall(info);
+    } catch (err) {
+      this.warn(`trellis-mcp-runtime: tool-call observer failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

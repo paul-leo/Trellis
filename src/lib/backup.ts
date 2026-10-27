@@ -134,20 +134,28 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
     writeFile(path: string, content: string): void {
       ensureDir();
       const afterHash = sha256(content);
+      // Record AFTER the write lands: an operation logged before its write
+      // is a phantom if the write throws (e.g. missing parent dir) — the
+      // manifest would claim a file-create for a path that never existed,
+      // and rollback would report a spurious conflict instead of "nothing
+      // to undo". The overwrite branch's before-snapshot must still be
+      // captured first, but it is an unreferenced file in the run dir
+      // until the push below references it — harmless on failure.
+      let operation: BackupOperation;
       if (existsSync(path)) {
         const before = readFileSync(path, "utf-8");
         const relSnapshot = join("files", `${fileIndex}-${basename(path)}`);
         fileIndex += 1;
         writeFileSync(join(runDir, relSnapshot), before);
-        operations.push({
+        operation = {
           kind: "file-overwrite",
           path,
           beforeFile: relSnapshot,
           beforeHash: sha256(before),
           afterHash,
-        });
+        };
       } else {
-        operations.push({ kind: "file-create", path, afterHash });
+        operation = { kind: "file-create", path, afterHash };
       }
       // A lock/provenance update must not leave a partially-written JSON file
       // if the process stops mid-write.  This also strengthens the existing
@@ -155,6 +163,7 @@ export function openBackupSession(homeDir: string, command: string): BackupSessi
       const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${fileIndex}.tmp`);
       writeFileSync(temporary, content);
       renameSync(temporary, path);
+      operations.push(operation);
     },
 
     async createSymlink(path: string, linkTarget: string): Promise<void> {

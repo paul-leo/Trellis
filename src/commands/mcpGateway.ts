@@ -22,6 +22,9 @@ import { isGatewayAgent, isAgentOwnedOAuth, resolveMcpPlan } from "../adapters/m
 import { LocalBackend, type GatewayBackend, type UpstreamSpec } from "../lib/gatewayBackend.js";
 import { DEFAULT_CONNECT_TIMEOUT_MS, type McpClientInfo } from "../lib/mcpConnect.js";
 import { BuiltinRegistry, createRuntimeServer, UpstreamProvider } from "../lib/mcpRuntime.js";
+import { HostEventBus, HostEventEmitter } from "../lib/hostEventBus.js";
+import { loadHostExtensions } from "../lib/hostExtensions.js";
+import { findWorkspaceRoot } from "../lib/workspace.js";
 import { McpStatusProvider, type OAuthServerRef } from "../lib/mcpStatusProvider.js";
 import { RuntimeControlProvider } from "../lib/runtimeControlProvider.js";
 import { TaskProvider } from "../lib/taskProvider.js";
@@ -180,12 +183,33 @@ async function runMcpEdge(
     ...upstreams.filter((u) => isOAuthAuth(u.def.auth)).map((u) => ({ name: u.name, owner: "trellis" as const })),
     ...oauthServers.map((name) => ({ name, owner: "agent" as const })),
   ];
-  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend, { homeDir, oauthServers: oauthReport }), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend)]);
+  // Host-extension-point events (host-extension-points spec): one bus per
+  // process, one session id stamped on every event. No subscribers yet means
+  // emit is a no-op and runtime behavior stays byte-identical to the
+  // pre-event world; extensions loaded from the canonical manifest (8.6)
+  // subscribe here.
+  const bus = new HostEventBus();
+  const workspaceRoot = findWorkspaceRoot(process.cwd());
+  const events = new HostEventEmitter({
+    bus,
+    agent: opts.agentId,
+    workspaceRoot,
+  });
+  // External extensions (8.6): manifest-only loading from
+  // ~/.trellis/mcp/extensions.yaml. Providers and event subscribers come
+  // through this one surface; a broken extension is contained and reported
+  // by the loader and never changes what the core set below can do.
+  const extensions = await loadHostExtensions({ homeDir, agent: opts.agentId, workspaceRoot });
+  for (const subscriber of extensions.subscribers) bus.subscribe(subscriber);
+  const registry = new BuiltinRegistry([new SkillProvider(), new RuntimeMemoryProvider(), new RuntimeControlProvider(backend), new McpStatusProvider(backend, { homeDir, oauthServers: oauthReport }), new TaskProvider(), new AgentBridgeProvider(), new UpstreamProvider(backend), ...extensions.providers], undefined, (info) => events.toolCall(info));
   const server = serveStdio(() => createRuntimeServer(serverInfo, { agentId: opts.agentId, homeDir }, registry));
+  events.sessionStart();
 
-  await waitForShutdown(registry, server);
+  await waitForShutdown(registry, server, events);
   return { exitCode: 0 };
 }
+
+type ShutdownSignal = "SIGTERM" | "SIGINT" | "SIGHUP";
 
 /**
  * Teardown on client disconnect — the piece neither layer below provides.
@@ -196,13 +220,31 @@ async function runMcpEdge(
  * process's own event loop is held open by every upstream it connected.
  * Without this, each agent session would permanently leak a gateway plus
  * its entire upstream process set (design.md D13).
+ *
+ * The "session end" event is emitted here, before upstream release
+ * (host-extension-points lifecycle requirement). SIGKILL/crash gets no
+ * such event by design — consumers must tolerate a missing end event.
  */
-function waitForShutdown(registry: BuiltinRegistry, server: { close(): Promise<void> }): Promise<void> {
+export function waitForShutdown(
+  registry: BuiltinRegistry,
+  server: { close(): Promise<void> },
+  events: HostEventEmitter,
+  /** Test seams, exactly as every other Trellis entry point exposes them:
+   * the trigger sources only. Production (and runMcpEdge) leave these unset
+   * and the function listens on the real process. */
+  seams?: {
+    stdin?: Pick<NodeJS.EventEmitter, "on">;
+    onceSignal?: (signal: ShutdownSignal, listener: () => void) => void;
+  },
+): Promise<void> {
+  const stdin = seams?.stdin ?? process.stdin;
+  const onceSignal = seams?.onceSignal ?? ((signal, listener) => { process.once(signal, listener); });
   return new Promise<void>((resolve) => {
     let settled = false;
     const shutdown = async (): Promise<void> => {
       if (settled) return;
       settled = true;
+      events.sessionEnd();
       try {
         await registry.close();
       } catch (err) {
@@ -216,10 +258,10 @@ function waitForShutdown(registry: BuiltinRegistry, server: { close(): Promise<v
       resolve();
     };
 
-    process.stdin.on("end", shutdown);
-    process.stdin.on("close", shutdown);
-    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-      process.once(signal, shutdown);
+    stdin.on("end", shutdown);
+    stdin.on("close", shutdown);
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as ShutdownSignal[]) {
+      onceSignal(signal, shutdown);
     }
   });
 }

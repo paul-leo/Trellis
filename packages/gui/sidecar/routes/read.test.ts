@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { request } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -112,6 +112,53 @@ test("read routes: /mcp/list carries the credential state exactly as the CLI doe
     assert.equal(viaSidecar.find((e) => e.name === "figma")?.authStatus, "authorized");
     assert.equal(viaSidecar.find((e) => e.name === "other")?.authStatus, "not-authorized");
     assert.equal(JSON.stringify(viaSidecar).includes("NEVER-SHOWN"), false);
+  } finally {
+    server.close();
+  }
+});
+
+test("read routes: /evolve/report matches `trellis evolve report --json` exactly and stays read-only", async () => {
+  const homeDir = home();
+  // 种子进化状态(直接落盘存储形态;不依赖进化启用):一条 pending + 一条 proposal 档案。
+  const evolveDir = join(homeDir, ".trellis", "evolve");
+  mkdirSync(join(evolveDir, "pending"), { recursive: true });
+  writeFileSync(
+    join(evolveDir, "pending", "rule-sidecar.json"),
+    JSON.stringify({
+      id: "rule-sidecar",
+      status: "pending",
+      riskClass: "B",
+      riskRuleId: "workspace-config-fix/any",
+      proposal: {
+        id: "rule-sidecar",
+        createdAt: 1_700_000_000_000,
+        kind: "workspace-config-fix",
+        target: "/tmp/ws/.codex/config.toml",
+        layer: { kind: "workspace", root: "/tmp/ws" },
+        evidence: [{ kind: "doctor-finding", findingId: "doctor:workspace-toml-invalid:sidecar" }],
+        riskClass: "B",
+        summary: "fix toml",
+        edits: [{ op: "write-file", path: "/tmp/ws/.codex/config.toml", content: "# bad = [\n" }],
+      },
+      createdAt: 1_700_000_000_000,
+      decidedAt: null,
+    }) + "\n",
+  );
+  mkdirSync(join(evolveDir, "archive"), { recursive: true });
+  writeFileSync(
+    join(evolveDir, "archive", "records.jsonl"),
+    JSON.stringify({ kind: "proposal", recordedAt: "2026-10-27T00:00:00.000Z", payload: { proposalId: "rule-sidecar", riskClass: "B", riskRuleId: "workspace-config-fix/any" } }) + "\n",
+  );
+
+  const cliReport = JSON.parse(cli(homeDir, ["evolve", "report", "--json"]));
+  const server = createSidecarServer(createReadRoutes(homeDir));
+  const port = await listenOnEphemeralLoopbackPort(server);
+  try {
+    assert.deepEqual(await get(port, "/evolve/report"), cliReport, "GET /evolve/report must match `trellis evolve report --json` exactly");
+    // 只读消费:查看前后 pending/档案文件逐字节不变。
+    const before = readFileSync(join(evolveDir, "archive", "records.jsonl"), "utf-8");
+    await get(port, "/evolve/report");
+    assert.equal(readFileSync(join(evolveDir, "archive", "records.jsonl"), "utf-8"), before);
   } finally {
     server.close();
   }

@@ -1,0 +1,11 @@
+--- current/insert-only.txt
++++ pool/insert-only.txt
+@@ -1,5 +1,8 @@
+ one
+ two
++INSERT-A
++INSERT-B
++INSERT-C
+ three
+ four
+ five

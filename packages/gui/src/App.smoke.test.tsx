@@ -747,3 +747,60 @@ test("App: doctor findings are tagged with the agent they belong to, so identica
     await app.close();
   }
 });
+
+test("App: the Evolution tab renders the real timeline, honest measurements and empty states from the archive", async () => {
+  const homeDir = mkdtempSync(join(tmpdir(), "trellis-gui-smoke-evolve-"));
+  cli(homeDir, ["init"]);
+  // 种子进化状态:一条已应用提案(带 verdict 前后测量)+ 一条被 L1 丢弃的草稿。
+  const evolveDir = join(homeDir, ".trellis", "evolve");
+  mkdirSync(join(evolveDir, "pending"), { recursive: true });
+  writeFileSync(
+    join(evolveDir, "pending", "rule-gui.json"),
+    JSON.stringify({
+      id: "rule-gui",
+      status: "approved",
+      riskClass: "B",
+      riskRuleId: "workspace-config-fix/any",
+      proposal: {
+        id: "rule-gui",
+        createdAt: 1_700_000_000_000,
+        kind: "workspace-config-fix",
+        target: "/tmp/ws/.codex/config.toml",
+        layer: { kind: "workspace", root: "/tmp/ws" },
+        evidence: [{ kind: "doctor-finding", findingId: "doctor:workspace-toml-invalid:gui" }],
+        riskClass: "B",
+        summary: "fix broken workspace toml",
+        edits: [{ op: "write-file", path: "/tmp/ws/.codex/config.toml", content: "# fixed = 1\n" }],
+      },
+      createdAt: 1_700_000_000_000,
+      decidedAt: 1_700_000_100_000,
+    }) + "\n",
+  );
+  mkdirSync(join(evolveDir, "archive"), { recursive: true });
+  const lines = [
+    { kind: "proposal", recordedAt: "2026-10-27T00:00:01.000Z", payload: { proposalId: "rule-gui", riskClass: "B", riskRuleId: "workspace-config-fix/any" } },
+    { kind: "verdict", recordedAt: "2026-10-27T00:00:02.000Z", payload: { proposalId: "rule-gui", decision: "acceptable", reason: "targets resolved", targetIds: ["doctor:workspace-toml-invalid:gui"], resolvedIds: ["doctor:workspace-toml-invalid:gui"], introduced: [] } },
+    { kind: "proposal-reject", recordedAt: "2026-10-27T00:00:03.000Z", payload: { proposalId: "rule-dropped", phase: "initial", code: "no-evidence", reason: "no evidence links", retried: false, issues: [] } },
+    { kind: "apply-run", recordedAt: "2026-10-27T00:00:04.000Z", payload: { runId: "run-gui-1", proposalIds: ["rule-gui"] } },
+  ];
+  writeFileSync(join(evolveDir, "archive", "records.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+
+  const app = await mountApp(homeDir);
+  try {
+    await app.bodyContains("Trellis");
+    app.clickText("Evolution");
+    // 时间线可追踪:两条提案都在。
+    await app.bodyContains("rule-gui");
+    await app.bodyContains("rule-dropped");
+    // 优化内容:前后测量真实差集(1/1 消除)。
+    await app.bodyContains("resolved 1/1");
+    // 回滚入口可见。
+    await app.bodyContains("run-gui-1");
+    // 丢弃链如实呈现:没有 measurement 的推断。
+    assert.ok(app.body().includes("no measurement recorded"), "no verdict → no measurement, never inferred");
+    // 指标诚实性:UI 不出现合成评分措辞。
+    assert.ok(!/\bhealth score\b|\b0-100\b/i.test(app.body()), "no synthetic score in the UI");
+  } finally {
+    await app.close();
+  }
+});

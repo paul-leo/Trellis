@@ -1,0 +1,18 @@
+Find what regressed in agg2 and say which trajectory moment shows it.
+
+# YOUR EVIDENCE
+
+It is on disk, in `context/`. Read it -- do not answer from this message alone.
+
+context/task.md                  the task as the agent received it
+context/source/                 task source materials
+context/decisions/              earlier edits and composition decisions
+context/rollouts/               FULL trajectories: agg1.md, agg2.md, b1.md, b2.md
+context/deliverables/<label>/    the files each rollout produced, one per artifact (browse INDEX.md for the set)
+context/harness/                the harness you are editing (5 files)
+context/pool/                   2 candidates, each with its harness and its rollout
+context/library/                earlier tasks in this area -- browse INDEX.md first, then open what looks relevant
+
+Every trajectory EVENT is present: the trajectory was not clipped to fit this mission. An individual observation may contain an explicit renderer-truncation marker; that marker is ours, not behavior by the solver. Do not diagnose it as a solver failure.
+
+Read `task.md` and the current harness first. Inventory every available rollout or candidate and inspect each at least once before deciding. For a candidate, compare what changed from its editing baseline, what behavior changed in its rollout, what improved, and what regressed or remained unresolved. Then deep-read the evidence relevant to any edit. Cite the specific trajectory moment behind every change; one you cannot trace to a moment is speculation.

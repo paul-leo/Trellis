@@ -1,0 +1,10 @@
+--- current/delete-only.txt
++++ pool/delete-only.txt
+@@ -1,7 +1,5 @@
+ one
+ two
+-GONE-A
+-GONE-B
+ three
+ four
+ five

@@ -14,6 +14,7 @@ import { collectSkillList } from "../../../../src/commands/skill.js";
 import { collectMemoryList } from "../../../../src/commands/memory.js";
 import { collectSecretsAuditReport } from "../../../../src/commands/secretsAudit.js";
 import { listBackups } from "../../../../src/commands/rollback.js";
+import { buildEvolveReport } from "../../../../src/evolve/reportView.js";
 import { sendJson, type Route } from "../server.js";
 
 export function createReadRoutes(homeDir: string): Route[] {
@@ -55,6 +56,13 @@ export function createReadRoutes(homeDir: string): Route[] {
       method: "GET",
       pattern: /^\/backups\/list$/,
       handler: (_req, res) => sendJson(res, 200, listBackups(homeDir)),
+    },
+    {
+      // 进化仪表盘数据:与 `trellis evolve report --json` 同一份聚合
+      // (buildEvolveReport),不另算第二份(evolve-visualization spec)。
+      method: "GET",
+      pattern: /^\/evolve\/report$/,
+      handler: (_req, res) => sendJson(res, 200, buildEvolveReport(homeDir)),
     },
   ];
 }

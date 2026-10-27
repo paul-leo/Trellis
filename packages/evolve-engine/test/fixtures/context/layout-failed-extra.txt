@@ -1,0 +1,4 @@
+context/task.md                  the task as the agent received it
+context/rollouts/               FULL trajectories: ok1.md
+context/deliverables/<label>/    the files each rollout produced, one per artifact (browse INDEX.md for the set)
+context/harness/                the harness you are editing (1 files)

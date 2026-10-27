@@ -1,0 +1,13 @@
+Apache-2.0 许可证归属声明
+=========================
+
+本包(`@trellis/evolve-engine`)是 harness2 引擎的 TypeScript 移植。
+
+原项目:Harness²: Recursive Agent Harnessing for an Open World
+版权所有:Copyright 2026 Google LLC
+许可证:Apache License, Version 2.0
+来源:https://github.com/google-research/harness2(本地研究 checkout 固定于
+commit 1cfe254e8d25b15f37048c3730134686abe60335)
+
+依据 Apache-2.0 第 4 条再分发。移植过程中的修改(TypeScript 直译、显式有界
+偏差)在 openspec/changes/trellis-evolve/design.md 的 D7/D11/D12 中逐条记录。

@@ -1,0 +1,5 @@
+context/task.md                  the task as the agent received it
+context/rollouts/               FULL trajectories: c1.md, c2.md
+context/deliverables/<label>/    INDEX.md lists WHICH files each rollout produced -- names only.
+                                 File contents are deliberately not provided on this benchmark; work from the trajectories and the file set itself.
+context/harness/                the harness you are editing (3 files)
