@@ -71,6 +71,20 @@ export type TriggerSkipReason =
   | "editor-budget"
   | "spawn-failed";
 
+/** 触发来源(run-backfill D1/D2):事件触发 / 手动触发 / 补跑链起。
+ * 进 trigger-decision 与 job-run 档案;jobMain 经 `--trigger` 透传。 */
+export type JobTriggerKind = "event" | "manual" | "chain";
+
+/**
+ * 门豁免(纯输入;run-backfill D2):手动/补跑路径绕过信号阈值与冷却
+ * (用户明确意图),预算护栏(日提案上限/editor 预算)不豁免。缺省全
+ * false —— 事件路径语义逐字不变。
+ */
+export interface TriggerBypass {
+  readonly threshold?: boolean;
+  readonly cooldown?: boolean;
+}
+
 export type TriggerGateDecision =
   | { readonly decision: "launch"; readonly note: string }
   | { readonly decision: "skip"; readonly reason: TriggerSkipReason; readonly note: string };
@@ -97,20 +111,25 @@ export interface TriggerState {
 /**
  * 阈值/冷却/预算判断(纯函数)。顺序:活锁 → 阈值 → 冷却 → 每日提案
  * 上限 → editor 预算;全过才 launch。信号"严重度"加权留待提案阶段细化
- * (信号暂无严重度字段,本期按计数)。
+ * (信号暂无严重度字段,本期按计数)。`bypass` 缺省全 false:事件路径
+ * 语义逐字不变;手动/补跑路径豁免阈值与冷却(D2),预算不豁免。
  */
-export function evaluateTrigger(state: TriggerState, limits: ResolvedTriggerLimits): TriggerGateDecision {
+export function evaluateTrigger(
+  state: TriggerState,
+  limits: ResolvedTriggerLimits,
+  bypass: TriggerBypass = {},
+): TriggerGateDecision {
   if (state.jobRunning) {
     return { decision: "skip", reason: "already-running", note: "已有作业在运行,不启动第二个" };
   }
-  if (state.pendingSignalCount === 0 || state.pendingSignalCount < limits.signalThreshold) {
+  if (bypass.threshold !== true && (state.pendingSignalCount === 0 || state.pendingSignalCount < limits.signalThreshold)) {
     return {
       decision: "skip",
       reason: "below-threshold",
       note: `累计信号 ${state.pendingSignalCount} 未达阈值 ${limits.signalThreshold}`,
     };
   }
-  if (state.lastJobEndedAt !== null) {
+  if (bypass.cooldown !== true && state.lastJobEndedAt !== null) {
     const elapsed = state.now - state.lastJobEndedAt;
     const cooldownMs = limits.cooldownMinutes * 60_000;
     if (elapsed < cooldownMs) {
@@ -135,9 +154,15 @@ export function evaluateTrigger(state: TriggerState, limits: ResolvedTriggerLimi
       note: `当日 editor 调用 ${state.todayEditorCallCount} 已达预算 ${limits.editorBudget},跳过不排队`,
     };
   }
+  const waived = [bypass.threshold === true ? "阈值" : null, bypass.cooldown === true ? "冷却" : null].filter(
+    (part): part is string => part !== null,
+  );
   return {
     decision: "launch",
-    note: `累计信号 ${state.pendingSignalCount} 达阈值 ${limits.signalThreshold},不在冷却期且预算未超限`,
+    note:
+      waived.length > 0
+        ? `累计信号 ${state.pendingSignalCount};${waived.join("与")}判断已豁免,预算未超限`
+        : `累计信号 ${state.pendingSignalCount} 达阈值 ${limits.signalThreshold},不在冷却期且预算未超限`,
   };
 }
 
@@ -214,6 +239,79 @@ export function releaseJobLock(homeDir: string, pid: number): void {
   }
 }
 
+// ---------- 补跑标记(单槽 coalesce;run-backfill D3) ----------
+
+/** 补跑标记记录(`evolve/run-request.json`):运行期间到达的触发请求
+ * 合并为至多一个标记;count 仅审计(多次请求塌缩为一次)。 */
+export interface RunRequestRecord {
+  readonly reason: string;
+  readonly setAtMs: number;
+  readonly count: number;
+}
+
+export function runRequestPath(homeDir: string): string {
+  return join(evolveStateDir(homeDir), "run-request.json");
+}
+
+/** 置位幂等:已存在只增 count(审计),reason/setAtMs 保持首次(0600/0700
+ * 与信号文件同款;不引入常驻进程与队列)。 */
+export function setRunRequest(homeDir: string, reason: string, nowMs: number): RunRequestRecord {
+  const path = runRequestPath(homeDir);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const existing = readRunRequestRaw(path);
+  const record: RunRequestRecord =
+    existing === null
+      ? { reason, setAtMs: nowMs, count: 1 }
+      : { reason: existing.reason, setAtMs: existing.setAtMs, count: existing.count + 1 };
+  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  return record;
+}
+
+/** CAS 读后删消费(与 isJobRunning 的 compare-and-delete 同款):读后内容
+ * 变了视为并发置位的新请求,不误删(留待作业启动清标记/下次收尾消费);
+ * 无标记返回 null。 */
+export function consumeRunRequest(homeDir: string): RunRequestRecord | null {
+  const path = runRequestPath(homeDir);
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  const record = parseRunRequestRaw(raw);
+  try {
+    if (readFileSync(path, "utf-8") !== raw) return record;
+    unlinkSync(path);
+  } catch {
+    // 并发消费/置位竞态,忽略。
+  }
+  return record;
+}
+
+function readRunRequestRaw(path: string): RunRequestRecord | null {
+  try {
+    return parseRunRequestRaw(readFileSync(path, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function parseRunRequestRaw(raw: string): RunRequestRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<RunRequestRecord>;
+    if (
+      typeof parsed.reason === "string" &&
+      typeof parsed.setAtMs === "number" &&
+      typeof parsed.count === "number"
+    ) {
+      return { reason: parsed.reason, setAtMs: parsed.setAtMs, count: parsed.count };
+    }
+  } catch {
+    // 损坏标记按无标记处理(消费时被删除)。
+  }
+  return null;
+}
+
 // ---------- 状态收集 ----------
 
 /** 自 sinceMs(含:null = 全部)以来的累计信号数(遍历 signals/ 全部进程文件)。 */
@@ -279,10 +377,28 @@ export interface TryLaunchJobOptions {
   now?: () => number;
   /** 显式累计信号数;缺省统计自上次作业结束以来的信号。 */
   pendingSignalCount?: number;
+  /** 门豁免(手动/补跑路径;缺省不豁免,事件路径语义逐字不变)。 */
+  bypass?: TriggerBypass;
+  /** 触发来源(入 trigger-decision 与 job-run 档案;缺省 "event")。 */
+  trigger?: JobTriggerKind;
   /** 作业命令(argv 传参,不拼 shell);缺省本包 `jobMain.js` 入口。 */
   jobCommand?: { readonly bin: string; readonly args: readonly string[] };
   /** 测试注入的 spawn;缺省 `node:child_process.spawn`。 */
   spawnFn?: (bin: string, args: readonly string[], options: { detached: true; stdio: "ignore" }) => { pid?: number; unref?: () => void; on?: (event: string, listener: () => void) => void };
+}
+
+/** 收集判定状态(tryLaunchJob 与 CLI 手动触发的护栏/dry-run 判断同源)。 */
+export function collectTriggerState(homeDir: string, nowMs: number, pendingSignalCount?: number): TriggerState {
+  const entries = readArchiveRecords(homeDir);
+  const lastJobEndedAt = lastJobEndedAtMs(entries);
+  return {
+    now: nowMs,
+    pendingSignalCount: pendingSignalCount ?? countPendingSignals(homeDir, lastSignalWatermarkMs(entries)),
+    lastJobEndedAt,
+    jobRunning: isJobRunning(homeDir),
+    todayProposalCount: countToday(entries, PROPOSAL_ARCHIVE_KIND, nowMs),
+    todayEditorCallCount: countToday(entries, EDITOR_CALL_ARCHIVE_KIND, nowMs),
+  };
 }
 
 /**
@@ -296,34 +412,34 @@ export function tryLaunchJob(options: TryLaunchJobOptions): TriggerDecision | nu
   const now = options.now ?? Date.now;
   const nowMs = now();
   const limits = resolveTriggerLimits(options.limits);
-  const entries = readArchiveRecords(options.homeDir);
-  const lastJobEndedAt = lastJobEndedAtMs(entries);
-  const state: TriggerState = {
-    now: nowMs,
-    pendingSignalCount:
-      options.pendingSignalCount ?? countPendingSignals(options.homeDir, lastSignalWatermarkMs(entries)),
-    lastJobEndedAt,
-    jobRunning: isJobRunning(options.homeDir),
-    todayProposalCount: countToday(entries, PROPOSAL_ARCHIVE_KIND, nowMs),
-    todayEditorCallCount: countToday(entries, EDITOR_CALL_ARCHIVE_KIND, nowMs),
-  };
-  const gate = evaluateTrigger(state, limits);
+  const trigger: JobTriggerKind = options.trigger ?? "event";
+  const state = collectTriggerState(options.homeDir, nowMs, options.pendingSignalCount);
+  const gate = evaluateTrigger(state, limits, options.bypass ?? {});
   const stamp = () => new Date(nowMs);
 
   if (gate.decision === "skip") {
+    // 运行中触发(手动或事件)→ 置补跑标记(D3:多次请求塌缩为一个);
+    // 其余跳过原因(预算等)只记因不置标记(超限不排队的语义不变)。
+    let note = gate.note;
+    if (gate.reason === "already-running") {
+      setRunRequest(options.homeDir, `trigger:${trigger}`, nowMs);
+      note += ";已置补跑标记(当前作业收尾后补跑至多一次)";
+    }
     appendArchiveRecord(
       options.homeDir,
-      { kind: TRIGGER_DECISION_KIND, payload: { decision: "skip", reason: gate.reason, note: gate.note } },
+      { kind: TRIGGER_DECISION_KIND, payload: { decision: "skip", reason: gate.reason, note, trigger } },
       stamp,
     );
-    return gate;
+    return { decision: "skip", reason: gate.reason, note };
   }
 
   const command = options.jobCommand ?? defaultJobCommand();
   const spawnFn =
     options.spawnFn ??
     ((bin, args, opts) => spawn(bin, [...args], opts) as unknown as ReturnType<NonNullable<TryLaunchJobOptions["spawnFn"]>>);
-  const child = spawnFn(command.bin, [...command.args, options.homeDir], { detached: true, stdio: "ignore" });
+  // 触发来源透传给 jobMain(--trigger 入 job-run 档案);event 为缺省不加参。
+  const triggerArgs = trigger === "event" ? [] : ["--trigger", trigger];
+  const child = spawnFn(command.bin, [...command.args, ...triggerArgs, options.homeDir], { detached: true, stdio: "ignore" });
   // spawn 失败收容:ChildProcess 的 error 事件(EMFILE/ENOMEM 等)异步
   // 触发且无监听者时被 Node 抛成 uncaughtException——本调用点在 bus.emit
   // 的收容之外,会直接打垮 gateway 进程。监听即收容(失败作业不持锁,
@@ -338,7 +454,7 @@ export function tryLaunchJob(options: TryLaunchJobOptions): TriggerDecision | nu
     const note = `作业进程拉起失败(${command.bin} 未获得 pid),本次不排队`;
     appendArchiveRecord(
       options.homeDir,
-      { kind: TRIGGER_DECISION_KIND, payload: { decision: "skip", reason: "spawn-failed", note } },
+      { kind: TRIGGER_DECISION_KIND, payload: { decision: "skip", reason: "spawn-failed", note, trigger } },
       stamp,
     );
     return { decision: "skip", reason: "spawn-failed", note };
@@ -346,7 +462,7 @@ export function tryLaunchJob(options: TryLaunchJobOptions): TriggerDecision | nu
   const pid = child.pid;
   appendArchiveRecord(
     options.homeDir,
-    { kind: TRIGGER_DECISION_KIND, payload: { decision: "launch", note: gate.note, pid } },
+    { kind: TRIGGER_DECISION_KIND, payload: { decision: "launch", note: gate.note, pid, trigger } },
     stamp,
   );
   return { decision: "launch", note: gate.note, pid };
@@ -364,6 +480,29 @@ export function maybeLaunchOnSessionEnd(options: TryLaunchJobOptions): TriggerDe
  */
 export function maybeLaunchOnSessionStart(options: TryLaunchJobOptions): TriggerDecision | null {
   return tryLaunchJob(options);
+}
+
+/**
+ * 作业收尾(释锁后)消费补跑标记并链起至多一次补跑(D3):有标记则清
+ * 标记并按手动同款门拉起 `chain` 作业(豁免阈值/冷却——请求在置标记前
+ * 已过这两道门;预算护栏照旧,skip 照记 trigger-decision);无标记返回
+ * null 不链。崩溃语义:残留标记由下一次作业启动清掉(请求已被满足),
+ * 丢失至多一次补跑请求(下次事件/手动自然补)。
+ */
+export function chainAfterJob(
+  options: Pick<TryLaunchJobOptions, "homeDir" | "limits" | "now" | "jobCommand" | "spawnFn">,
+): TriggerDecision | null {
+  const request = consumeRunRequest(options.homeDir);
+  if (request === null) return null;
+  return tryLaunchJob({
+    homeDir: options.homeDir,
+    bypass: { threshold: true, cooldown: true },
+    trigger: "chain",
+    ...(options.limits !== undefined ? { limits: options.limits } : {}),
+    ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.jobCommand !== undefined ? { jobCommand: options.jobCommand } : {}),
+    ...(options.spawnFn !== undefined ? { spawnFn: options.spawnFn } : {}),
+  });
 }
 
 /** 默认作业命令:本包 jobMain 入口(dist 的 .js;经 tsx 直跑源码时同后缀

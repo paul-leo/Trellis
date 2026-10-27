@@ -6,16 +6,19 @@
  *     (含 `--yes` 类确认参数被无视的回归);
  *   - "命令不触发循环" → status/enable 后信号目录与档案零新增;
  *   - "批准即应用与显式应用入口"(trellis-evolve-review-fixes)→ 批准即应用 /
- *     应用失败保持 approved 可重试 / 显式应用幂等零副作用 / 作业运行中暂缓。
+ *     应用失败保持 approved 可重试 / 显式应用幂等零副作用 / 作业运行中暂缓;
+ *   - "手动触发即刻运行/遵守预算护栏/dry-run 不产生写入/observe 级别零
+ *     副作用早退"(trellis-evolve-run-backfill)→ `run` 子命令语义。
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { runEvolveCommand } from "../../../src/commands/evolve.js";
 import { APPLY_ARCHIVE_KIND } from "../../../src/evolve/apply.js";
-import { readArchiveRecords } from "../../../src/evolve/archive.js";
+import { appendArchiveRecord, readArchiveRecords } from "../../../src/evolve/archive.js";
 import {
   enqueueProposal,
   readPendingRecord,
@@ -23,11 +26,17 @@ import {
   readProposalsByStatus,
 } from "../../../src/evolve/pending.js";
 import { evolveStateDir } from "../../../src/evolve/stateDir.js";
-import { acquireJobLock, releaseJobLock } from "../../../src/evolve/trigger.js";
+import {
+  acquireJobLock,
+  consumeRunRequest,
+  JOB_RUN_KIND,
+  releaseJobLock,
+  TRIGGER_DECISION_KIND,
+} from "../../../src/evolve/trigger.js";
 import { loadEvolveLevelPolicy, writeEvolveLevelPolicy } from "../../../src/host/index.js";
 import { extensionsManifestPath } from "../../../src/lib/hostExtensions.js";
 import type { Proposal } from "../../../src/evolve/types.js";
-import { scratchHome } from "../../helpers/home.js";
+import { scratchHome, seedAgentPresence, seedCanonical } from "../../helpers/home.js";
 
 /** 捕获运行期间的 console.log/console.error 文本。 */
 async function captureOutput(run: () => Promise<{ exitCode: number }>): Promise<{ exitCode: number; text: string }> {
@@ -98,6 +107,25 @@ function enqueueEdits(h: string, id: string, ws: string, edits: Proposal["edits"
 
 function applyRunCount(h: string): number {
   return readArchiveRecords(h).filter((e) => e.kind === APPLY_ARCHIVE_KIND).length;
+}
+
+/** 状态目录逐字节摘要(dry-run/早退零副作用断言用)。 */
+function digest(h: string): string {
+  const hash = createHash("sha256");
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      const stat = statSync(path);
+      if (stat.isDirectory()) {
+        hash.update(`dir:${path}\n`);
+        walk(path);
+      } else {
+        hash.update(`file:${path}:${createHash("sha256").update(readFileSync(path)).digest("hex")}\n`);
+      }
+    }
+  };
+  if (existsSync(h)) walk(h);
+  return hash.digest("hex");
 }
 
 function signalsInventory(h: string): string[] {
@@ -413,5 +441,80 @@ describe("12.4 管理面命令", () => {
     assert.equal(done.exitCode, 0);
     assert.match(done.text, /已应用 1 条提案:p-lock/);
     assert.equal(readFileSync(path, "utf-8"), "# fixed = true\n");
+  });
+
+  it("场景:手动触发即刻运行——run 跳过阈值/冷却,job-run 档案记 trigger=manual", async () => {
+    const h = home("trellis-evolve-run-");
+    seedAgentPresence(h, ["claude-code"]);
+    seedCanonical(h, { managed: ["claude-code"], instructions: "# instructions\n", serversYaml: "servers: {}\n" });
+    writeEvolveLevelPolicy(h, { defaultLevel: "propose", agents: {}, workspaces: {} });
+
+    // 0 信号也照跑(阈值/冷却豁免):运行档案记触发来源。
+    const out = await captureOutput(() => runEvolveCommand(["run"], { homeDir: h, isTTY: false }));
+    assert.equal(out.exitCode, 0);
+    assert.match(out.text, /作业完成/);
+    assert.match(out.text, /trigger=manual/);
+    const runs = readArchiveRecords(h).filter((e) => e.kind === JOB_RUN_KIND);
+    assert.equal(runs.length, 1);
+    assert.equal((runs[0]!.payload as { trigger?: string }).trigger, "manual");
+    // 报告文本标注手动运行(4.1:trigger 透传到 CLI 渲染)。
+    const report = await captureOutput(() => runEvolveCommand(["report"], { homeDir: h, isTTY: false }));
+    assert.match(report.text, /\[手动\]/);
+  });
+
+  it("场景:手动触发遵守预算护栏——超限跳过并记因(trigger=manual),不排队", async () => {
+    const h = home("trellis-evolve-run-cap-");
+    writeEvolveLevelPolicy(h, { defaultLevel: "propose", agents: {}, workspaces: {} });
+    for (let i = 0; i < 3; i++) {
+      appendArchiveRecord(h, { kind: "proposal", payload: { i } }, () => new Date());
+    }
+    const out = await captureOutput(() => runEvolveCommand(["run"], { homeDir: h, isTTY: false }));
+    assert.equal(out.exitCode, 0);
+    assert.match(out.text, /被跳过\(daily-proposal-cap\)/);
+    const decisions = readArchiveRecords(h).filter((e) => e.kind === TRIGGER_DECISION_KIND);
+    assert.equal(decisions.length, 1);
+    const payload = decisions[0]!.payload as { reason?: string; trigger?: string };
+    assert.equal(payload.reason, "daily-proposal-cap");
+    assert.equal(payload.trigger, "manual", "判定档案记手动来源");
+    assert.equal(readArchiveRecords(h).filter((e) => e.kind === JOB_RUN_KIND).length, 0, "跳过不拉起作业");
+  });
+
+  it("手动触发遇运行中作业:already-running 记因并置补跑标记(单槽)", async () => {
+    const h = home("trellis-evolve-run-busy-");
+    writeEvolveLevelPolicy(h, { defaultLevel: "propose", agents: {}, workspaces: {} });
+    assert.equal(acquireJobLock(h, process.pid, Date.now()), true);
+    const out = await captureOutput(() => runEvolveCommand(["run"], { homeDir: h, isTTY: false }));
+    assert.equal(out.exitCode, 0);
+    assert.match(out.text, /被跳过\(already-running\)/);
+    assert.match(out.text, /已置补跑标记/);
+    assert.ok(consumeRunRequest(h) !== null, "补跑标记已置(单槽)");
+    releaseJobLock(h, process.pid);
+  });
+
+  it("场景:dry-run 不产生写入——预览信号数与护栏判定,状态逐字节不变", async () => {
+    const h = home("trellis-evolve-run-dry-");
+    writeEvolveLevelPolicy(h, { defaultLevel: "propose", agents: {}, workspaces: {} });
+    enqueue(h, "p-dry");
+    const before = digest(h);
+    const out = await captureOutput(() => runEvolveCommand(["run", "--dry-run"], { homeDir: h, isTTY: false }));
+    assert.equal(out.exitCode, 0);
+    assert.match(out.text, /dry-run/);
+    assert.match(out.text, /累计信号/);
+    assert.match(out.text, /将/);
+    assert.equal(digest(h), before, "dry-run 零副作用:状态目录逐字节不变");
+  });
+
+  it("场景:observe 级别零副作用早退——run 说明当前级别与调整方法,不产生写入", async () => {
+    const h = home("trellis-evolve-run-observe-");
+    await runEvolveCommand(["enable"], { homeDir: h, isTTY: true });
+    const before = digest(h);
+    const out = await captureOutput(() => runEvolveCommand(["run"], { homeDir: h, isTTY: false }));
+    assert.equal(out.exitCode, 0);
+    assert.match(out.text, /当前级别 observe/);
+    assert.match(out.text, /enable --level propose/);
+    assert.equal(digest(h), before, "早退零副作用");
+    const dry = await captureOutput(() => runEvolveCommand(["run", "--dry-run"], { homeDir: h, isTTY: false }));
+    assert.match(dry.text, /当前级别 observe/);
+    assert.equal(digest(h), before);
   });
 });

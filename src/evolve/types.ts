@@ -29,8 +29,9 @@ export type RiskClass = "A" | "B" | "C";
 /** 结果类别白名单的单一事实源在 `src/host/hostEvents.ts`。 */
 export type { ToolResultCategory } from "../host/hostEvents.js";
 
-/** 信号来源:网关事件、agent 显式上报、agent-bridge 委托记录。 */
-export type SignalSource = "gateway-event" | "agent-report" | "agent-bridge";
+/** 信号来源:网关事件、agent 显式上报、agent-bridge 委托记录、历史导入
+ * (run-backfill:用户显式选定的 session 数据回填,stableId `import:*`)。 */
+export type SignalSource = "gateway-event" | "agent-report" | "agent-bridge" | "history-import";
 
 export type SignalKind = "tool-call" | "session-start" | "session-end" | "user-correction";
 

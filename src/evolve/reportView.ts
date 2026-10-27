@@ -73,6 +73,8 @@ export interface JobRunEntry {
   readonly endedAt: string | null;
   readonly ok: boolean;
   readonly error: string | null;
+  /** 触发来源(run-backfill D1);旧档案无字段视作 `event`。 */
+  readonly trigger: "event" | "manual" | "chain";
   readonly summary: {
     readonly signalsConsidered: number | null;
     readonly enqueued: number | null;
@@ -373,6 +375,7 @@ export function buildEvolveReport(homeDir: string): EvolveReport {
         typeof payload.endedAtMs === "number" ? new Date(payload.endedAtMs).toISOString() : null,
       ok: typeof payload.error !== "string",
       error: typeof payload.error === "string" ? payload.error : null,
+      trigger: payload.trigger === "manual" || payload.trigger === "chain" ? payload.trigger : "event",
       summary: {
         signalsConsidered: typeof summary.signalsConsidered === "number" ? summary.signalsConsidered : null,
         enqueued: Array.isArray(summary.enqueuedIds) ? summary.enqueuedIds.length : null,

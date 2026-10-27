@@ -782,6 +782,7 @@ test("App: the Evolution tab renders the real timeline, honest measurements and 
     { kind: "verdict", recordedAt: "2026-10-27T00:00:02.000Z", payload: { proposalId: "rule-gui", decision: "acceptable", reason: "targets resolved", targetIds: ["doctor:workspace-toml-invalid:gui"], resolvedIds: ["doctor:workspace-toml-invalid:gui"], introduced: [] } },
     { kind: "proposal-reject", recordedAt: "2026-10-27T00:00:03.000Z", payload: { proposalId: "rule-dropped", phase: "initial", code: "no-evidence", reason: "no evidence links", retried: false, issues: [] } },
     { kind: "apply-run", recordedAt: "2026-10-27T00:00:04.000Z", payload: { runId: "run-gui-1", proposalIds: ["rule-gui"] } },
+    { kind: "job-run", recordedAt: "2026-10-27T00:00:05.000Z", payload: { pid: 1, startedAtMs: 1_700_000_005_000, endedAtMs: 1_700_000_006_000, trigger: "manual", summary: { signalsConsidered: 2, enqueuedIds: ["rule-gui"], autoAdoptedIds: [] } } },
   ];
   writeFileSync(join(evolveDir, "archive", "records.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 
@@ -800,6 +801,13 @@ test("App: the Evolution tab renders the real timeline, honest measurements and 
     assert.ok(app.body().includes("no measurement recorded"), "no verdict → no measurement, never inferred");
     // 指标诚实性:UI 不出现合成评分措辞。
     assert.ok(!/\bhealth score\b|\b0-100\b/i.test(app.body()), "no synthetic score in the UI");
+    // trigger 标注透传(run-backfill 4.1):sidecar 镜像报告的 job-run 带
+    // 触发来源(旧档案缺省 event;EvolutionView 未知字段容忍)。
+    const port = new URLSearchParams(app.dom.window.location.search).get("port");
+    const report = (await (await fetch(`http://localhost:${port}/evolve/report`)).json()) as {
+      jobRuns: { trigger?: string }[];
+    };
+    assert.equal(report.jobRuns[0]?.trigger, "manual", "job-run 触发来源随报告透传");
   } finally {
     await app.close();
   }

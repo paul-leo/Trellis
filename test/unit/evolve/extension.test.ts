@@ -91,6 +91,7 @@ test("propose:recorder + 触发器;会话启动补偿判定入档(未达阈值 s
     decision: "skip",
     reason: "below-threshold",
     note: "累计信号 1 未达阈值 10",
+    trigger: "event",
   });
   assert.equal(existsSync(jobLockPath(home)), false);
 });

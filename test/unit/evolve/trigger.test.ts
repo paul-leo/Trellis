@@ -17,6 +17,8 @@ import { appendArchiveRecord, readArchiveRecords } from "../../../src/evolve/arc
 import { appendSignalLine, signalFilePath } from "../../../src/evolve/recorder.js";
 import {
   acquireJobLock,
+  chainAfterJob,
+  consumeRunRequest,
   countPendingSignals,
   evaluateTrigger,
   isJobRunning,
@@ -27,9 +29,12 @@ import {
   jobLockPath,
   releaseJobLock,
   resolveTriggerLimits,
+  runRequestPath,
+  setRunRequest,
   tryLaunchJob,
   TRIGGER_DECISION_KIND,
 } from "../../../src/evolve/trigger.js";
+import { runJobShell } from "../../../src/evolve/jobShell.js";
 import type { TriggerState } from "../../../src/evolve/trigger.js";
 import type { Signal } from "../../../src/evolve/types.js";
 import { scratchHome } from "../../helpers/home.js";
@@ -135,6 +140,7 @@ test("超出每日提案上限时跳过并记录原因;不调用 spawn(不排队
     decision: "skip",
     reason: "daily-proposal-cap",
     note: "当日提案数 3 已达上限 3,跳过不排队",
+    trigger: "event",
   });
 });
 
@@ -145,12 +151,14 @@ test("单实例锁:活锁存在不启动第二个;死锁清除后可拉起", () 
   assert.equal(acquireJobLock(home, process.pid, Date.now()), true);
   assert.equal(isJobRunning(home), true);
   const running = noSpawn();
-  assert.deepEqual(tryLaunchJob({ homeDir: home, pendingSignalCount: 100, spawnFn: running.spawnFn }), {
-    decision: "skip",
-    reason: "already-running",
-    note: "已有作业在运行,不启动第二个",
-  });
+  const skipped = tryLaunchJob({ homeDir: home, pendingSignalCount: 100, spawnFn: running.spawnFn });
+  assert.equal(skipped?.decision, "skip");
+  assert.equal(skipped !== null && skipped.decision === "skip" ? skipped.reason : null, "already-running");
+  assert.match(skipped?.note ?? "", /已有作业在运行,不启动第二个/);
+  assert.match(skipped?.note ?? "", /已置补跑标记/, "运行中触发置补跑标记(D3)");
   assert.equal(running.calls.length, 0);
+  // 标记已置:收尾链起的消费点(单槽)。
+  assert.ok(consumeRunRequest(home) !== null);
   releaseJobLock(home, process.pid);
   assert.equal(existsSync(jobLockPath(home)), false);
 
@@ -174,16 +182,16 @@ test("满足条件拉起一次 detached 作业:运行中不启第二个,结束�
   assert.equal(first.decision, "launch");
   assert.ok(first.decision === "launch" && first.pid > 0);
 
-  // 作业起跑后落锁:此刻再满足条件也不启第二个。
+  // 作业起跑后落锁:此刻再满足条件也不启第二个(already-running 置补跑标记)。
   await waitFor(() => isJobRunning(home));
   const second = noSpawn();
   const blocked = tryLaunchJob({ homeDir: home, pendingSignalCount: 100, jobCommand, spawnFn: second.spawnFn });
-  assert.deepEqual(blocked, {
-    decision: "skip",
-    reason: "already-running",
-    note: "已有作业在运行,不启动第二个",
-  });
+  assert.equal(blocked?.decision, "skip");
+  assert.equal(blocked !== null && blocked.decision === "skip" ? blocked.reason : null, "already-running");
+  assert.match(blocked?.note ?? "", /已置补跑标记/);
   assert.equal(second.calls.length, 0);
+  // 消费掉补跑标记:本用例聚焦单实例语义,不让收尾链起再拉一个真实作业。
+  assert.ok(consumeRunRequest(home) !== null);
 
   // 作业结束:锁清除、job-run 档案落盘、进程退出无残留。
   await waitFor(() => !isJobRunning(home) && readArchiveRecords(home).some((e) => e.kind === JOB_RUN_KIND));
@@ -239,6 +247,7 @@ test("tryLaunchJob 缺省 pendingSignalCount 时自动统计;launch 判定入档
     decision: "launch",
     note: "累计信号 1 达阈值 1,不在冷却期且预算未超限",
     pid: 4242,
+    trigger: "event",
   });
 });
 
@@ -395,4 +404,135 @@ test("作业体抛错:job-run 档案落 error 记录(推进冷却),锁释放,退
   assert.match(payload.error ?? "", /evolve\.yaml/);
   assert.equal(typeof payload.endedAtMs, "number");
   assert.equal(existsSync(jobLockPath(home)), false, "锁已释放");
+});
+
+// ---------- run-backfill:门豁免 / 补跑标记 / 链起 ----------
+
+test("evaluateTrigger bypass 组合矩阵:阈值/冷却可豁免,预算与单实例不豁免", () => {
+  const limits = resolveTriggerLimits(undefined);
+  const skipReason = (d: ReturnType<typeof evaluateTrigger>): string | null =>
+    d.decision === "skip" ? d.reason : null;
+
+  // 缺省不豁免:事件路径语义逐字不变。
+  assert.deepEqual(evaluateTrigger(baseState({ pendingSignalCount: 1 }), limits), {
+    decision: "skip",
+    reason: "below-threshold",
+    note: "累计信号 1 未达阈值 10",
+  });
+
+  // 只豁免阈值:冷却仍拦。
+  const inCooldown = baseState({ pendingSignalCount: 1, lastJobEndedAt: baseState().now - 60_000 });
+  assert.equal(skipReason(evaluateTrigger(inCooldown, limits, { threshold: true })), "cooldown");
+
+  // 只豁免冷却:阈值仍拦。
+  assert.equal(skipReason(evaluateTrigger(baseState({ pendingSignalCount: 1 }), limits, { cooldown: true })), "below-threshold");
+
+  // 双豁免:0 信号也 launch,note 记豁免(D2 手动语义)。
+  const waived = evaluateTrigger(
+    baseState({ pendingSignalCount: 0, lastJobEndedAt: baseState().now - 1 }),
+    limits,
+    { threshold: true, cooldown: true },
+  );
+  assert.equal(waived.decision, "launch");
+  assert.match(waived.note, /阈值与冷却判断已豁免/);
+
+  // 预算不豁免:双豁免下仍按上限跳过。
+  assert.equal(
+    skipReason(evaluateTrigger(baseState({ pendingSignalCount: 0, todayProposalCount: 3 }), limits, { threshold: true, cooldown: true })),
+    "daily-proposal-cap",
+  );
+  assert.equal(
+    skipReason(evaluateTrigger(baseState({ pendingSignalCount: 0, todayEditorCallCount: 5 }), limits, { threshold: true, cooldown: true })),
+    "editor-budget",
+  );
+
+  // 单实例不豁免。
+  assert.equal(
+    skipReason(evaluateTrigger(baseState({ jobRunning: true }), limits, { threshold: true, cooldown: true })),
+    "already-running",
+  );
+});
+
+test("补跑标记:多次请求塌缩为一个(count 仅审计),CAS 消费读后删", () => {
+  const home = scratchHome("trigger-run-request");
+  assert.equal(consumeRunRequest(home), null, "无标记消费为 null");
+
+  setRunRequest(home, "trigger:manual", 100);
+  const collapsed = setRunRequest(home, "trigger:event", 200);
+  assert.equal(collapsed.reason, "trigger:manual", "首次置位保持(塌缩)");
+  assert.equal(collapsed.setAtMs, 100);
+  assert.equal(collapsed.count, 2, "count 仅审计");
+
+  const consumed = consumeRunRequest(home);
+  assert.deepEqual(consumed, { reason: "trigger:manual", setAtMs: 100, count: 2 });
+  assert.equal(existsSync(runRequestPath(home)), false, "消费 = CAS 读后删");
+  assert.equal(consumeRunRequest(home), null);
+});
+
+test("收尾链起:有标记链起至多一跳(--trigger chain);无标记不链", () => {
+  const home = scratchHome("trigger-chain");
+  const none = noSpawn();
+  assert.equal(chainAfterJob({ homeDir: home, spawnFn: none.spawnFn }), null, "无标记不链");
+  assert.equal(none.calls.length, 0);
+
+  setRunRequest(home, "trigger:manual", 100);
+  const chained = noSpawn();
+  const decision = chainAfterJob({ homeDir: home, spawnFn: chained.spawnFn, now: () => 200 });
+  assert.equal(decision?.decision, "launch");
+  assert.equal(chained.calls.length, 1, "链起一跳");
+  const args = chained.calls[0]!;
+  assert.equal(args[args.indexOf("--trigger") + 1], "chain", "链起作业记 trigger=chain");
+  assert.equal(args[args.length - 1], home);
+
+  // 标记已消费:再收尾不链(至多一次)。
+  const again = noSpawn();
+  assert.equal(chainAfterJob({ homeDir: home, spawnFn: again.spawnFn }), null);
+  assert.equal(again.calls.length, 0);
+});
+
+test("链起同受预算护栏:超限 skip 记因(trigger=chain),不 spawn", () => {
+  const home = scratchHome("trigger-chain-budget");
+  const nowMs = Date.parse("2026-10-25T12:00:00Z");
+  for (let i = 0; i < 3; i++) {
+    appendArchiveRecord(home, { kind: "proposal", payload: { i } }, () => new Date(nowMs));
+  }
+  setRunRequest(home, "trigger:manual", nowMs);
+  const { calls, spawnFn } = noSpawn();
+  const decision = chainAfterJob({ homeDir: home, spawnFn, now: () => nowMs });
+  assert.equal(decision?.decision, "skip");
+  assert.equal(calls.length, 0, "预算超限不 spawn");
+  const decisions = readArchiveRecords(home).filter((e) => e.kind === TRIGGER_DECISION_KIND);
+  assert.equal(decisions.length, 1);
+  const payload = decisions[0]!.payload as { reason?: string; trigger?: string };
+  assert.equal(payload.reason, "daily-proposal-cap");
+  assert.equal(payload.trigger, "chain", "判定档案记补跑来源");
+});
+
+test("runJobShell:job-run 带 trigger 字段;运行中置位的标记收尾释锁后链起一跳", async () => {
+  const home = scratchHome("trigger-shell-chain");
+  const chain = noSpawn();
+  const shell = runJobShell(home, { trigger: "manual", holdMs: 150, chainSpawnFn: chain.spawnFn });
+  await delay(30);
+  setRunRequest(home, "trigger:event", Date.now());
+  const result = await shell;
+  assert.equal(result.status, "ok");
+  assert.equal(chain.calls.length, 1, "收尾(释锁后)链起至多一跳");
+  assert.equal(chain.calls[0]![chain.calls[0]!.indexOf("--trigger") + 1], "chain");
+
+  const runs = readArchiveRecords(home).filter((e) => e.kind === JOB_RUN_KIND);
+  assert.equal(runs.length, 1);
+  assert.equal((runs[0]!.payload as { trigger?: string }).trigger, "manual", "job-run 档案记触发来源");
+});
+
+test("崩溃语义:残留标记由下一次作业启动清掉(请求已被满足);丢失至多一次请求", async () => {
+  const home = scratchHome("trigger-chain-crash");
+  // 残留(作业"崩溃"前请求已置位):下一次作业启动即清,不产生多余补跑。
+  setRunRequest(home, "trigger:manual", 100);
+  const chain = noSpawn();
+  const result = await runJobShell(home, { trigger: "event", chainSpawnFn: chain.spawnFn });
+  assert.equal(result.status, "ok");
+  assert.equal(existsSync(runRequestPath(home)), false, "作业启动清标记");
+  assert.equal(chain.calls.length, 0, "启动时被清的请求不进入收尾链起");
+  // 丢失(标记文件不在):消费为 null,下次事件/手动自然补(设计接受)。
+  assert.equal(consumeRunRequest(home), null);
 });

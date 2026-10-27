@@ -113,8 +113,9 @@ export interface EvolveJobSummary {
   readonly signalsMergedAtMs: number | null;
 }
 
-/** 作业级闸:任一粒度出现 propose/auto-A 才值得运行(observe 只采集)。 */
-function anyProposalLevel(policy: EvolveLevelPolicy): boolean {
+/** 作业级闸:任一粒度出现 propose/auto-A 才值得运行(observe 只采集)。
+ * `trellis evolve run` 的早退判定与作业体同源(1.3)。 */
+export function anyProposalLevel(policy: EvolveLevelPolicy): boolean {
   const levels: (Level | undefined)[] = [
     policy.defaultLevel,
     ...Object.values(policy.agents),

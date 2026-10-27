@@ -6,12 +6,13 @@
  * 删除;hostingIndependence.test.ts 的 CONSUMER_OWNED/CONSUMER_WIRING
  * 登记了这条移出清单。
  *
- * `trellis evolve <status | report | pending | approve | reject | apply | enable | disable | rollback>`
+ * `trellis evolve <status | report | pending | approve | reject | apply | run | import | enable | disable | rollback>`
  *
  * 批准只走这里,且**仅限交互式终端**(spec"批准只走带外通道"):非交互
  * 环境一律拒绝,提案保持 pending。不存在任何 `--yes` / `--confirm` 之类的
  * 非交互批准捷径 —— agent 传入的"确认"参数不构成批准,加了也只会被当
- * 未知参数忽略。循环副作用边界:不写信号、不触发观察/提案/probe。approve
+ * 未知参数忽略。循环副作用边界:除 `run`(唯一命令行触发入口,手动
+ * 触发一次运行)外的命令不写信号、不触发观察/提案/probe。approve
  * 决策后**立即应用**(spec"批准即应用与显式应用入口":持单飞作业锁经
  * 备份会话写入,锁忙暂缓并告知);apply 幂等应用全部已批准未应用的编辑
  * (失败重试与滞留消化入口);reject 只做状态迁移 + 档案;enable/disable
@@ -31,11 +32,23 @@ import {
   type Level,
 } from "../host/index.js";
 import { removeExtensionEntry, upsertExtensionEntry } from "../lib/hostExtensions.js";
+import { appendArchiveRecord } from "../evolve/archive.js";
 import { EVOLVE_EXTENSION_ID, evolveExtensionLoadSpecifier } from "../evolve/extension.js";
 import { ensureEvolveStateDir, ensureStateGitignored } from "../evolve/stateDir.js";
+import { importHistory, ImportSourceError } from "../evolve/importHistory.js";
+import { runJobShell } from "../evolve/jobShell.js";
+import { anyProposalLevel } from "../evolve/jobRun.js";
 import { buildEvolveReport, type EvolveReport } from "../evolve/reportView.js";
 import { applyApprovedProposals, type ApplyAgent, type ApplyApprovedResult } from "../evolve/apply.js";
-import { acquireJobLock, releaseJobLock } from "../evolve/trigger.js";
+import {
+  acquireJobLock,
+  collectTriggerState,
+  evaluateTrigger,
+  releaseJobLock,
+  resolveTriggerLimits,
+  setRunRequest,
+  TRIGGER_DECISION_KIND,
+} from "../evolve/trigger.js";
 import { runRollback } from "./rollback.js";
 import {
   decideProposal,
@@ -68,6 +81,12 @@ const USAGE = [
   "  reject <id>                     拒绝提案(仅交互式终端)",
   "  apply                           应用全部已批准未应用的提案(幂等;",
   "                                  失败重试与滞留消化入口)",
+  "  run [--dry-run]                 手动触发一次运行(唯一命令行触发入口;",
+  "                                  跳过阈值/冷却,仍守单飞锁与预算护栏;",
+  "                                  dry-run 预览,不拉起不写入)",
+  "  import <path>... [--workspace <root>]",
+  "                                  导入历史会话数据为观察信号(显式路径、",
+  "                                  源只读、台账幂等;不触发任何作业)",
   "  enable [--level <level>]        开启进化(default level,缺省 observe);",
   "                                  同步写入扩展清单条目(observe 及以上)",
   "  disable                         关闭进化(default level = off);移除扩展清单条目",
@@ -168,6 +187,13 @@ function renderReportText(report: EvolveReport): void {
   for (const metric of report.trends) {
     const value = metric.value === null ? "无测量记录" : Number.isInteger(metric.value) ? String(metric.value) : metric.value.toFixed(3);
     console.log(`  ${metric.label}: ${value}  [来源:${metric.source}]`);
+  }
+  if (report.jobRuns.length > 0) {
+    console.log(`作业运行(${report.jobRuns.length} 次):`);
+    for (const run of report.jobRuns) {
+      const label = run.trigger === "manual" ? "手动" : run.trigger === "chain" ? "补跑" : "事件";
+      console.log(`  ${run.startedAt}  [${label}]  ${run.ok ? "ok" : `error: ${run.error ?? "?"}`}`);
+    }
   }
   if (report.timeline.length === 0) {
     console.log("提案时间线: 空(尚无提案)");
@@ -295,6 +321,108 @@ function renderApplyResult(result: ApplyApprovedResult): number {
 }
 
 /**
+ * 手动触发一次运行(`trellis evolve run`;run-backfill D1/D2)。唯一命令
+ * 行触发入口:阈值/冷却豁免(用户明确意图),单飞锁与预算护栏照旧;
+ * `--dry-run` 只预览(零副作用:不抢锁、不写档案);observe 及以下作业体
+ * 零副作用早退并说明级别与调整方法。不设 TTY 门——手动触发是显式动作,
+ * 输出走 stdout。
+ */
+async function runManualJob(homeDir: string, dryRun: boolean, options: EvolveCommandOptions): Promise<number> {
+  const now = options.now ?? Date.now;
+  const policy = loadEvolveLevelPolicy(homeDir);
+  if (!anyProposalLevel(policy)) {
+    console.log(
+      `当前级别 ${policy.defaultLevel ?? "off"}:作业体零副作用早退(observe 只采集信号,off 关闭)。` +
+        "要手动运行作业体,先 `trellis evolve enable --level propose`(或 auto-A)。",
+    );
+    return 0;
+  }
+  const limits = resolveTriggerLimits(policy.trigger);
+  const state = collectTriggerState(homeDir, now());
+  const gate = evaluateTrigger(state, limits, { threshold: true, cooldown: true });
+
+  if (dryRun) {
+    console.log("dry-run:预览本次手动触发(不拉起作业、不写入任何状态)。");
+    console.log(`  累计信号:${state.pendingSignalCount}`);
+    console.log(
+      `  护栏判定:${gate.decision === "launch" ? "将运行(阈值/冷却已豁免,预算未超限)" : `将跳过(${gate.reason}):${gate.note}`}`,
+    );
+    return 0;
+  }
+
+  if (gate.decision === "skip") {
+    let note = gate.note;
+    if (gate.reason === "already-running") {
+      setRunRequest(homeDir, "trigger:manual", now());
+      note += ";已置补跑标记(当前作业收尾后补跑至多一次)";
+    }
+    appendArchiveRecord(
+      homeDir,
+      { kind: TRIGGER_DECISION_KIND, payload: { decision: "skip", reason: gate.reason, note, trigger: "manual" } },
+      () => new Date(now()),
+    );
+    console.log(`本次运行被跳过(${gate.reason}):${note}`);
+    return 0;
+  }
+
+  const result = await runJobShell(homeDir, { trigger: "manual", now });
+  if (result.status === "lock-busy") {
+    // 竞态窗口:门检通过后另有作业抢到锁 → 与运行中触发同语义,置补跑标记。
+    setRunRequest(homeDir, "trigger:manual", now());
+    console.log("已有作业在运行(竞态窗口):本次运行未启动,已置补跑标记(当前作业收尾后补跑至多一次)。");
+    return 0;
+  }
+  if (result.status === "error") {
+    console.error(`作业体失败:${result.message}(运行档案已记录错误,可重试)。`);
+    return 1;
+  }
+  const s = result.summary;
+  console.log(
+    `作业完成:信号 ${s.signalsConsidered} 条、提案 ${s.enqueuedIds.length} 条待批、` +
+      `自动采纳 ${s.autoAdoptedIds.length} 条、应用 ${s.applied.appliedProposalIds.length} 条。`,
+  );
+  for (const notice of s.notices) console.log(`  ${notice}`);
+  console.log("运行档案已记录(trigger=manual)。");
+  return 0;
+}
+
+/**
+ * 历史数据导入(`trellis evolve import`;run-backfill D4)。仅处理用户
+ * 显式选定的源路径、对源只读;整批先校验后写入(任何源不可解析即非零
+ * 退出且零写入);台账幂等(重复导入为空操作);导入不触发任何作业。
+ */
+function runImport(homeDir: string, paths: readonly string[], workspaceRoot: string | undefined): number {
+  if (paths.length === 0) {
+    console.error("trellis evolve import: 需要至少一个源路径(仅处理显式选定的文件,不扫描目录)");
+    return 1;
+  }
+  try {
+    const result = importHistory({ homeDir, paths, ...(workspaceRoot !== undefined ? { workspaceRoot } : {}) });
+    for (const source of result.sources) {
+      if (source.duplicate) {
+        console.log(`跳过 ${source.path}:已导入过(台账记账,空操作)。`);
+        continue;
+      }
+      console.log(
+        `导入 ${source.path}:${source.entries} 条信号(坏行跳过 ${source.badLines},无工具名记录跳过 ${source.skippedNoTool})。`,
+      );
+    }
+    console.log(
+      `共写入 ${result.written} 条观察信号,台账已记账(重复导入为空操作)。` +
+        "导入不触发作业,信号待后续作业按水位线消费。",
+    );
+    return 0;
+  } catch (err) {
+    if (err instanceof ImportSourceError) {
+      console.error(`trellis evolve import: ${err.message}`);
+      console.error("本次导入零写入(信号存储与台账保持不变)。");
+      return 1;
+    }
+    throw err;
+  }
+}
+
+/**
  * 管理面命令入口。`args` 为 `evolve` 之后的 argv(子命令 + 参数),
  * 由 cli 原样传入 —— 不经 shell 拼接。
  */
@@ -349,6 +477,21 @@ export async function runEvolveCommand(
 
     if (subcommand === "apply") {
       return { exitCode: await applyApprovedAndReport(homeDir, options) };
+    }
+
+    if (subcommand === "run") {
+      return { exitCode: await runManualJob(homeDir, rest.includes("--dry-run"), options) };
+    }
+
+    if (subcommand === "import") {
+      const wsIdx = rest.indexOf("--workspace");
+      const workspaceRoot = wsIdx >= 0 ? rest[wsIdx + 1] : undefined;
+      if (wsIdx >= 0 && (workspaceRoot === undefined || workspaceRoot.startsWith("-"))) {
+        console.error("trellis evolve import: --workspace 需要 workspace 根路径");
+        return { exitCode: 1 };
+      }
+      const paths = rest.filter((arg, i) => !arg.startsWith("-") && (wsIdx < 0 || i !== wsIdx + 1));
+      return { exitCode: runImport(homeDir, paths, workspaceRoot) };
     }
 
     if (subcommand === "enable" || subcommand === "disable") {
