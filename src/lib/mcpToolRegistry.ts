@@ -89,6 +89,17 @@ export function prefixedToolName(serverName: string, toolName: string): string {
 export interface ToolNameCandidate {
   serverName: string;
   toolName: string;
+  /**
+   * Force the `server__tool` prefix regardless of uniqueness or length.
+   * Gateway aggregation sets this on every candidate so an Agent can always
+   * read the owning server from the exposed name (mcp-tool-name-preservation:
+   * "Prefix every upstream tool with its server name"). A tool whose name
+   * already starts with its server's name (e.g. `tanka_memo_search` on
+   * `tanka`) is not prefixed again — the name is already source-qualified.
+   * Other consumers (e.g. the built-in Runtime registry) leave it unset to
+   * keep their own naming contracts.
+   */
+  alwaysPrefix?: boolean;
 }
 
 /** Allocate all exposed names together so normalization collisions are
@@ -113,12 +124,23 @@ export function allocateExposedToolNames(candidates: readonly ToolNameCandidate[
     // registry (for example `fixture__env` reaching the Runtime provider).
     // Do not add a second provider prefix around it.
     const sourceQualified = normalized.includes("__") || normalized === source || normalized.startsWith(`${source}_`) || normalized.startsWith(`${source}__`);
+    // Narrower than `sourceQualified`: for forced-prefix candidates the
+    // exemption applies only when the tool name already starts with ITS
+    // OWN server's name (a second prefix would be redundant, e.g.
+    // `tanka__tanka_memo_search`). A tool that merely contains `__`
+    // (`b__c`) or gained a `__hash` length bound still needs its server
+    // prefix to be identifiable.
+    const serverRedundant = normalized === source || normalized.startsWith(`${source}_`) || normalized.startsWith(`${source}__`);
     const unique = (counts.get(candidate.toolName) ?? 0) === 1;
-    const base = unique && normalized.length > SHORT_EXPOSED_TOOL_NAME_LENGTH
-      ? normalized
-      : unique && sourceQualified
+    const base = candidate.alwaysPrefix
+      ? serverRedundant
         ? normalized
-        : prefixedToolName(candidate.serverName, candidate.toolName);
+        : prefixedToolName(candidate.serverName, candidate.toolName)
+      : unique && normalized.length > SHORT_EXPOSED_TOOL_NAME_LENGTH
+        ? normalized
+        : unique && sourceQualified
+          ? normalized
+          : prefixedToolName(candidate.serverName, candidate.toolName);
     let exposed = base;
     let suffix = 2;
     while (used.has(exposed)) {
@@ -138,7 +160,11 @@ interface RegistryEntry {
   tool: AggregatedTool;
 }
 
-interface CandidateEntry extends RegistryEntry {}
+interface CandidateEntry extends RegistryEntry {
+  /** See {@link ToolNameCandidate.alwaysPrefix} — gateway candidates always
+   * carry the source prefix. */
+  alwaysPrefix?: boolean;
+}
 
 export interface AddResult {
   /** Prefixed names actually registered by this call. */
@@ -179,7 +205,7 @@ export class McpToolRegistry {
    * aggregated, with no special-casing here.
    */
   add(serverName: string, upstream: ToolUpstream, tools: readonly AggregatedTool[]): AddResult {
-    for (const tool of tools) this.candidates.push({ serverName, toolName: tool.name, upstream, tool });
+    for (const tool of tools) this.candidates.push({ serverName, toolName: tool.name, upstream, tool, alwaysPrefix: true });
     this.rebuild();
     const added = tools.map((tool) => this.exposedNameFor(serverName, tool.name)).filter((name): name is string => name !== undefined);
     return { added, skipped: [] };
@@ -198,7 +224,7 @@ export class McpToolRegistry {
     const kept = this.candidates.filter((candidate) => candidate.serverName !== serverName);
     this.candidates.length = 0;
     this.candidates.push(...kept);
-    for (const tool of tools) this.candidates.push({ serverName, toolName: tool.name, upstream, tool });
+    for (const tool of tools) this.candidates.push({ serverName, toolName: tool.name, upstream, tool, alwaysPrefix: true });
     this.rebuild();
     const added = tools.map((tool) => this.exposedNameFor(serverName, tool.name)).filter((name): name is string => name !== undefined);
     return { added, skipped: [] };
@@ -212,8 +238,13 @@ export class McpToolRegistry {
   }
 
   /** Every registered tool, under its prefixed name, in registration
-   * order. Each tool's own `description`/`inputSchema` and any additional
-   * fields the upstream sent are preserved verbatim; only `name` changes. */
+   * order. Each tool's own `inputSchema` and any additional fields the
+   * upstream sent are preserved verbatim; `name` changes, and the
+   * description gains a trailing `Source: <server>` line so an Agent can
+   * confirm the owning server without relying on the name alone
+   * (mcp-gateway-hosting: "Resold tool metadata identifies its upstream
+   * source"). The upstream's own description text is never altered or
+   * removed — the source line is appended. */
   listTools(): AggregatedTool[] {
     this.rebuild();
     return this.order.map((name) => {
@@ -221,7 +252,11 @@ export class McpToolRegistry {
       const title = name === entry.toolName || entry.tool.title !== undefined
         ? entry.tool.title
         : `${entry.serverName} / ${entry.toolName}`;
-      return { ...entry.tool, name, ...(title === undefined ? {} : { title }) };
+      const sourceLine = `Source: ${entry.serverName}`;
+      const description = entry.tool.description
+        ? `${entry.tool.description}\n\n${sourceLine}`
+        : sourceLine;
+      return { ...entry.tool, name, description, ...(title === undefined ? {} : { title }) };
     });
   }
 

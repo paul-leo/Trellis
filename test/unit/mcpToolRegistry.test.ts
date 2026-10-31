@@ -60,6 +60,15 @@ test("allocator: artificial mcp source labels are compacted", () => {
   );
 });
 
+test("allocator: alwaysPrefix forces the source prefix on a unique long tool", () => {
+  const tool = "this-is-a-very-long-tool-name-that-would-be-worse-with-a-server-prefix-1234567890";
+  const [name] = allocateExposedToolNames([{ serverName: "mcp-router", toolName: tool, alwaysPrefix: true }]);
+  // "mcp-router" compacts to the "router" source segment.
+  assert.ok(name.startsWith("router__"), `expected a forced source prefix, got ${name}`);
+  assert.ok(name.length <= MAX_EXPOSED_TOOL_NAME_LENGTH);
+  assert.match(name, EXPOSED_TOOL_NAME_PATTERN);
+});
+
 test("allocator: a long unique tool is bounded without an unnecessary server prefix", () => {
   const tool = "this-is-a-very-long-tool-name-that-would-be-worse-with-a-server-prefix-1234567890";
   const [name] = allocateExposedToolNames([{ serverName: "mcp-router", toolName: tool }]);
@@ -134,18 +143,55 @@ test("registry: one upstream contributing nothing doesn't block the others' aggr
   assert.deepEqual(registry.servers(), ["alpha", "gamma"]);
 });
 
-test("registry: a unique tool keeps its original name and metadata", async () => {
+test("registry: a unique tool keeps its metadata and gains a source annotation", async () => {
   const schema = { type: "object", properties: { q: { type: "string" } } };
   const registry = new McpToolRegistry();
   registry.add("alpha", fakeUpstream("alpha", []), [{ name: "search", description: "Find things", inputSchema: schema, annotations: { readOnly: true } }]);
 
   const [tool] = await registry.listTools();
   assert.equal(tool.name, "alpha__search");
-  assert.equal(tool.description, "Find things");
+  // The upstream's own text survives verbatim; the source line is appended,
+  // never substituted for it.
+  assert.equal(tool.description, "Find things\n\nSource: alpha");
   assert.deepEqual(tool.inputSchema, schema);
   // Fields this registry doesn't model must survive the round trip rather
   // than being silently dropped on the way to the agent.
   assert.deepEqual(tool.annotations, { readOnly: true });
+});
+
+test("registry: a unique long tool still carries its server prefix", async () => {
+  const registry = new McpToolRegistry();
+  registry.add("obscura", fakeUpstream("obscura", []), [{ name: "browser_interactive_elements" }]);
+
+  const [tool] = await registry.listTools();
+  assert.equal(tool.name, "obscura__browser_interactive_elements");
+  assert.equal(tool.description, "Source: obscura");
+});
+
+test("registry: a tool already named after its server is not prefixed twice", async () => {
+  const registry = new McpToolRegistry();
+  registry.add("tanka", fakeUpstream("tanka", []), [{ name: "tanka_memo_search" }]);
+
+  const [tool] = await registry.listTools();
+  assert.equal(tool.name, "tanka_memo_search");
+  // The description annotation is independent of the prefix exemption.
+  assert.equal(tool.description, "Source: tanka");
+});
+
+test("registry: an empty-string description is treated as absent", async () => {
+  const registry = new McpToolRegistry();
+  registry.add("github", fakeUpstream("github", []), [{ name: "search", description: "" }]);
+
+  const [tool] = await registry.listTools();
+  assert.equal(tool.description, "Source: github");
+});
+
+test("registry: a tool without a description gets only the source line", async () => {
+  const registry = new McpToolRegistry();
+  registry.add("github", fakeUpstream("github", []), [{ name: "search" }]);
+
+  const [tool] = await registry.listTools();
+  assert.equal(tool.description, "Source: github");
 });
 
 test("registry: a prefixed-name collision gets deterministic suffixes and keeps both tools", async () => {
@@ -199,8 +245,12 @@ test("registry: a name freed by replace is re-allocated deterministically to the
 
   registry.replace("alpha", fakeUpstream("a2", []), [{ name: "something-else-entirely-long-enough-to-be-unique-abcdefgh" }]);
 
-  // The allocator runs globally, so beta's now-unique tool reclaims the
-  // unprefixed long name deterministically — accepted drift, pinned here.
+  // Every exposed name carries its server prefix unconditionally, so the
+  // freed name simply disappears — beta keeps its own prefixed name. The
+  // exact bounded form is derived from the same helper the registry uses.
   const after = (await registry.listTools()).map((tool) => tool.name);
-  assert.deepEqual(after, ["something-else-entirely-long-enough-to-be-unique-abcdefgh", normalizedToolName(long)]);
+  assert.deepEqual(after, [
+    prefixedToolName("alpha", "something-else-entirely-long-enough-to-be-unique-abcdefgh"),
+    prefixedToolName("beta", long),
+  ]);
 });

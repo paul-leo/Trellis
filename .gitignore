@@ -19,3 +19,6 @@ scripts/video-demo-setup.sh
 # this repo as cwd creates an (empty) .mailbox/ here. Machine-local state,
 # never commit — the real store lives in the agent-collab checkout.
 .mailbox/
+
+# evolve-lab:考题蒸馏本地分析材料(核对单/成形产物/实验题库),机器本地,不入库
+evolve-lab/
