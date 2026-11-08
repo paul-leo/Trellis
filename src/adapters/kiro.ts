@@ -19,6 +19,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { deliveredName } from "../lib/secretEnv.js";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
 import { isInScope } from "../core/adapter.js";
 import { usesNativeCapabilityDelivery } from "../core/types.js";
@@ -95,7 +96,8 @@ export class KiroAdapter implements TrellisAdapter {
     const { desired } = await resolveMcpPlan(this.id, globalLayerMcp(canonical), canonical.managedAgents, canonical.secretsPolicy);
     const names = new Set<string>();
     for (const { def } of desired) {
-      for (const name of declaredEnvNames(def)) names.add(name);
+      // Approved list holds DELIVERED names (what renderers write), not raw entries.
+      for (const name of declaredEnvNames(def)) names.add(deliveredName(name));
     }
     return [...names];
   }

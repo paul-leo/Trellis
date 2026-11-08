@@ -15,7 +15,7 @@
 
 import { Client, StreamableHTTPClientTransport, SSEClientTransport, type AuthProvider } from "@modelcontextprotocol/client";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
-import { parseEnvEntry, resolveSecretEnv } from "./secretEnv.js";
+import { deliveredName, resolveSecretEnv } from "./secretEnv.js";
 import { extractTemplateVarNames } from "./envVarNames.js";
 import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 
@@ -103,16 +103,12 @@ export async function connectStdio(
   // delivered names — never the raw reference text as a variable name
   // (mx-env-secret-source spec).
   const resolved = await resolveSecretEnv([...(def.env ?? []), ...Object.values(envAliases)], secretsPolicy);
-  const deliveredOf = (entry: string): string => {
-    const p = parseEnvEntry(entry);
-    return p.kind === "invalid" ? entry : p.delivered;
-  };
   const namedEnv = Object.fromEntries((def.env ?? []).map((entry) => {
-    const delivered = deliveredOf(entry);
+    const delivered = deliveredName(entry);
     return [delivered, resolved[delivered] ?? ""];
   }));
   const aliasEnv = Object.fromEntries(Object.entries(envAliases).map(([targetKey, sourceName]) => {
-    return [targetKey, resolved[deliveredOf(sourceName)] ?? ""];
+    return [targetKey, resolved[deliveredName(sourceName)] ?? ""];
   }));
   const transport = new StdioClientTransport({
     command: def.command!,

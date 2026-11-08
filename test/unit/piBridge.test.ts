@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync, execSync } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -266,6 +266,40 @@ test("pi bridge: shutdown is idempotent — calling it twice closes each client 
     assert.equal(fixtureChildIsAlive(home), false, "expected the second shutdown to be a no-op, not an error or a respawn");
   } finally {
     delete process.env.PI_BRIDGE_TEST_VAR;
+    killFixtureChildren(home);
+  }
+});
+
+
+test("pi bridge: an mxenv reference entry is delivered under its KEY segment, never the raw ref text (mx-env-secret-source)", async () => {
+  const home = scratchHome();
+  initCanonical(home, "allowed_vars: []\nreject_patterns: []\n");
+  writeFileSync(
+    join(home, ".trellis", "mcp", "servers.yaml"),
+    `servers:\n  fixture:\n    transport: stdio\n    command: node\n    args:\n      - ${fixtureServer}\n      - ${home}\n    env:\n      - mxenv://legacy/PI_BRIDGE_REF_KEY\n`,
+  );
+  // Implicit-default profile composition source (fake value).
+  mkdirSync(join(home, ".mxenv"), { recursive: true });
+  writeFileSync(join(home, ".mxenv", ".env"), "PI_BRIDGE_REF_KEY=from-composition\n");
+  chmodSync(join(home, ".mxenv", ".env"), 0o600);
+
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  process.env.PI_BRIDGE_REF_KEY = "ambient-must-not-win";
+  try {
+    const pi = fakePi();
+    await trellisMcpBridge(pi as never, home);
+
+    const envTool = pi.tools.find((t) => t.name === "fixture__env");
+    assert.ok(envTool, "expected fixture__env to be registered");
+    const delivered = await envTool!.execute("call-1", { name: "PI_BRIDGE_REF_KEY" });
+    assert.equal(delivered.content[0]?.text, "from-composition");
+    const raw = await envTool!.execute("call-2", { name: "mxenv://legacy/PI_BRIDGE_REF_KEY" });
+    assert.notEqual(raw.content[0]?.text, "from-composition");
+  } finally {
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+    delete process.env.PI_BRIDGE_REF_KEY;
     killFixtureChildren(home);
   }
 });

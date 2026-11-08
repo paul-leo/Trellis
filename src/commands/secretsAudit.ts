@@ -111,14 +111,13 @@ async function findMissingEnvValues(servers: Record<string, McpServerDef>, polic
 
   // Findings name the DELIVERED name (the KEY segment for a reference).
   const resolved = await resolveSecretEnv(resolvable, policy);
-  const source = policy.envFile ?? "process environment";
   for (const entry of resolvable) {
     const p = parseEnvEntry(entry);
     const delivered = p.kind === "invalid" ? entry : p.delivered;
     if (!resolved[delivered]) {
       findings.push({
         agent: "environment" as const,
-        file: source,
+        file: p.kind === "ref" ? `the mxenv composition (profile "${p.profile}")` : (policy.envFile ?? "process environment"),
         kind: "missing-env-value" as const,
         detail: `"${delivered}" is declared by a canonical MCP server's env but has no resolvable value`,
       });

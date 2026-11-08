@@ -130,3 +130,39 @@ test("resolveSecretEnv: an invalid entry rejects the batch with the entry text",
     /invalid mxenv:\/\/ reference entry: mxenv:\/\/no-slash-segment/,
   );
 });
+
+
+test("parseEnvEntry: KEY segments with dots/dashes and dashed profiles parse through the SDK grammar", () => {
+  assert.deepEqual(parseEnvEntry("mxenv://my-profile/SOME.KEY-2"), {
+    kind: "ref",
+    profile: "my-profile",
+    key: "SOME.KEY-2",
+    delivered: "SOME.KEY-2",
+  });
+});
+
+test("resolveSecretEnv: a composed reference never loses to a same-named bare entry (collision rule)", async () => {
+  const home = scratchHome(FIXTURE_CONFIG, { "secrets.env": "SOME_TOKEN=composed-value\n" });
+  process.env.SOME_TOKEN = "ambient-value";
+  try {
+    await withHome(home, async () => {
+      const result = await resolveSecretEnv(["SOME_TOKEN", "mxenv://test/SOME_TOKEN"], POLICY);
+      assert.deepEqual(result, { SOME_TOKEN: "composed-value" });
+    });
+  } finally {
+    delete process.env.SOME_TOKEN;
+  }
+});
+
+test("resolveSecretEnv: a missing reference key still fills from a bare entry of the same delivered name", async () => {
+  const home = scratchHome(FIXTURE_CONFIG, { "secrets.env": "OTHER=x\n" });
+  process.env.SOME_TOKEN = "ambient-value";
+  try {
+    await withHome(home, async () => {
+      const result = await resolveSecretEnv(["mxenv://test/SOME_TOKEN", "SOME_TOKEN"], POLICY);
+      assert.deepEqual(result, { SOME_TOKEN: "ambient-value" });
+    });
+  } finally {
+    delete process.env.SOME_TOKEN;
+  }
+});

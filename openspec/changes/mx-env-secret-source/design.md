@@ -28,7 +28,7 @@
 ## Risks / Trade-offs
 
 - [Async signature touches several call sites] → mechanical change, compile-driven; the spec's single-resolver rule is what keeps it safe.
-- [SDK version coupling (Trellis → `@morphixai/mxenv-core`)] → narrow surface (composition + refs, semver-stable facade); pinned `^0.12.0`.
+- [SDK version coupling (Trellis → `@morphixai/mxenv-core`)] → narrow surface (composition + refs, semver-stable facade); pinned `^0.12.2` (the release carrying the implicit-default profile fix).
 - [Composition cost per resolution batch] → compose once per `resolveSecretEnv` call batch (cache per call, not per name); MCP sync/audit paths resolve tens of names at most.
 - [Reference resolution depends on `~/.mxenv/.env` being readable/decrypted] → same operational reality as the values themselves; failures surface as `undefined` + findings, matching the missing-name contract.
 

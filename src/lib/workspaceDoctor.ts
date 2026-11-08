@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parse as parseToml } from "smol-toml";
 import type { AgentId, CanonicalSource, LayerProvenance } from "../core/types.js";
-import { resolveSecretEnv } from "./secretEnv.js";
+import { deliveredName, parseEnvEntry, resolveSecretEnv } from "./secretEnv.js";
 import { loadWorkspaceRendered, workspaceMcpConfigPath, workspacePrecedenceWarnings } from "./workspaceMcp.js";
 
 export interface WorkspaceLayerEntry {
@@ -159,8 +159,12 @@ export async function collectWorkspaceDoctorSection(canonical: CanonicalSource):
   );
 
   const refs = collectVarRefs(canonical);
-  const resolved = await resolveSecretEnv([...new Set(refs.map((r) => r.name))], canonical.secretsPolicy);
-  const unresolvedVars = refs.filter((r) => resolved[r.name] === undefined);
+  // Malformed `mxenv://` entries are unresolved as-is (they name themselves);
+  // they must never reach resolveSecretEnv, which rejects the batch.
+  const invalid = refs.filter((r) => parseEnvEntry(r.name).kind === "invalid");
+  const resolvableRefs = refs.filter((r) => parseEnvEntry(r.name).kind !== "invalid");
+  const resolved = await resolveSecretEnv([...new Set(resolvableRefs.map((r) => r.name))], canonical.secretsPolicy);
+  const unresolvedVars = [...invalid, ...resolvableRefs.filter((r) => resolved[deliveredName(r.name)] === undefined)];
 
   const manifest = loadWorkspaceRendered(workspace.root);
   const unmigrated: WorkspaceUnmigratedHint[] = [];

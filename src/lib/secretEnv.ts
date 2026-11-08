@@ -62,6 +62,15 @@ export type SecretEnvEntry =
   | { kind: "name"; delivered: string }
   | { kind: "invalid"; entry: string };
 
+/** Delivered name for an entry (KEY segment for a reference, the entry
+ * itself otherwise; an invalid entry passes through unchanged so error
+ * paths can still name it). The single derivation every renderer and
+ * consumer uses — never re-derive from the raw text. */
+export function deliveredName(entry: string): string {
+  const parsed = parseEnvEntry(entry);
+  return parsed.kind === "invalid" ? entry : parsed.delivered;
+}
+
 export function parseEnvEntry(entry: string): SecretEnvEntry {
   if (entry.includes("mxenv://") || entry.includes("mx-env://")) {
     try {
@@ -89,10 +98,11 @@ export function parseEnvEntry(entry: string): SecretEnvEntry {
  * ambient env: they resolve from the composed mxenv profile only, so a
  * same-named ambient variable cannot shadow the composed value.
  *
- * Invalid entries reject the batch with a descriptive error — audit
- * pre-classifies to turn them into findings; the bridge's rejection is
- * the same text. Compositions are cached per batch (one
- * `ReferenceResolver` per call, not per name).
+ * Invalid entries reject the batch with a descriptive error; audit and
+ * the plan pre-check pre-classify to turn them into findings/conflicts
+ * before this point (the bridge only ever sees pre-checked defs).
+ * Compositions are cached per batch (one `ReferenceResolver` per call,
+ * not per name).
  */
 export async function resolveSecretEnv(entries: string[], policy: SecretsPolicy): Promise<Record<string, string | undefined>> {
   const parsed = entries.map(parseEnvEntry);
@@ -101,21 +111,26 @@ export async function resolveSecretEnv(entries: string[], policy: SecretsPolicy)
     throw new Error(`[trellis] invalid mxenv:// reference entry: ${invalid.entry} — expected mxenv://<profile>/<KEY>`);
   }
   const result: Record<string, string | undefined> = {};
+  // Delivered-name collisions (several entries delivering one name):
+  // references are authoritative — a composed value never loses to a bare
+  // name's ambient/file value (ambient must not shadow references); a
+  // DEFINED value never loses to undefined; within one class the first
+  // declaration wins; bare names only fill keys nothing has filled.
   const refs = parsed.filter((p): p is Extract<SecretEnvEntry, { kind: "ref" }> => p.kind === "ref");
   if (refs.length > 0) {
     const resolver = new ReferenceResolver(loadConfigLayers({ cwd: homedir(), homeDir: homedir() }), {});
     for (const ref of refs) {
+      if (result[ref.delivered] !== undefined) continue;
       const { value } = await resolver.valueOf(ref.profile, ref.key);
       result[ref.delivered] = value;
     }
   }
   const names = parsed.filter((p): p is Extract<SecretEnvEntry, { kind: "name" }> => p.kind === "name");
   if (names.length > 0) {
-    if (policy.envFile) {
-      const map = loadEnvFile(policy.envFile);
-      for (const name of names) result[name.delivered] = map[name.delivered];
-    } else {
-      for (const name of names) result[name.delivered] = process.env[name.delivered];
+    const fileMap = policy.envFile ? loadEnvFile(policy.envFile) : undefined;
+    for (const name of names) {
+      if (result[name.delivered] !== undefined) continue;
+      result[name.delivered] = fileMap ? fileMap[name.delivered] : process.env[name.delivered];
     }
   }
   return result;
