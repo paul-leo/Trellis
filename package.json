@@ -1,6 +1,6 @@
 {
   "name": "agent-trellis",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "A unified Code Agent Runtime for Skills, MCP, Memory, and shared instructions across Claude Code, Codex, Kiro, pi, Kimi Code, and ZCode.",
   "license": "MIT",
   "author": "Paul Leo",
@@ -69,6 +69,7 @@
     "@modelcontextprotocol/client": "^2.3.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@modelcontextprotocol/server": "^2.3.1",
+    "@morphixai/mxenv-core": "^0.12.2",
     "smol-toml": "^1.9.1",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"

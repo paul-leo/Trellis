@@ -27,7 +27,13 @@ export function extractTemplateVarNames(value: string): string[] {
  * same answer to "what names does this def reference," not two
  * separately-maintained collections. */
 export function declaredEnvNames(def: McpServerDef): string[] {
+  // RAW entries, including `envAliases` sources (mx-env-secret-source
+  // secrets-audit delta): consumers that RESOLVE must see the original
+  // `mxenv://` text so references go through composition, then look the
+  // result up by delivered name; consumers that want the delivered NAMES
+  // map through `deliveredName` at their own use site (e.g. Kiro).
   const names = new Set<string>(def.env ?? []);
+  for (const source of Object.values(def.envAliases ?? {})) names.add(source);
   for (const value of Object.values(def.headers ?? {})) {
     for (const name of extractTemplateVarNames(value)) names.add(name);
   }

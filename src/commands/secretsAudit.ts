@@ -31,7 +31,7 @@ import { KiroAdapter } from "../adapters/kiro.js";
 import { ZcodeAdapter } from "../adapters/zcode.js";
 import { declaredEnvNames, extractJsonEnvVarNames, extractTomlEnvVarNames, extractZcodeEnvVarNames } from "../lib/envVarNames.js";
 import { resolveZcodeProfile } from "../probes/zcode.js";
-import { resolveSecretEnv } from "../lib/secretEnv.js";
+import { parseEnvEntry, resolveSecretEnv  } from "../lib/secretEnv.js";
 
 export interface RunSecretsAuditOptions {
   json?: boolean;
@@ -49,7 +49,7 @@ export interface SecretsFinding {
    * `~/.trellis/mcp/servers.yaml` itself (see module doc comment). */
   agent: AgentId | "environment" | "canonical";
   file: string;
-  kind: "literal-secret" | "unexpected-var-name" | "missing-env-value";
+  kind: "literal-secret" | "unexpected-var-name" | "missing-env-value" | "malformed-reference";
   detail: string;
 }
 
@@ -84,23 +84,46 @@ function auditedAgents(homeDir: string, managedAgents: readonly AgentId[]): Audi
  * a problem regardless of which agents' `servers.yaml` `agents:` field
  * would route it to (trellis-secrets-env-management design.md D3).
  */
-function findMissingEnvValues(servers: Record<string, McpServerDef>, policy: SecretsPolicy): SecretsFinding[] {
+async function findMissingEnvValues(servers: Record<string, McpServerDef>, policy: SecretsPolicy): Promise<SecretsFinding[]> {
   const names = new Set<string>();
   for (const def of Object.values(servers)) {
     for (const name of declaredEnvNames(def)) names.add(name);
   }
   if (names.size === 0) return [];
 
-  const resolved = resolveSecretEnv([...names], policy);
-  const source = policy.envFile ?? "process environment";
-  return [...names]
-    .filter((name) => !resolved[name])
-    .map((name) => ({
-      agent: "environment" as const,
-      file: source,
-      kind: "missing-env-value" as const,
-      detail: `"${name}" is declared by a canonical MCP server's env but has no resolvable value`,
-    }));
+  // Malformed `mxenv://` entries are findings in their own right — never
+  // skipped, never treated as bare names (mx-env-secret-source spec).
+  const entries = [...names];
+  const parsed = entries.map(parseEnvEntry);
+  const findings: SecretsFinding[] = [];
+  for (const p of parsed) {
+    if (p.kind === "invalid") {
+      findings.push({
+        agent: "environment" as const,
+        file: policy.envFile ?? "process environment",
+        kind: "malformed-reference" as const,
+        detail: `"${p.entry}" is not a valid mxenv://<profile>/<KEY> reference`,
+      });
+    }
+  }
+  const resolvable = entries.filter((_, i) => parsed[i].kind !== "invalid");
+  if (resolvable.length === 0) return findings;
+
+  // Findings name the DELIVERED name (the KEY segment for a reference).
+  const resolved = await resolveSecretEnv(resolvable, policy);
+  for (const entry of resolvable) {
+    const p = parseEnvEntry(entry);
+    const delivered = p.kind === "invalid" ? entry : p.delivered;
+    if (!resolved[delivered]) {
+      findings.push({
+        agent: "environment" as const,
+        file: p.kind === "ref" ? `the mxenv composition (profile "${p.profile}")` : (policy.envFile ?? "process environment"),
+        kind: "missing-env-value" as const,
+        detail: `"${delivered}" is declared by a canonical MCP server's env but has no resolvable value`,
+      });
+    }
+  }
+  return findings;
 }
 
 /**
@@ -159,7 +182,7 @@ export async function collectSecretsAuditReport(opts: RunSecretsAuditOptions = {
     findings.push(...auditFile(agent.id, file, content, canonical.secretsPolicy, agent.extractNames));
   }
 
-  findings.push(...findMissingEnvValues(canonical.mcp.servers, canonical.secretsPolicy));
+  findings.push(...await findMissingEnvValues(canonical.mcp.servers, canonical.secretsPolicy));
   findings.push(...auditCanonicalServersYaml(homeDir, canonical.secretsPolicy));
 
   return { findings };

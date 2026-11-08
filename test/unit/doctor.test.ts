@@ -35,7 +35,7 @@ function snapshot(agent: AgentSnapshot["agent"], overrides: Partial<AgentSnapsho
   return { agent, present: true, skillRoots: [], mcpServers: [], diagnostics: [], ...overrides };
 }
 
-test("cross-agent drift: same skill, same realpath — no finding", () => {
+test("cross-agent drift: same skill, same realpath — no finding", async () => {
   const snapshots = [
     snapshot("claude-code", { skillRoots: [{ path: "/c", isSymlink: false, skills: [skill({ name: "foo", realDir: "/shared/foo" })] }] }),
     snapshot("codex", { skillRoots: [{ path: "/x", isSymlink: false, skills: [skill({ name: "foo", realDir: "/shared/foo" })] }] }),
@@ -43,7 +43,7 @@ test("cross-agent drift: same skill, same realpath — no finding", () => {
   assert.deepEqual(detectCrossAgentDrift(snapshots), []);
 });
 
-test("cross-agent drift: same name, different realpath — drift finding names both agents", () => {
+test("cross-agent drift: same name, different realpath — drift finding names both agents", async () => {
   const snapshots = [
     snapshot("claude-code", { skillRoots: [{ path: "/c", isSymlink: false, skills: [skill({ name: "foo", realDir: "/a/foo" })] }] }),
     snapshot("kiro", { skillRoots: [{ path: "/k", isSymlink: false, skills: [skill({ name: "foo", realDir: "/b/foo" })] }] }),
@@ -54,7 +54,7 @@ test("cross-agent drift: same name, different realpath — drift finding names b
   assert.match(findings[0].message, /kiro=\/b\/foo/);
 });
 
-test("duplication: physical duplicate alongside a symlinked entry is flagged, identifying the non-symlinked path", () => {
+test("duplication: physical duplicate alongside a symlinked entry is flagged, identifying the non-symlinked path", async () => {
   const snap = snapshot("codex", {
     skillRoots: [
       { path: "/agents/skills", isSymlink: false, skills: [skill({ name: "foo", dir: "/agents/skills/foo", realDir: "/source/foo", isSymlink: true })] },
@@ -66,7 +66,7 @@ test("duplication: physical duplicate alongside a symlinked entry is flagged, id
   assert.match(findings[0].message, /\/codex\/skills\/foo/);
 });
 
-test("duplication: all skills symlinked — no finding", () => {
+test("duplication: all skills symlinked — no finding", async () => {
   const snap = snapshot("codex", {
     skillRoots: [
       { path: "/agents/skills", isSymlink: false, skills: [skill({ name: "foo", dir: "/agents/skills/foo", realDir: "/source/foo", isSymlink: true })] },
@@ -75,33 +75,33 @@ test("duplication: all skills symlinked — no finding", () => {
   assert.deepEqual(detectDuplication([snap]), []);
 });
 
-test("collision: static server name also in known_host_injected is flagged, Codex gets the failure-class note", () => {
+test("collision: static server name also in known_host_injected is flagged, Codex gets the failure-class note", async () => {
   const snap = snapshot("codex", { mcpServers: [{ name: "sentry", transport: "stdio" }] });
   const findings = detectCollisions([snap], ["atlassian", "sentry", "memory", "mirasim"]);
   assert.equal(findings.length, 1);
   assert.match(findings[0].message, /url is not supported for stdio/);
 });
 
-test("collision: no overlap — clean", () => {
+test("collision: no overlap — clean", async () => {
   const snap = snapshot("claude-code", { mcpServers: [{ name: "tanka", transport: "stdio" }] });
   assert.deepEqual(detectCollisions([snap], ["atlassian", "sentry", "memory", "mirasim"]), []);
 });
 
-test("runtime drift: missing canonical runtime entry is reported, present entry is clean", () => {
+test("runtime drift: missing canonical runtime entry is reported, present entry is clean", async () => {
   const canonical = {
     managedAgents: ["codex"] as const,
     mcp: { servers: {}, knownHostInjected: [], runtime: { delivery: { codex: "mcp" as const } } },
     secretsPolicy: { allowedVars: [], rejectPatterns: [] },
   };
-  const missing = detectRuntimeDrift([snapshot("codex")], canonical);
+  const missing = await detectRuntimeDrift([snapshot("codex")], canonical);
   assert.equal(missing.length, 1);
   assert.match(missing[0].message, /trellis/);
 
-  const present = detectRuntimeDrift([snapshot("codex", { mcpServers: [{ name: "trellis", transport: "stdio" }] })], canonical);
+  const present = await detectRuntimeDrift([snapshot("codex", { mcpServers: [{ name: "trellis", transport: "stdio" }] })], canonical);
   assert.deepEqual(present, []);
 });
 
-test("case mismatch: wrong-case entry file is flagged, distinguishable from absent", () => {
+test("case mismatch: wrong-case entry file is flagged, distinguishable from absent", async () => {
   const snap = snapshot("kiro", {
     skillRoots: [
       { path: "/kiro/skills", isSymlink: false, skills: [skill({ name: "broken-case-skill", realDir: "/kiro/skills/broken-case-skill", caseCorrect: false })] },
@@ -112,7 +112,7 @@ test("case mismatch: wrong-case entry file is flagged, distinguishable from abse
   assert.match(findings[0].message, /broken-case-skill/);
 });
 
-test("resolveKnownHostInjected: an explicit override always wins, no canonical lookup needed", () => {
+test("resolveKnownHostInjected: an explicit override always wins, no canonical lookup needed", async () => {
   const result = resolveKnownHostInjected({ knownHostInjected: ["custom"] });
   assert.deepEqual(result, ["custom"]);
 });
@@ -131,7 +131,7 @@ test("resolveKnownHostInjected: a real canonical source's known_host_injected is
   assert.notDeepEqual(result, DEFAULT_KNOWN_HOST_INJECTED);
 });
 
-test("resolveKnownHostInjected: no canonical source falls back to the hardcoded default (P0, unchanged)", () => {
+test("resolveKnownHostInjected: no canonical source falls back to the hardcoded default (P0, unchanged)", async () => {
   const home = mkdtempSync(join(tmpdir(), "trellis-doctor-no-canonical-"));
   const result = resolveKnownHostInjected({ homeDir: home });
   assert.deepEqual(result, DEFAULT_KNOWN_HOST_INJECTED);

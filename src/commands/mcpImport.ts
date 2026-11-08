@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadCanonicalSource, ensureGitignoreEntry, ensureShellEnvSource, upsertServerYaml, writeSecretsPolicyExtraction } from "../core/canonical.js";
 import type { McpServerDef, Transport } from "../core/types.js";
+import { deliveredName } from "../lib/secretEnv.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
 import { parseDotenv, writeLocalSecretValue } from "../lib/secretEnv.js";
 import { collectMcpSyncReport, printReport as printMcpSyncReport } from "./mcp.js";
@@ -165,7 +166,7 @@ function semanticIdentity(def: McpServerDef): string {
     enabled: def.enabled,
     agents: def.agents ? sorted(def.agents) : undefined,
     staticEnv: def.staticEnv,
-    envKeys: sorted([...(def.env ?? []), ...Object.keys(def.envAliases ?? {})]),
+    envKeys: sorted([...(def.env ?? []).map(deliveredName), ...Object.keys(def.envAliases ?? {})]),
     headerKeys: sorted(Object.keys(def.headers ?? {})),
   });
 }

@@ -352,3 +352,16 @@ test("readServerEnvTable: a quoted key round-trips through readServerEnvTable/re
   const rendered = renderServerSection("weird", { transport: "stdio", command: "x", staticEnv: { "has space": "v1" } });
   assert.deepEqual(readServerEnvTable(rendered, "weird"), { "has space": "v1" });
 });
+
+
+test("renderServerSection: an mxenv:// env entry renders env_vars under its delivered name, never the ref text (mx-env-secret-source)", () => {
+  const text = renderServerSection("s", { transport: "stdio", command: "npx", args: [], env: ["mxenv://legacy/API_TOKEN"] });
+  assert.ok(text.includes('env_vars = ["API_TOKEN"]'), text);
+  assert.ok(!text.includes("mxenv://"), text);
+});
+
+test("renderServerSection: an envAliases source reference renders ${KEY} under the target key", () => {
+  const text = renderServerSection("s", { transport: "stdio", command: "npx", args: [], envAliases: { TARGET_KEY: "mxenv://legacy/API_TOKEN" } });
+  assert.ok(text.includes('TARGET_KEY = "${API_TOKEN}"'), text);
+  assert.ok(!text.includes("mxenv://"), text);
+});

@@ -110,7 +110,7 @@ export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promis
     }
 
     const globalItems = (await adapter.plan(canonical)).filter((item) => item.kind === "mcp");
-    const wsItems = planWorkspaceMcp(adapter.id, canonical);
+    const wsItems = await planWorkspaceMcp(adapter.id, canonical);
     if (writeMode) {
       await adapter.apply(globalItems, backup!);
       applyWorkspaceMcp(adapter.id, canonical, wsItems, backup!);

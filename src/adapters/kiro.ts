@@ -19,6 +19,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { deliveredName } from "../lib/secretEnv.js";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
 import { isInScope } from "../core/adapter.js";
 import { usesNativeCapabilityDelivery } from "../core/types.js";
@@ -75,13 +76,13 @@ export class KiroAdapter implements TrellisAdapter {
       kind: "instructions",
     });
 
-    const mcpItems = this.planMcp(canonical);
-    const approvedEnvVarsItems = this.planApprovedEnvVars(canonical);
+    const mcpItems = await this.planMcp(canonical);
+    const approvedEnvVarsItems = await this.planApprovedEnvVars(canonical);
 
     return [...skillItems, ...instructionsItems, ...mcpItems, ...approvedEnvVarsItems];
   }
 
-  private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
+  private async planMcp(canonical: CanonicalSource): Promise<AdapterPlanItem[]> {
     const configPath = join(this.homeDir, ".kiro", "settings", "mcp.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
     const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
@@ -91,17 +92,18 @@ export class KiroAdapter implements TrellisAdapter {
   /** Names come from `resolveMcpPlan`, not a raw scan of `canonical.mcp.servers`
    * (design.md D2) — a server scoped away from Kiro, or refused for a
    * known_host_injected collision, never contributes a name here either. */
-  private desiredApprovedEnvVars(canonical: CanonicalSource): string[] {
-    const { desired } = resolveMcpPlan(this.id, globalLayerMcp(canonical), canonical.managedAgents, canonical.secretsPolicy);
+  private async desiredApprovedEnvVars(canonical: CanonicalSource): Promise<string[]> {
+    const { desired } = await resolveMcpPlan(this.id, globalLayerMcp(canonical), canonical.managedAgents, canonical.secretsPolicy);
     const names = new Set<string>();
     for (const { def } of desired) {
-      for (const name of declaredEnvNames(def)) names.add(name);
+      // Approved list holds DELIVERED names (what renderers write), not raw entries.
+      for (const name of declaredEnvNames(def)) names.add(deliveredName(name));
     }
     return [...names];
   }
 
-  private planApprovedEnvVars(canonical: CanonicalSource): AdapterPlanItem[] {
-    const desired = this.desiredApprovedEnvVars(canonical);
+  private async planApprovedEnvVars(canonical: CanonicalSource): Promise<AdapterPlanItem[]> {
+    const desired = await this.desiredApprovedEnvVars(canonical);
     if (desired.length === 0) {
       return [];
     }
@@ -212,7 +214,7 @@ export class KiroAdapter implements TrellisAdapter {
         return [];
       }
     })();
-    for (const name of this.desiredApprovedEnvVars(canonical)) {
+    for (const name of await this.desiredApprovedEnvVars(canonical)) {
       if (!approved.includes(name)) {
         mismatches.push(`env var "${name}" is needed by a canonical MCP server for kiro but missing from ${APPROVED_ENV_VARS_KEY}`);
       }

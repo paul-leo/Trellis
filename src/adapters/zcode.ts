@@ -38,15 +38,15 @@ function zcodeServers(parsed: JsonRecord | undefined): JsonRecord {
   return record(record(parsed?.mcp).servers);
 }
 
-export function planZcodeMcp(opts: {
+export async function planZcodeMcp(opts: {
   configPath: string;
   parsed: JsonRecord | undefined;
   mcp: McpConfig;
   managedAgents: readonly import("../core/types.js").AgentId[];
   policy: SecretsPolicy;
   ownership: JsonRecord;
-}): AdapterPlanItem[] {
-  const { desired, conflicts } = resolveMcpPlan("zcode", opts.mcp, opts.managedAgents, opts.policy);
+}): Promise<AdapterPlanItem[]> {
+  const { desired, conflicts } = await resolveMcpPlan("zcode", opts.mcp, opts.managedAgents, opts.policy);
   const existing = zcodeServers(opts.parsed);
   const items: AdapterPlanItem[] = [];
   for (const { name, def } of desired) {
@@ -144,14 +144,14 @@ export class ZcodeAdapter implements TrellisAdapter {
       kind: "instructions",
     }));
 
-    items.push(...planZcodeMcp({
+    items.push(...(await planZcodeMcp({
       configPath: profile.configPath,
       parsed,
       mcp: globalLayerMcp(canonical),
       managedAgents: canonical.managedAgents,
       policy: canonical.secretsPolicy,
       ownership: ownedByAgent(loadMcpOwnership(this.homeDir), this.id),
-    }));
+    })));
 
     const current = currentSkillControls(parsed);
     const ownership = loadZcodeSettingsOwnership(this.homeDir);
@@ -215,14 +215,14 @@ export class ZcodeAdapter implements TrellisAdapter {
       .map((skill) => skill.name);
     const actualNativeSkills = new Set(snapshot.skillRoots.filter((root) => root.path === join(this.homeDir, ".zcode", "skills")).flatMap((root) => root.skills.map((skill) => skill.name)));
     for (const name of desiredNativeSkills) if (!actualNativeSkills.has(name)) mismatches.push(`skill "${name}" is missing on ZCode`);
-    const expectedMcp = planZcodeMcp({
+    const expectedMcp = (await planZcodeMcp({
       configPath: profile.configPath,
       parsed: readConfig(profile.configPath),
       mcp: globalLayerMcp(canonical),
       managedAgents: canonical.managedAgents,
       policy: canonical.secretsPolicy,
       ownership: ownedByAgent(loadMcpOwnership(this.homeDir), this.id),
-    }).filter((item) => item.action === "create" || item.action === "conflict");
+    })).filter((item) => item.action === "create" || item.action === "conflict");
     mismatches.push(...expectedMcp.map((item) => item.description));
     if (!snapshot.instructionsFile?.isSymlink || snapshot.instructionsFile.target !== canonical.instructionsFile) mismatches.push("shared instructions are not linked into ~/.zcode/AGENTS.md");
     if (capabilityDeliveryForAgent(this.id, canonical.mcp) === "mcp") {

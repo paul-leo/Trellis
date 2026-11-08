@@ -74,10 +74,10 @@ export function parseMcpGatewayArgs(argv: readonly string[]): { agentId: AgentId
  * connect to itself. Resolving against a gateway-less view of the same
  * canonical gives the set gateway mode replaced.
  */
-export function resolveGatewayUpstreams(
+export async function resolveGatewayUpstreams(
   agentId: AgentId,
   canonical: Pick<ReturnType<typeof loadCanonicalSource>, "mcp" | "managedAgents" | "secretsPolicy">,
-): { upstreams: UpstreamSpec[]; oauthServers: string[]; conflicts: string[] } {
+): Promise<{ upstreams: UpstreamSpec[]; oauthServers: string[]; conflicts: string[] }> {
   const route = canonical.mcp.routes?.[agentId];
   const hubActive = route ? route.mode === "hub" : Boolean(canonical.mcp.hub) && !isGatewayAgent(agentId, canonical.mcp, canonical.managedAgents);
   if (hubActive) {
@@ -108,7 +108,7 @@ export function resolveGatewayUpstreams(
   // ownership-gated removal clears it. Serving that stale entry would hand
   // every server, and every secret resolved into it, to the one agent the
   // user just said to stop involving.
-  const { desired, conflicts } = resolveMcpPlan(agentId, direct, canonical.managedAgents, canonical.secretsPolicy);
+  const { desired, conflicts } = await resolveMcpPlan(agentId, direct, canonical.managedAgents, canonical.secretsPolicy);
   // Agent-owned OAuth servers bypass the gateway as direct entries, so no
   // connection state exists for them here — but Trellis owns the token
   // store, so `trellis.mcp.status` reports their credential health for
@@ -119,7 +119,7 @@ export function resolveGatewayUpstreams(
   const agentOwnedServers = Object.fromEntries(Object.entries(canonical.mcp.servers).filter(([, def]) => isAgentOwnedOAuth(def)));
   const oauthServers = Object.keys(agentOwnedServers).length === 0
     ? []
-    : resolveMcpPlan(agentId, { ...direct, servers: agentOwnedServers }, canonical.managedAgents, canonical.secretsPolicy).desired.map(({ name }) => name);
+    : (await resolveMcpPlan(agentId, { ...direct, servers: agentOwnedServers }, canonical.managedAgents, canonical.secretsPolicy)).desired.map(({ name }) => name);
   return {
     upstreams: desired.map(({ name }) => ({ name, def: canonical.mcp.servers[name]! })),
     oauthServers,
@@ -157,7 +157,7 @@ async function runMcpEdge(
     return { exitCode: 1 };
   }
 
-  const { upstreams, oauthServers, conflicts } = resolveGatewayUpstreams(opts.agentId, canonical);
+  const { upstreams, oauthServers, conflicts } = await resolveGatewayUpstreams(opts.agentId, canonical);
   for (const message of conflicts) {
     console.error(`trellis-mcp-gateway: ${message}`);
   }

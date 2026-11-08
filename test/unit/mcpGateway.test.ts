@@ -45,46 +45,46 @@ gateway:
   enabled: true
 `;
 
-test("parseMcpGatewayArgs: reads the agent id the plan entry carries", () => {
+test("parseMcpGatewayArgs: reads the agent id the plan entry carries", async () => {
   assert.deepEqual(parseMcpGatewayArgs(["--agent", "claude-code"]), { agentId: "claude-code" });
 });
 
-test("parseMcpGatewayArgs: a missing or unknown agent is an error, never a silent default", () => {
+test("parseMcpGatewayArgs: a missing or unknown agent is an error, never a silent default", async () => {
   assert.ok("error" in parseMcpGatewayArgs([]));
   assert.ok("error" in parseMcpGatewayArgs(["--agent"]));
   const unknown = parseMcpGatewayArgs(["--agent", "cursor"]);
   assert.ok("error" in unknown && /unknown agent "cursor"/.test(unknown.error));
 });
 
-test("gateway upstreams: a server scoped to another agent is not reachable through this agent's gateway", () => {
+test("gateway upstreams: a server scoped to another agent is not reachable through this agent's gateway", async () => {
   const canonical = loadCanonicalSource(scratchHome(GATEWAY_ON));
 
-  const claude = resolveGatewayUpstreams("claude-code", canonical).upstreams.map((u) => u.name);
+  const claude = (await resolveGatewayUpstreams("claude-code", canonical)).upstreams.map((u) => u.name);
   assert.deepEqual(claude, ["shared"], "codex-only must not appear, and neither must the disabled one");
 
-  const codex = resolveGatewayUpstreams("codex", canonical).upstreams.map((u) => u.name);
+  const codex = (await resolveGatewayUpstreams("codex", canonical)).upstreams.map((u) => u.name);
   assert.deepEqual(codex.sort(), ["codex-only", "shared"]);
 });
 
-test("gateway upstreams: a disabled server is never connected to, for any agent", () => {
+test("gateway upstreams: a disabled server is never connected to, for any agent", async () => {
   const canonical = loadCanonicalSource(scratchHome(GATEWAY_ON));
   for (const agentId of ["claude-code", "codex", "kiro", "pi"] as const) {
-    const names = resolveGatewayUpstreams(agentId, canonical).upstreams.map((u) => u.name);
+    const names = (await resolveGatewayUpstreams(agentId, canonical)).upstreams.map((u) => u.name);
     assert.ok(!names.includes("turned-off"), `${agentId} must not see the disabled server`);
   }
 });
 
-test("gateway upstreams: the gateway never resolves itself as one of its own upstreams", () => {
+test("gateway upstreams: the gateway never resolves itself as one of its own upstreams", async () => {
   // resolveMcpPlan with gateway mode on answers "one entry, the gateway".
   // Handing that to the gateway would have it spawn itself, recursively.
   const canonical = loadCanonicalSource(scratchHome(GATEWAY_ON));
-  const names = resolveGatewayUpstreams("claude-code", canonical).upstreams.map((u) => u.name);
+  const names = (await resolveGatewayUpstreams("claude-code", canonical)).upstreams.map((u) => u.name);
 
   assert.ok(!names.includes(GATEWAY_ENTRY_NAME));
   assert.deepEqual(names, ["shared"]);
 });
 
-test("gateway upstreams: OAuth-classified servers stay outside the gateway", () => {
+test("gateway upstreams: OAuth-classified servers stay outside the gateway", async () => {
   const canonical = loadCanonicalSource(scratchHome(`
 servers:
   ordinary:
@@ -97,7 +97,7 @@ servers:
 gateway:
   enabled: true
 `));
-  const { upstreams, oauthServers } = resolveGatewayUpstreams("claude-code", canonical);
+  const { upstreams, oauthServers } = await resolveGatewayUpstreams("claude-code", canonical);
   assert.deepEqual(upstreams.map((u) => u.name), ["ordinary"]);
   // …but they are not invisible: the status tool reports their credential
   // health from exactly this list (trellis-mcp-status-credential-health
@@ -105,7 +105,7 @@ gateway:
   assert.deepEqual(oauthServers, ["figma"]);
 });
 
-test("gateway upstreams: the object form of the classification is excluded too, not just the scalar", () => {
+test("gateway upstreams: the object form of the classification is excluded too, not just the scalar", async () => {
   // Regression guard for a real bug class: any `def.auth === "oauth"`
   // comparison reads the metadata-bearing object as "not OAuth" and lets
   // the server leak into the gateway, where its token is never resolved
@@ -124,12 +124,12 @@ servers:
 gateway:
   enabled: true
 `));
-  const { upstreams, oauthServers } = resolveGatewayUpstreams("claude-code", canonical);
+  const { upstreams, oauthServers } = await resolveGatewayUpstreams("claude-code", canonical);
   assert.deepEqual(upstreams.map((u) => u.name), ["ordinary"]);
   assert.deepEqual(oauthServers, ["figma"]);
 });
 
-test("gateway upstreams: a Trellis-owned OAuth server stays an upstream, not a credential-health entry", () => {
+test("gateway upstreams: a Trellis-owned OAuth server stays an upstream, not a credential-health entry", async () => {
   // trellis-desktop-oauth-ownership: `owner: trellis` opts the server
   // INTO the gateway (the gateway attaches its Trellis-store token via
   // withOAuthHeader), so it has real connection status like any other
@@ -152,13 +152,13 @@ servers:
 gateway:
   enabled: true
 `));
-  const { upstreams, oauthServers } = resolveGatewayUpstreams("claude-code", canonical);
+  const { upstreams, oauthServers } = await resolveGatewayUpstreams("claude-code", canonical);
   assert.deepEqual(upstreams.map((u) => u.name).sort(), ["ordinary", "sentry"]);
   assert.equal(upstreams.find((u) => u.name === "sentry")?.def.auth !== undefined, true, "the upstream def keeps its auth so withOAuthHeader can attach the token");
   assert.deepEqual(oauthServers, ["figma"]);
 });
 
-test("gateway upstreams: scoped-out or disabled OAuth servers surface nowhere", () => {
+test("gateway upstreams: scoped-out or disabled OAuth servers surface nowhere", async () => {
   // oauthServers must be exactly the set sync writes as direct entries
   // (trellis-mcp-status-credential-health design.md D4) — a server this
   // agent doesn't have must not appear in its status report either.
@@ -180,15 +180,15 @@ servers:
 gateway:
   enabled: true
 `));
-  const claude = resolveGatewayUpstreams("claude-code", canonical);
+  const claude = await resolveGatewayUpstreams("claude-code", canonical);
   assert.deepEqual(claude.upstreams.map((u) => u.name), ["ordinary"]);
   assert.deepEqual(claude.oauthServers, [], "figma is codex-scoped and sentry is disabled — neither is this agent's");
 
-  const codex = resolveGatewayUpstreams("codex", canonical);
+  const codex = await resolveGatewayUpstreams("codex", canonical);
   assert.deepEqual(codex.oauthServers, ["figma"]);
 });
 
-test("gateway upstreams: an unresolvable env name is reported and its server dropped, not connected with an empty value", () => {
+test("gateway upstreams: an unresolvable env name is reported and its server dropped, not connected with an empty value", async () => {
   const canonical = loadCanonicalSource(
     scratchHome(`
 servers:
@@ -204,7 +204,7 @@ gateway:
 `),
   );
 
-  const { upstreams, conflicts } = resolveGatewayUpstreams("claude-code", canonical);
+  const { upstreams, conflicts } = await resolveGatewayUpstreams("claude-code", canonical);
   assert.deepEqual(
     upstreams.map((u) => u.name),
     ["fine"],
@@ -214,16 +214,16 @@ gateway:
   assert.match(conflicts[0], /TRELLIS_GATEWAY_TEST_DEFINITELY_UNSET/);
 });
 
-test("gateway upstreams: managed-agent scoping still applies — gateway mode is not a way around it", () => {
+test("gateway upstreams: managed-agent scoping still applies — gateway mode is not a way around it", async () => {
   const canonical = loadCanonicalSource(scratchHome(GATEWAY_ON, ["codex"]));
 
   // claude-code isn't managed here, so nothing is in scope for it even
   // though the server has no `agents:` restriction of its own.
-  assert.deepEqual(resolveGatewayUpstreams("kiro", canonical).upstreams.map((u) => u.name), []);
-  assert.deepEqual(resolveGatewayUpstreams("codex", canonical).upstreams.map((u) => u.name).sort(), ["codex-only", "shared"]);
+  assert.deepEqual(await (await resolveGatewayUpstreams("kiro", canonical)).upstreams.map((u) => u.name), []);
+  assert.deepEqual(await (await resolveGatewayUpstreams("codex", canonical)).upstreams.map((u) => u.name).sort(), ["codex-only", "shared"]);
 });
 
-test("gateway upstreams: an explicit route limits the upstream set for that agent", () => {
+test("gateway upstreams: an explicit route limits the upstream set for that agent", async () => {
   const canonical = loadCanonicalSource(scratchHome(`
 servers:
   shared:
@@ -242,7 +242,7 @@ routes:
     servers: [codex-only]
 `));
 
-  assert.deepEqual(resolveGatewayUpstreams("codex", canonical).upstreams.map((u) => u.name), ["codex-only"]);
+  assert.deepEqual(await (await resolveGatewayUpstreams("codex", canonical)).upstreams.map((u) => u.name), ["codex-only"]);
 });
 
 test("runMcpGateway: a canonical source that cannot be loaded exits non-zero without touching stdout", async () => {

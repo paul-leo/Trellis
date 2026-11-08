@@ -38,7 +38,7 @@ servers:
     transport: stdio
     command: node
     args: ["/fixtures/sample-mcp-server.js"]
-    env: [SAMPLE_TOKEN]
+    env: [SAMPLE_TOKEN, "mxenv://legacy/MXTEST_FIXTURE_KEY"]
 
   new-tool:
     transport: stdio

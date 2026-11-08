@@ -14,6 +14,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseEnvEntry } from "./secretEnv.js";
 import type { McpServerDef, Transport } from "../core/types.js";
 import { readJsonFile } from "./probeCommon.js";
 import { readServerEnvTable } from "./tomlSection.js";
@@ -62,8 +63,19 @@ const VAR_REF_RE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
  * independent derivations of it.
  */
 export function resolvedEnvTextMap(def: Pick<McpServerDef, "env" | "envAliases" | "staticEnv">): Record<string, string> {
-  const nameRefs = Object.fromEntries((def.env ?? []).map((name) => [name, `\${${name}}`]));
-  const aliasRefs = Object.fromEntries(Object.entries(def.envAliases ?? {}).map(([targetKey, sourceName]) => [targetKey, `\${${sourceName}}`]));
+  // `mxenv://` reference entries render as `${KEY}` under their DELIVERED
+  // name (the KEY segment) — the raw reference text never appears as a
+  // variable name in a native-client config (mx-env-secret-source spec).
+  const nameRefs = Object.fromEntries((def.env ?? []).map((entry) => {
+    const parsed = parseEnvEntry(entry);
+    const delivered = parsed.kind === "invalid" ? entry : parsed.delivered;
+    return [delivered, `\${${delivered}}`];
+  }));
+  const aliasRefs = Object.fromEntries(Object.entries(def.envAliases ?? {}).map(([targetKey, source]) => {
+    const parsed = parseEnvEntry(source);
+    const delivered = parsed.kind === "invalid" ? source : parsed.delivered;
+    return [targetKey, `\${${delivered}}`];
+  }));
   return { ...nameRefs, ...aliasRefs, ...(def.staticEnv ?? {}) };
 }
 

@@ -9,6 +9,7 @@
  * shape (`McpServerDef`), never general TOML.
  */
 
+import { deliveredName } from "./secretEnv.js";
 import type { McpServerDef } from "../core/types.js";
 
 export interface SectionRange {
@@ -165,7 +166,7 @@ export function renderServerSection(name: string, def: McpServerDef): string {
   if (def.transport === "stdio") {
     if (def.command) lines.push(`command = ${tomlString(def.command)}`);
     if (def.args && def.args.length > 0) lines.push(`args = ${tomlStringArray(def.args)}`);
-    if (def.env && def.env.length > 0) lines.push(`env_vars = ${tomlStringArray(def.env)}`);
+    if (def.env && def.env.length > 0) lines.push(`env_vars = ${tomlStringArray(def.env.map(deliveredName))}`);
   } else {
     if (def.url) lines.push(`url = ${tomlString(def.url)}`);
     const bearerEnvVar = codexBearerTokenEnvVar(def);
@@ -176,7 +177,7 @@ export function renderServerSection(name: string, def: McpServerDef): string {
   // expands it from its own ambient environment, the same mechanism
   // `env_vars` already relies on for a same-named reference
   // (trellis-migrate-env-var-alias D3).
-  const aliasEntries = Object.entries(def.envAliases ?? {}).map(([targetKey, sourceName]) => [targetKey, `\${${sourceName}}`] as const);
+  const aliasEntries = Object.entries(def.envAliases ?? {}).map(([targetKey, sourceName]) => [targetKey, `\${${deliveredName(sourceName)}}`] as const);
   const staticEnvEntries = [...aliasEntries, ...Object.entries(def.staticEnv ?? {})];
   if (staticEnvEntries.length > 0) {
     lines.push(`[${envHeader(name)}]`);
