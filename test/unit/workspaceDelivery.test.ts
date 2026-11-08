@@ -181,7 +181,7 @@ test("workspace MCP: fresh-clone re-attach — committed artifact + manifest mak
   assert.deepEqual(claude.items.filter((i) => i.layer === "workspace"), [], "committed artifacts + manifest = nothing to do");
 });
 
-test("workspace MCP: pi renders oauth.clientName and refuses sse", () => {
+test("workspace MCP: pi renders oauth.clientName and refuses sse", async () => {
   const home = scratchHome();
   initCanonical(home, ["pi"]);
   const ws = initWorkspace(mkdtempSync(join(tmpdir(), "trellis-ws-proj-")), {
@@ -193,7 +193,7 @@ test("workspace MCP: pi renders oauth.clientName and refuses sse", () => {
     },
   });
   const canonical = loadCanonicalSource({ homeDir: home, workspaceDir: ws });
-  const items = planWorkspaceMcp("pi", canonical);
+  const items = await planWorkspaceMcp("pi", canonical);
   const figma = items.find((i) => i.mcpWrite?.name === "figma");
   assert.equal(figma?.action, "create");
   const sse = items.find((i) => i.description.includes("legacy"));
@@ -201,14 +201,14 @@ test("workspace MCP: pi renders oauth.clientName and refuses sse", () => {
   assert.match(sse?.description ?? "", /sse is not a pi transport/);
 });
 
-test("workspace MCP: Trellis-owned OAuth in the project layer conflicts out (agent-owned only)", () => {
+test("workspace MCP: Trellis-owned OAuth in the project layer conflicts out (agent-owned only)", async () => {
   const home = scratchHome();
   initCanonical(home, ["claude-code"]);
   const ws = initWorkspace(mkdtempSync(join(tmpdir(), "trellis-ws-proj-")), {
     mcp: { servers: { figma: { transport: "http", url: "https://mcp.figma.com/mcp", auth: { kind: "oauth", owner: "trellis" } } } },
   });
   const canonical = loadCanonicalSource({ homeDir: home, workspaceDir: ws });
-  const items = planWorkspaceMcp("claude-code", canonical);
+  const items = await planWorkspaceMcp("claude-code", canonical);
   const conflict = items.find((i) => i.action === "conflict");
   assert.ok(conflict);
   assert.match(conflict.description, /requires gateway or runtime/);
@@ -395,7 +395,7 @@ test("sync --global-only inside a workspace ignores the project layer entirely",
   assert.ok(!existsSync(join(ws, ".claude")));
 });
 
-test("workspaceMcpConfigPath: zcode prefers existing zcode.json, then .zcode/config.json", () => {
+test("workspaceMcpConfigPath: zcode prefers existing zcode.json, then .zcode/config.json", async () => {
   const ws = mkdtempSync(join(tmpdir(), "trellis-ws-proj-"));
   assert.equal(workspaceMcpConfigPath("zcode", ws), join(ws, "zcode.json"));
   mkdirSync(join(ws, ".zcode"), { recursive: true });

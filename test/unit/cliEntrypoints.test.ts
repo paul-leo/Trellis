@@ -67,7 +67,7 @@ test("detectCliVersionSplit: stale entry shadows a newer one → message names b
   assert.match(msg, /does not modify/);
 });
 
-test("detectCliVersionSplit: no finding for zero, one, or all-equal entries", () => {
+test("detectCliVersionSplit: no finding for zero, one, or all-equal entries", async () => {
   assert.equal(detectCliVersionSplit([]), undefined);
   assert.equal(detectCliVersionSplit([e("/a", "0.16.0")]), undefined);
   assert.equal(detectCliVersionSplit([e("/a", "0.16.0"), e("/b", "0.16.0"), e("/c", "0.16.0")]), undefined);

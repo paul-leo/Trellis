@@ -70,7 +70,7 @@ export class KimiCodeAdapter implements TrellisAdapter {
     const configPath = join(this.homeDir, ".kimi-code", "mcp.json");
     const parsed = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown> : undefined;
     const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
-    items.push(...planJsonMcp({
+    items.push(...(await planJsonMcp({
       configPath,
       parsed,
       mcp: globalLayerMcp(canonical),
@@ -79,7 +79,7 @@ export class KimiCodeAdapter implements TrellisAdapter {
       policy: canonical.secretsPolicy,
       ownership,
       render: renderKimiServerEntry satisfies JsonMcpEntryRenderer,
-    }));
+    })));
     return items;
   }
 

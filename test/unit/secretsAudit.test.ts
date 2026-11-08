@@ -215,3 +215,60 @@ test("secrets audit: a clean canonical servers.yaml (only variable names, no lit
     [],
   );
 });
+
+
+// ---- mx-env-secret-source: reference entries in the audit ----
+
+test("secrets audit: a malformed mxenv:// entry is a malformed-reference finding naming the entry text", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeServersYaml(home, "servers:\n  broken:\n    transport: stdio\n    command: npx\n    env:\n      - mxenv://no-slash-segment\n");
+  const report = await collectSecretsAuditReport({ homeDir: home });
+  const finding = report.findings.find((f) => f.kind === "malformed-reference");
+  assert.ok(finding, `expected a malformed-reference finding, got ${JSON.stringify(report.findings)}`);
+  assert.ok(finding!.detail.includes("mxenv://no-slash-segment"));
+});
+
+test("secrets audit: an unresolvable reference is a missing-env-value finding under its delivered name", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeServersYaml(home, "servers:\n  ref:\n    transport: stdio\n    command: npx\n    env:\n      - mxenv://test/NOT_DEFINED_ANYWHERE\n");
+  const { writeFileSync: wf } = await import("node:fs");
+  wf(join(home, "mxenv.config.json"), JSON.stringify({
+    sources: { local1: { provider: "local", files: ["secrets.env"] } },
+    profiles: { test: ["local1"] },
+  }));
+  wf(join(home, "secrets.env"), "OTHER=x\n");
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const report = await collectSecretsAuditReport({ homeDir: home });
+    const finding = report.findings.find((f) => f.kind === "missing-env-value");
+    assert.ok(finding, `expected a missing-env-value finding, got ${JSON.stringify(report.findings)}`);
+    assert.ok(finding!.detail.includes("NOT_DEFINED_ANYWHERE"), finding!.detail);
+  } finally {
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+  }
+});
+
+test("secrets audit: a resolvable reference yields no missing-env-value finding", async () => {
+  const home = scratchHome();
+  initCanonical(home, CLEAN_POLICY);
+  writeServersYaml(home, "servers:\n  ref:\n    transport: stdio\n    command: npx\n    env:\n      - mxenv://test/API_TOKEN\n");
+  const { writeFileSync: wf } = await import("node:fs");
+  wf(join(home, "mxenv.config.json"), JSON.stringify({
+    sources: { local1: { provider: "local", files: ["secrets.env"] } },
+    profiles: { test: ["local1"] },
+  }));
+  wf(join(home, "secrets.env"), "API_TOKEN=composed\n");
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const report = await collectSecretsAuditReport({ homeDir: home });
+    assert.deepEqual(report.findings.filter((f) => f.kind === "missing-env-value"), []);
+  } finally {
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+  }
+});

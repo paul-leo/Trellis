@@ -4,6 +4,8 @@ dist/
 *.log
 .DS_Store
 .env
+# fixture-only fake values (mx-env-secret-source sandbox scenario)
+!test/fixtures/home/.mxenv/.env
 .env.*
 !.env.example
 HANDOFF.md

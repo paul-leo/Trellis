@@ -48,7 +48,7 @@ interface PiExtensionAPI {
 
 const CLIENT_INFO: McpClientInfo = { name: "trellis-mcp-bridge", version: "0.0.0" };
 
-function listServerTools(client: Client, timeoutMs: number): Promise<readonly AggregatedTool[]> {
+async function listServerTools(client: Client, timeoutMs: number): Promise<readonly AggregatedTool[]> {
   return withTimeout(client.listTools(), timeoutMs, `listTools timed out after ${timeoutMs}ms`).then((result) => result.tools);
 }
 
@@ -72,7 +72,7 @@ export default async function trellisMcpBridge(
   // independent of whether `trellis onboard` was ever run to add pi to
   // managed.yaml. managedAgents governs static config-file writes; this
   // is pi reading canonical directly at its own runtime, P4's own concern.
-  const { desired } = resolveMcpPlan("pi", canonical.mcp, ALL_AGENTS, canonical.secretsPolicy);
+  const { desired } = await resolveMcpPlan("pi", canonical.mcp, ALL_AGENTS, canonical.secretsPolicy);
   const clients = new Set<Client>();
   const registry = new McpToolRegistry();
 

@@ -14,86 +14,86 @@ function mcp(overrides: Partial<McpConfig> = {}): McpConfig {
  * is a safe, minimal default here. */
 const POLICY: SecretsPolicy = { allowedVars: [], rejectPatterns: [] };
 
-test("resolveMcpPlan: an unscoped server is desired for every agent", () => {
+test("resolveMcpPlan: an unscoped server is desired for every agent", async () => {
   const config = mcp({ servers: { tanka: { transport: "stdio", command: "tanka-mcp" } } });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, "tanka");
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: runtime delivery collapses direct upstreams into one runtime entry", () => {
+test("resolveMcpPlan: runtime delivery collapses direct upstreams into one runtime entry", async () => {
   const config = mcp({
     servers: { tanka: { transport: "stdio", command: "tanka-mcp" } },
     runtime: { delivery: { codex: "mcp" } },
   });
-  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.conflicts, []);
   assert.deepEqual(result.desired.map((entry) => entry.name), [RUNTIME_ENTRY_NAME]);
   assert.deepEqual(result.desired[0].def.args, ["mcp-runtime", "--agent", "codex"]);
 });
 
-test("resolveMcpPlan: both delivery still uses one runtime MCP entry while native skills remain adapter-owned", () => {
+test("resolveMcpPlan: both delivery still uses one runtime MCP entry while native skills remain adapter-owned", async () => {
   const config = mcp({
     servers: { tanka: { transport: "stdio", command: "tanka-mcp" } },
     runtime: { delivery: { codex: "both" } },
   });
-  assert.deepEqual(resolveMcpPlan("codex", config, ALL_AGENTS, POLICY).desired.map((entry) => entry.name), [RUNTIME_ENTRY_NAME]);
+  assert.deepEqual(await (await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY)).desired.map((entry) => entry.name), [RUNTIME_ENTRY_NAME]);
 });
 
-test("resolveMcpPlan: a server scoped to one agent is excluded elsewhere", () => {
+test("resolveMcpPlan: a server scoped to one agent is excluded elsewhere", async () => {
   const config = mcp({
     servers: { "claude-only": { transport: "stdio", command: "node", agents: ["claude-code"] } },
   });
-  assert.equal(resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY).desired.length, 1);
-  assert.equal(resolveMcpPlan("codex", config, ALL_AGENTS, POLICY).desired.length, 0);
+  assert.equal(await (await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY)).desired.length, 1);
+  assert.equal(await (await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY)).desired.length, 0);
 });
 
-test("resolveMcpPlan: a name colliding with known_host_injected is a conflict, not desired", () => {
+test("resolveMcpPlan: a name colliding with known_host_injected is a conflict, not desired", async () => {
   const config = mcp({
     servers: { sentry: { transport: "stdio", command: "node" } },
     knownHostInjected: ["sentry", "memory"],
   });
-  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /url is not supported for stdio/);
 });
 
-test("resolveMcpPlan: the same collision on a non-Codex agent has no Codex-specific note", () => {
+test("resolveMcpPlan: the same collision on a non-Codex agent has no Codex-specific note", async () => {
   const config = mcp({
     servers: { sentry: { transport: "stdio", command: "node" } },
     knownHostInjected: ["sentry"],
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.conflicts.length, 1);
   assert.ok(!result.conflicts[0].message.includes("url is not supported for stdio"));
 });
 
-test("resolveMcpPlan: a literal secret in args is written as ordinary config, not refused — no proven ${VAR} resolution exists for args", () => {
+test("resolveMcpPlan: a literal secret in args is written as ordinary config, not refused — no proven ${VAR} resolution exists for args", async () => {
   const config = mcp({
     servers: {
       leaky: { transport: "stdio", command: "node", args: ["--token", "glpat-abc123def456"] },
     },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: a literal secret in staticEnv is still refused — the one shape meant to leave via env/env_vars", () => {
+test("resolveMcpPlan: a literal secret in staticEnv is still refused — the one shape meant to leave via env/env_vars", async () => {
   const config = mcp({
     servers: {
       leaky: { transport: "stdio", command: "node", staticEnv: { TOKEN: "glpat-abc123def456" } },
     },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /GitLab personal access token/);
 });
 
-test("resolveMcpPlan: env variable NAMES (not values) never trigger the secrets guard", () => {
+test("resolveMcpPlan: env variable NAMES (not values) never trigger the secrets guard", async () => {
   const config = mcp({
     servers: {
       gitlab: {
@@ -106,7 +106,7 @@ test("resolveMcpPlan: env variable NAMES (not values) never trigger the secrets 
   });
   process.env.GITLAB_PERSONAL_ACCESS_TOKEN = "test-token";
   try {
-    const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+    const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
     assert.equal(result.desired.length, 1);
     assert.deepEqual(result.conflicts, []);
   } finally {
@@ -114,45 +114,45 @@ test("resolveMcpPlan: env variable NAMES (not values) never trigger the secrets 
   }
 });
 
-test("resolveMcpPlan: a bearer-token-shaped headers field is desired for Codex", () => {
+test("resolveMcpPlan: a bearer-token-shaped headers field is desired for Codex", async () => {
   const config = mcp({
     servers: {
       remote: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${TOKEN}" } },
     },
   });
-  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: a non-bearer-token headers shape is a Codex-only conflict", () => {
+test("resolveMcpPlan: a non-bearer-token headers shape is a Codex-only conflict", async () => {
   const config = mcp({
     servers: {
       remote: { transport: "http", url: "https://example.com/mcp", headers: { "X-Api-Key": "${KEY}" } },
     },
   });
-  const codexResult = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const codexResult = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.deepEqual(codexResult.desired, []);
   assert.equal(codexResult.conflicts.length, 1);
   assert.match(codexResult.conflicts[0].message, /no generic headers concept/);
 
-  const claudeResult = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const claudeResult = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(claudeResult.desired.length, 1);
   assert.deepEqual(claudeResult.conflicts, []);
 });
 
-test("resolveMcpPlan: a literal secret in a headers value is written as ordinary config, not refused — headers' ${VAR} resolution is not proven for every consumer", () => {
+test("resolveMcpPlan: a literal secret in a headers value is written as ordinary config, not refused — headers' ${VAR} resolution is not proven for every consumer", async () => {
   const config = mcp({
     servers: {
       leaky: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "glpat-abc123def456" } },
     },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: hub mode collapses every server to one trellis-hub entry", () => {
+test("resolveMcpPlan: hub mode collapses every server to one trellis-hub entry", async () => {
   const config = mcp({
     servers: {
       a: { transport: "stdio", command: "node" },
@@ -160,75 +160,75 @@ test("resolveMcpPlan: hub mode collapses every server to one trellis-hub entry",
     },
     hub: { url: "http://127.0.0.1:37373/mcp" },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, HUB_ENTRY_NAME);
   assert.equal(result.desired[0].def.url, "http://127.0.0.1:37373/mcp");
 });
 
-test("resolveMcpPlan: a disabled server produces neither a desired entry nor a conflict", () => {
+test("resolveMcpPlan: a disabled server produces neither a desired entry nor a conflict", async () => {
   const config = mcp({
     servers: { "supabase-db": { transport: "stdio", command: "npx", args: ["-y", "@supabase/mcp-server-supabase"], enabled: false } },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: removing enabled: false writes the server normally again", () => {
+test("resolveMcpPlan: removing enabled: false writes the server normally again", async () => {
   const config = mcp({
     servers: { sample: { transport: "stdio", command: "node" } },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, "sample");
 });
 
-test("resolveMcpPlan: a literal secret in staticEnv is refused, not desired", () => {
+test("resolveMcpPlan: a literal secret in staticEnv is refused, not desired", async () => {
   const config = mcp({
     servers: {
       leaky: { transport: "stdio", command: "tanka-mcp", staticEnv: { TOKEN: "glpat-abc123def456" } },
     },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /GitLab personal access token/);
 });
 
-test("resolveMcpPlan: staticEnv values that aren't secret-shaped are desired normally", () => {
+test("resolveMcpPlan: staticEnv values that aren't secret-shaped are desired normally", async () => {
   const config = mcp({
     servers: {
       tanka: { transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_EMAIL: "a@b.com", TANKA_ENV: "sd-or" } },
     },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: an unresolvable env name is refused as a conflict, not silently written", () => {
+test("resolveMcpPlan: an unresolvable env name is refused as a conflict, not silently written", async () => {
   const config = mcp({
     servers: {
       sample: { transport: "stdio", command: "node", env: ["DEFINITELY_NOT_SET_ANYWHERE_12345"] },
     },
   });
   delete process.env.DEFINITELY_NOT_SET_ANYWHERE_12345;
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /DEFINITELY_NOT_SET_ANYWHERE_12345/);
   assert.match(result.conflicts[0].message, /no resolvable value/);
 });
 
-test("resolveMcpPlan: an unresolvable envAliases source name is refused, naming the source name not the target key", () => {
+test("resolveMcpPlan: an unresolvable envAliases source name is refused, naming the source name not the target key", async () => {
   const config = mcp({
     servers: {
       notion: { transport: "stdio", command: "npx", envAliases: { OPENAPI_MCP_HEADERS: "DEFINITELY_NOT_SET_ANYWHERE_ALIAS_99999" } },
     },
   });
   delete process.env.DEFINITELY_NOT_SET_ANYWHERE_ALIAS_99999;
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /DEFINITELY_NOT_SET_ANYWHERE_ALIAS_99999/);
@@ -236,7 +236,7 @@ test("resolveMcpPlan: an unresolvable envAliases source name is refused, naming 
   assert.match(result.conflicts[0].message, /no resolvable value/);
 });
 
-test("resolveMcpPlan: one server's unresolved env name doesn't block another server or agent", () => {
+test("resolveMcpPlan: one server's unresolved env name doesn't block another server or agent", async () => {
   const config = mcp({
     servers: {
       broken: { transport: "stdio", command: "node", env: ["DEFINITELY_NOT_SET_ANYWHERE_67890"] },
@@ -244,24 +244,24 @@ test("resolveMcpPlan: one server's unresolved env name doesn't block another ser
     },
   });
   delete process.env.DEFINITELY_NOT_SET_ANYWHERE_67890;
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, "fine");
   assert.equal(result.conflicts.length, 1);
   assert.equal(result.conflicts[0].name, "broken");
 
-  const codexResult = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const codexResult = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.equal(codexResult.desired.length, 1);
   assert.equal(codexResult.desired[0].name, "fine");
 });
 
-test("resolveMcpPlan: hub mode collision check runs only against the hub entry name", () => {
+test("resolveMcpPlan: hub mode collision check runs only against the hub entry name", async () => {
   const config = mcp({
     servers: { a: { transport: "stdio", command: "node" } },
     knownHostInjected: [HUB_ENTRY_NAME],
     hub: { url: "http://127.0.0.1:37373/mcp" },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.equal(result.conflicts[0].name, HUB_ENTRY_NAME);
@@ -275,16 +275,16 @@ const THREE_SERVERS = {
   c: { transport: "http" as const, url: "https://example.test/mcp" },
 };
 
-test("resolveMcpPlan: gateway mode collapses every server to one entry regardless of server count", () => {
+test("resolveMcpPlan: gateway mode collapses every server to one entry regardless of server count", async () => {
   const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true } });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
 
   assert.equal(result.desired.length, 1);
   assert.equal(result.desired[0].name, GATEWAY_ENTRY_NAME);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: gateway keeps OAuth servers as direct entries", () => {
+test("resolveMcpPlan: gateway keeps OAuth servers as direct entries", async () => {
   const config = mcp({
     servers: {
       ordinary: { transport: "stdio", command: "ordinary" },
@@ -292,27 +292,27 @@ test("resolveMcpPlan: gateway keeps OAuth servers as direct entries", () => {
     },
     gateway: { enabled: true },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired.map((entry) => entry.name), [GATEWAY_ENTRY_NAME, "figma"]);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: OAuth direct entries still receive direct validation", () => {
+test("resolveMcpPlan: OAuth direct entries still receive direct validation", async () => {
   const config = mcp({
     servers: {
       figma: { transport: "http", url: "https://mcp.figma.com/mcp", auth: "oauth", agents: ["codex"] },
     },
     gateway: { enabled: true },
   });
-  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired.map((entry) => entry.name), [GATEWAY_ENTRY_NAME, "figma"]);
 });
 
-test("resolveMcpPlan: the gateway entry is an ordinary stdio command carrying the resolving agent's own id", () => {
+test("resolveMcpPlan: the gateway entry is an ordinary stdio command carrying the resolving agent's own id", async () => {
   const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true } });
 
   for (const agentId of ALL_AGENTS) {
-    const [entry] = resolveMcpPlan(agentId, config, ALL_AGENTS, POLICY).desired;
+    const [entry] = (await resolveMcpPlan(agentId, config, ALL_AGENTS, POLICY)).desired;
     assert.equal(entry.def.transport, "stdio");
     assert.equal(entry.def.command, GATEWAY_COMMAND);
     // The gateway is one shared process shape, but the tool view it serves
@@ -323,37 +323,37 @@ test("resolveMcpPlan: the gateway entry is an ordinary stdio command carrying th
   }
 });
 
-test("resolveMcpPlan: gateway defaults to every managed agent, and only managed ones", () => {
+test("resolveMcpPlan: gateway defaults to every managed agent, and only managed ones", async () => {
   const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true } });
   const managed = ["claude-code", "codex"] as const;
 
-  assert.equal(resolveMcpPlan("claude-code", config, managed, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
-  assert.equal(resolveMcpPlan("codex", config, managed, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
+  assert.equal(await (await resolveMcpPlan("claude-code", config, managed, POLICY)).desired[0].name, GATEWAY_ENTRY_NAME);
+  assert.equal(await (await resolveMcpPlan("codex", config, managed, POLICY)).desired[0].name, GATEWAY_ENTRY_NAME);
   // kiro isn't managed, so it gets nothing — not a gateway entry, and not
   // the per-server entries either. Gateway mode inherits the managed-agent
   // boundary rather than becoming a way around it: Trellis writing into an
   // unmanaged agent's config is exactly what that boundary exists to
   // prevent (trellis-managed-agents).
-  const kiro = resolveMcpPlan("kiro", config, managed, POLICY);
+  const kiro = await resolveMcpPlan("kiro", config, managed, POLICY);
   assert.deepEqual(kiro.desired, []);
   assert.deepEqual(kiro.conflicts, []);
 });
 
-test("resolveMcpPlan: an explicit agents list narrows gateway mode, leaving the rest in direct mode", () => {
+test("resolveMcpPlan: an explicit agents list narrows gateway mode, leaving the rest in direct mode", async () => {
   const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: true, agents: ["claude-code"] } });
 
-  assert.equal(resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
-  const codex = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.equal(await (await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY)).desired[0].name, GATEWAY_ENTRY_NAME);
+  const codex = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.equal(codex.desired.length, 3, "codex still receives one native entry per server");
 });
 
-test("resolveMcpPlan: enabled:false leaves every agent exactly as it was", () => {
+test("resolveMcpPlan: enabled:false leaves every agent exactly as it was", async () => {
   const config = mcp({ servers: THREE_SERVERS, gateway: { enabled: false } });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.equal(result.desired.length, 3);
 });
 
-test("resolveMcpPlan: gateway and hub coexist — gateway wins where it applies, hub serves the rest", () => {
+test("resolveMcpPlan: gateway and hub coexist — gateway wins where it applies, hub serves the rest", async () => {
   const config = mcp({
     servers: THREE_SERVERS,
     hub: { url: "http://127.0.0.1:37373/mcp" },
@@ -362,26 +362,26 @@ test("resolveMcpPlan: gateway and hub coexist — gateway wins where it applies,
 
   // Both set is not an error: they mean different things and neither
   // requires the other to change (design.md D5/D6).
-  assert.equal(resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY).desired[0].name, GATEWAY_ENTRY_NAME);
-  const codex = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  assert.equal(await (await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY)).desired[0].name, GATEWAY_ENTRY_NAME);
+  const codex = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.equal(codex.desired[0].name, HUB_ENTRY_NAME);
   assert.deepEqual(codex.conflicts, []);
 });
 
-test("resolveMcpPlan: a host-injected name equal to the gateway entry name is a conflict, not a silent write", () => {
+test("resolveMcpPlan: a host-injected name equal to the gateway entry name is a conflict, not a silent write", async () => {
   const config = mcp({
     servers: THREE_SERVERS,
     knownHostInjected: [GATEWAY_ENTRY_NAME],
     gateway: { enabled: true },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
 
   assert.deepEqual(result.desired, [], "shadowing a host-injected server is refused, exactly as hub mode refuses it");
   assert.equal(result.conflicts.length, 1);
   assert.equal(result.conflicts[0].name, GATEWAY_ENTRY_NAME);
 });
 
-test("resolveMcpPlan: in gateway mode Codex's headers-shape limitation no longer applies", () => {
+test("resolveMcpPlan: in gateway mode Codex's headers-shape limitation no longer applies", async () => {
   // In direct mode this exact server is a codex-only conflict: Codex can
   // express only { Authorization: "Bearer ${VAR}" }. In gateway mode Codex
   // never receives the headers at all — the gateway holds and sends them
@@ -395,52 +395,52 @@ test("resolveMcpPlan: in gateway mode Codex's headers-shape limitation no longer
     },
   };
 
-  const direct = resolveMcpPlan("codex", mcp({ servers }), ALL_AGENTS, POLICY);
+  const direct = await resolveMcpPlan("codex", mcp({ servers }), ALL_AGENTS, POLICY);
   assert.equal(direct.conflicts.length, 1, "precondition: this is a real conflict in direct mode");
 
-  const gateway = resolveMcpPlan("codex", mcp({ servers, gateway: { enabled: true } }), ALL_AGENTS, POLICY);
+  const gateway = await resolveMcpPlan("codex", mcp({ servers, gateway: { enabled: true } }), ALL_AGENTS, POLICY);
   assert.deepEqual(gateway.conflicts, []);
   assert.equal(gateway.desired.length, 1);
   assert.equal(gateway.desired[0].name, GATEWAY_ENTRY_NAME);
 });
 
-test("resolveMcpPlan: an explicit route filters direct servers per agent", () => {
+test("resolveMcpPlan: an explicit route filters direct servers per agent", async () => {
   const config = mcp({
     servers: THREE_SERVERS,
     routes: { "claude-code": { mode: "direct", servers: ["b"] } },
   });
-  const result = resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired.map((entry) => entry.name), ["b"]);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: an explicit gateway route carries only the selected agent view", () => {
+test("resolveMcpPlan: an explicit gateway route carries only the selected agent view", async () => {
   const config = mcp({
     servers: THREE_SERVERS,
     routes: { codex: { mode: "gateway", servers: ["a", "c"] } },
   });
-  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired.map((entry) => entry.name), [GATEWAY_ENTRY_NAME]);
   assert.deepEqual(result.conflicts, []);
 });
 
-test("resolveMcpPlan: an explicit direct route overrides legacy gateway shorthand", () => {
+test("resolveMcpPlan: an explicit direct route overrides legacy gateway shorthand", async () => {
   const config = mcp({
     servers: THREE_SERVERS,
     gateway: { enabled: true },
     routes: { codex: { mode: "direct", servers: ["a"] } },
   });
-  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired.map((entry) => entry.name), ["a"]);
 });
 
-test("resolveMcpPlan: an explicit hub route with a server subset is a clear conflict", () => {
+test("resolveMcpPlan: an explicit hub route with a server subset is a clear conflict", async () => {
   const config = mcp({
     servers: THREE_SERVERS,
     hub: { url: "http://127.0.0.1:37373/mcp" },
     routes: { codex: { mode: "hub", servers: ["a"] } },
   });
-  const result = resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
+  const result = await resolveMcpPlan("codex", config, ALL_AGENTS, POLICY);
   assert.deepEqual(result.desired, []);
   assert.equal(result.conflicts.length, 1);
   assert.match(result.conflicts[0].message, /external hub/);
@@ -475,6 +475,63 @@ test("findLiteralSecret: a headers match reports field \"headers\"", () => {
   assert.equal(match?.field, "headers");
 });
 
-test("findLiteralSecret: no match returns undefined, unchanged", () => {
+test("findLiteralSecret: no match returns undefined, unchanged", async () => {
   assert.equal(findLiteralSecret({ transport: "stdio", command: "node", staticEnv: { EMAIL: "you@example.com" } }), undefined);
+});
+
+
+// ---- mx-env-secret-source: reference-aware pre-write check ----
+
+import { mkdtempSync as _mkd, writeFileSync as _wf } from "node:fs";
+import { tmpdir as _tmp } from "node:os";
+import { join as _join } from "node:path";
+
+const _FIXTURE_CONFIG = {
+  sources: { local1: { provider: "local", files: ["secrets.env"] } },
+  profiles: { test: ["local1"] },
+};
+
+async function _withHome<T>(home: string, fn: () => Promise<T>): Promise<T> {
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    return await fn();
+  } finally {
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+  }
+}
+
+test("resolveMcpPlan: a declared mxenv:// reference with no composed value is refused, naming the reference entry", async () => {
+  const home = _mkd(_join(_tmp(), "trellis-planref-"));
+  _wf(_join(home, "mxenv.config.json"), JSON.stringify(_FIXTURE_CONFIG));
+  _wf(_join(home, "secrets.env"), "OTHER=x\n");
+  await _withHome(home, async () => {
+    const config = mcp({ servers: { ref: { transport: "stdio", command: "npx", env: ["mxenv://test/NOT_DEFINED"] } } });
+    const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+    assert.deepEqual(result.desired, []);
+    assert.equal(result.conflicts.length, 1);
+    assert.ok(result.conflicts[0].message.includes("mxenv://test/NOT_DEFINED"), result.conflicts[0].message);
+    assert.ok(result.conflicts[0].message.includes("the mxenv composition (profile \"test\")"), result.conflicts[0].message);
+  });
+});
+
+test("resolveMcpPlan: a resolvable reference is desired and not a conflict", async () => {
+  const home = _mkd(_join(_tmp(), "trellis-planref-"));
+  _wf(_join(home, "mxenv.config.json"), JSON.stringify(_FIXTURE_CONFIG));
+  _wf(_join(home, "secrets.env"), "API_TOKEN=composed\n");
+  await _withHome(home, async () => {
+    const config = mcp({ servers: { ref: { transport: "stdio", command: "npx", env: ["mxenv://test/API_TOKEN"] } } });
+    const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+    assert.deepEqual(result.conflicts, []);
+    assert.equal(result.desired.length, 1);
+  });
+});
+
+test("resolveMcpPlan: a malformed reference entry is refused as invalid input, never resolved as a bare name", async () => {
+  const config = mcp({ servers: { broken: { transport: "stdio", command: "npx", env: ["mxenv://no-slash-segment"] } } });
+  const result = await resolveMcpPlan("claude-code", config, ALL_AGENTS, POLICY);
+  assert.deepEqual(result.desired, []);
+  assert.equal(result.conflicts.length, 1);
+  assert.ok(result.conflicts[0].message.includes("not a valid mxenv://<profile>/<KEY> reference"), result.conflicts[0].message);
 });

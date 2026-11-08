@@ -273,7 +273,7 @@ export async function collectDoctorReport(
   // `collectWorkspaceDoctorSection`'s per-file inspection is what we want.
   let workspace: WorkspaceDoctorSection | undefined;
   if (canonical?.workspace) {
-    workspace = collectWorkspaceDoctorSection(canonical);
+    workspace = await collectWorkspaceDoctorSection(canonical);
   } else {
     const workspaceRoot = workspaceDir != null ? findWorkspaceRoot(workspaceDir) : null;
     if (workspaceRoot) {
@@ -292,7 +292,7 @@ export async function collectDoctorReport(
         diagnostics: [],
         workspace: { root: workspaceRoot, mcpProvenance: {}, mcpGlobalServers: {}, skillProvenance: {}, globalSkills: [], shadowed: [] },
       };
-      workspace = collectWorkspaceDoctorSection(minimal);
+      workspace = await collectWorkspaceDoctorSection(minimal);
     }
   }
 
@@ -317,7 +317,7 @@ export async function collectDoctorReport(
     ...detectCrossAgentDrift(snapshots),
    ...detectCaseMismatches(snapshots),
    ...detectParseDiagnostics(snapshots),
-    ...(canonical ? detectRuntimeDrift(snapshots, canonical) : []),
+    ...(canonical ? await detectRuntimeDrift(snapshots, canonical) : []),
    ...detectMcpUnreachable(snapshots),
     ...oauth.flatMap((entry) => (entry.status === "valid" ? [] : [oauthFinding(entry)])),
   );
@@ -549,14 +549,14 @@ export function detectMcpUnreachable(snapshots: AgentSnapshot[]): Finding[] {
 /** Compares runtime entries against the same canonical MCP plan that sync
  * uses. Only missing Trellis-owned runtime edges are reported; extra
  * user-authored MCP entries remain outside doctor ownership. */
-export function detectRuntimeDrift(
+export async function detectRuntimeDrift(
   snapshots: AgentSnapshot[],
   canonical: Pick<ReturnType<typeof loadCanonicalSource>, "mcp" | "managedAgents" | "secretsPolicy">,
-): Finding[] {
+): Promise<Finding[]> {
   const findings: Finding[] = [];
   for (const snap of snapshots) {
     if (!snap.present || !canonical.managedAgents.includes(snap.agent) || snap.agent === "pi") continue;
-    const expected = resolveMcpPlan(snap.agent, canonical.mcp, canonical.managedAgents, canonical.secretsPolicy).desired
+    const expected = (await resolveMcpPlan(snap.agent, canonical.mcp, canonical.managedAgents, canonical.secretsPolicy)).desired
       .map((entry) => entry.name)
       .filter((name) => name === RUNTIME_ENTRY_NAME || name === GATEWAY_ENTRY_NAME);
     const actual = new Set(snap.mcpServers.map((server) => server.name));

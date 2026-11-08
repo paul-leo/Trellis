@@ -26,17 +26,17 @@ function home(url = "https://example.test/mcp", owner?: string): string {
   return dir;
 }
 
-test("owner defaults to each Agent and remains native with runtime delivery", () => {
+test("owner defaults to each Agent and remains native with runtime delivery", async () => {
   const dir = home();
   const canonical = loadCanonicalSource(dir);
   assert.equal(oauthOwner(canonical.mcp.servers.remote!.auth), "agent");
   canonical.mcp.runtime = { delivery: { codex: "mcp" } };
-  const plan = resolveMcpPlan("codex", canonical.mcp, canonical.managedAgents, canonical.secretsPolicy);
+  const plan = await resolveMcpPlan("codex", canonical.mcp, canonical.managedAgents, canonical.secretsPolicy);
   assert.deepEqual(plan.desired.map((e) => e.name), ["trellis", "remote"]);
-  assert.deepEqual(resolveGatewayUpstreams("codex", canonical).upstreams, []);
+  assert.deepEqual((await resolveGatewayUpstreams("codex", canonical)).upstreams, []);
 });
 
-test("explicit hosting round-trips and requires a hosted route", () => {
+test("explicit hosting round-trips and requires a hosted route", async () => {
   const dir = home();
   const path = join(dir, ".trellis", "mcp", "servers.yaml");
   const plan = collectMcpSetAuthPlan("remote", { auth: "oauth", authOwner: "trellis", clientId: "published" }, dir);
@@ -45,12 +45,12 @@ test("explicit hosting round-trips and requires a hosted route", () => {
   const canonical = loadCanonicalSource(dir);
   assert.equal(oauthOwner(canonical.mcp.servers.remote!.auth), "trellis");
   assert.match(readFileSync(path, "utf8"), /owner: trellis/);
-  const direct = resolveMcpPlan("codex", canonical.mcp, canonical.managedAgents, canonical.secretsPolicy);
+  const direct = await resolveMcpPlan("codex", canonical.mcp, canonical.managedAgents, canonical.secretsPolicy);
   assert.equal(direct.desired.length, 0);
   assert.match(direct.conflicts[0]!.message, /requires gateway or runtime/);
   canonical.mcp.gateway = { enabled: true };
-  assert.deepEqual(resolveMcpPlan("codex", canonical.mcp, canonical.managedAgents, canonical.secretsPolicy).desired.map((e) => e.name), ["trellis"]);
-  assert.deepEqual(resolveGatewayUpstreams("codex", canonical).upstreams.map((e) => e.name), ["remote"]);
+  assert.deepEqual(await (await resolveMcpPlan("codex", canonical.mcp, canonical.managedAgents, canonical.secretsPolicy)).desired.map((e) => e.name), ["trellis"]);
+  assert.deepEqual(await (await resolveGatewayUpstreams("codex", canonical)).upstreams.map((e) => e.name), ["remote"]);
   assert.equal(collectMcpSetAuthPlan("remote", { auth: "oauth", authOwner: "invalid" }, dir).action, "invalid-input");
   writeFileSync(path, "servers:\n  remote:\n    transport: http\n    url: https://example.test\n    auth:\n      kind: oauth\n      owner: invalid\n");
   assert.throws(() => loadCanonicalSource(dir), /auth.owner/);

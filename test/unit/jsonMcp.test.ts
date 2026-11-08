@@ -10,12 +10,12 @@ function mcp(overrides: Partial<McpConfig> = {}): McpConfig {
 
 const POLICY: SecretsPolicy = { allowedVars: [], rejectPatterns: [] };
 
-test("renderJsonServerEntry: stdio def renders command/args/env, env values are ${VAR} references", () => {
+test("renderJsonServerEntry: stdio def renders command/args/env, env values are ${VAR} references", async () => {
   const entry = renderJsonServerEntry({ transport: "stdio", command: "npx", args: ["-y", "pkg"], env: ["API_TOKEN"] });
   assert.deepEqual(entry, { type: "stdio", command: "npx", args: ["-y", "pkg"], env: { API_TOKEN: "${API_TOKEN}" } });
 });
 
-test("renderJsonServerEntry: staticEnv values render as literals alongside ${VAR} references in the same env map", () => {
+test("renderJsonServerEntry: staticEnv values render as literals alongside ${VAR} references in the same env map", async () => {
   const entry = renderJsonServerEntry({
     transport: "stdio",
     command: "tanka-mcp",
@@ -25,7 +25,7 @@ test("renderJsonServerEntry: staticEnv values render as literals alongside ${VAR
   assert.deepEqual(entry, { type: "stdio", command: "tanka-mcp", args: [], env: { SOME_TOKEN: "${SOME_TOKEN}", TANKA_ENV: "sd-or" } });
 });
 
-test("renderJsonServerEntry: envAliases renders target key -> ${sourceName}, alongside env and staticEnv in the same map", () => {
+test("renderJsonServerEntry: envAliases renders target key -> ${sourceName}, alongside env and staticEnv in the same map", async () => {
   const entry = renderJsonServerEntry({
     transport: "stdio",
     command: "npx",
@@ -42,7 +42,7 @@ test("renderJsonServerEntry: envAliases renders target key -> ${sourceName}, alo
   });
 });
 
-test("renderJsonServerEntry: staticEnv alone (no env names) still renders an env map", () => {
+test("renderJsonServerEntry: staticEnv alone (no env names) still renders an env map", async () => {
   const entry = renderJsonServerEntry({ transport: "stdio", command: "tanka-mcp", staticEnv: { TANKA_EMAIL: "a@b.com" } });
   assert.deepEqual(entry, { type: "stdio", command: "tanka-mcp", args: [], env: { TANKA_EMAIL: "a@b.com" } });
 });
@@ -52,7 +52,7 @@ test("renderJsonServerEntry: http def renders only type/url when there's no head
   assert.deepEqual(entry, { type: "http", url: "https://mcp.figma.com/mcp" });
 });
 
-test("renderJsonServerEntry: http def with headers renders them verbatim", () => {
+test("renderJsonServerEntry: http def with headers renders them verbatim", async () => {
   const entry = renderJsonServerEntry({
     transport: "http",
     url: "https://example.com/mcp",
@@ -61,7 +61,7 @@ test("renderJsonServerEntry: http def with headers renders them verbatim", () =>
   assert.deepEqual(entry, { type: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${TOKEN}" } });
 });
 
-test("renderJsonServerEntry: sse def renders type sse, headers verbatim", () => {
+test("renderJsonServerEntry: sse def renders type sse, headers verbatim", async () => {
   const entry = renderJsonServerEntry({
     transport: "sse",
     url: "https://example.com/sse",
@@ -70,8 +70,8 @@ test("renderJsonServerEntry: sse def renders type sse, headers verbatim", () => 
   assert.deepEqual(entry, { type: "sse", url: "https://example.com/sse", headers: { "X-Api-Key": "${KEY}" } });
 });
 
-test("planJsonMcp: a server missing from the existing config produces one create item", () => {
-  const items = planJsonMcp({
+test("planJsonMcp: a server missing from the existing config produces one create item", async () => {
+  const items = await planJsonMcp({
     configPath: "/fake/.claude.json",
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
@@ -85,8 +85,8 @@ test("planJsonMcp: a server missing from the existing config produces one create
   assert.equal(items[0].mcpWrite?.name, "sample");
 });
 
-test("planJsonMcp: an entry already matching rendered output is a no-op (idempotent regardless of key order)", () => {
-  const items = planJsonMcp({
+test("planJsonMcp: an entry already matching rendered output is a no-op (idempotent regardless of key order)", async () => {
+  const items = await planJsonMcp({
     configPath: "/fake/.claude.json",
     parsed: { mcpServers: { sample: { command: "node", type: "stdio", args: [] } } },
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
@@ -97,8 +97,8 @@ test("planJsonMcp: an entry already matching rendered output is a no-op (idempot
   assert.deepEqual(items, []);
 });
 
-test("planJsonMcp: a changed def against an existing entry produces an update create item", () => {
-  const items = planJsonMcp({
+test("planJsonMcp: a changed def against an existing entry produces an update create item", async () => {
+  const items = await planJsonMcp({
     configPath: "/fake/.claude.json",
     parsed: { mcpServers: { sample: { type: "stdio", command: "old-command", args: [] } } },
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "new-command" } } }),
@@ -110,8 +110,8 @@ test("planJsonMcp: a changed def against an existing entry produces an update cr
   assert.ok(items[0].description.includes("updated"));
 });
 
-test("planJsonMcp: a collision with known_host_injected produces a conflict, not a create", () => {
-  const items = planJsonMcp({
+test("planJsonMcp: a collision with known_host_injected produces a conflict, not a create", async () => {
+  const items = await planJsonMcp({
     configPath: "/fake/.claude.json",
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } }, knownHostInjected: ["sample"] }),
@@ -123,9 +123,9 @@ test("planJsonMcp: a collision with known_host_injected produces a conflict, not
   assert.equal(items[0].action, "conflict");
 });
 
-test("applyJsonMcp: merges create items under mcpServers, preserving every other top-level key untouched", () => {
+test("applyJsonMcp: merges create items under mcpServers, preserving every other top-level key untouched", async () => {
   const parsed = { someOtherKey: "preserve-me", mcpServers: { existing: { type: "stdio", command: "old" } } };
-  const items = planJsonMcp({
+  const items = await planJsonMcp({
     configPath: "/fake/.claude.json",
     parsed,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
@@ -139,8 +139,8 @@ test("applyJsonMcp: merges create items under mcpServers, preserving every other
   assert.deepEqual((merged.mcpServers as Record<string, unknown>).sample, { type: "stdio", command: "node", args: [] });
 });
 
-test("applyJsonMcp: starting from undefined parsed produces a fresh object with just mcpServers", () => {
-  const items = planJsonMcp({
+test("applyJsonMcp: starting from undefined parsed produces a fresh object with just mcpServers", async () => {
+  const items = await planJsonMcp({
     configPath: "/fake/.claude.json",
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } } }),
@@ -152,8 +152,8 @@ test("applyJsonMcp: starting from undefined parsed produces a fresh object with 
   assert.deepEqual(Object.keys(merged), ["mcpServers"]);
 });
 
-test("applyJsonMcp: ignores conflict items — never writes a colliding server", () => {
-  const items = planJsonMcp({
+test("applyJsonMcp: ignores conflict items — never writes a colliding server", async () => {
+  const items = await planJsonMcp({
     configPath: "/fake/.claude.json",
     parsed: undefined,
     mcp: mcp({ servers: { sample: { transport: "stdio", command: "node" } }, knownHostInjected: ["sample"] }),
@@ -163,4 +163,15 @@ test("applyJsonMcp: ignores conflict items — never writes a colliding server",
   });
   const merged = applyJsonMcp(undefined, items);
   assert.deepEqual(merged.mcpServers, {});
+});
+
+
+test("renderJsonServerEntry: an mxenv:// reference entry renders as ${KEY} under its delivered name (mx-env-secret-source)", () => {
+  const entry = renderJsonServerEntry({ transport: "stdio", command: "npx", args: [], env: ["mxenv://test/API_TOKEN"] }) as { env: Record<string, string> };
+  assert.deepEqual(entry.env, { API_TOKEN: "${API_TOKEN}" });
+});
+
+test("renderJsonServerEntry: an envAliases source reference renders ${KEY} under the target key, never the ref text", () => {
+  const entry = renderJsonServerEntry({ transport: "stdio", command: "npx", args: [], envAliases: { TARGET_KEY: "mxenv://test/API_TOKEN" } }) as { env: Record<string, string> };
+  assert.deepEqual(entry.env, { TARGET_KEY: "${API_TOKEN}" });
 });

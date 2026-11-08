@@ -8,6 +8,8 @@ set -e
 FIXTURE_HOME_PATH=${TRELLIS_FIXTURE_HOME:-/fixtures-ro/home}
 mkdir -p /root-scratch
 cp -R "${FIXTURE_HOME_PATH}"/. /root-scratch/
+# git checkout hands files out 0644; the global env file must be 0600.
+[ -f /root-scratch/.mxenv/.env ] && chmod 600 /root-scratch/.mxenv/.env
 export HOME=/root-scratch
 export KIRO_HOME="$HOME/.kiro"
 export PATH="/trellis/node_modules/.bin:$PATH"

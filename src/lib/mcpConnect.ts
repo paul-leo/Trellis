@@ -15,7 +15,7 @@
 
 import { Client, StreamableHTTPClientTransport, SSEClientTransport, type AuthProvider } from "@modelcontextprotocol/client";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
-import { resolveSecretEnv } from "./secretEnv.js";
+import { parseEnvEntry, resolveSecretEnv } from "./secretEnv.js";
 import { extractTemplateVarNames } from "./envVarNames.js";
 import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 
@@ -96,9 +96,24 @@ export async function connectStdio(
   // `${sourceName}` placeholder text a consumer with no `${VAR}` runtime
   // of its own (like this bridge) would otherwise crash on parsing
   // (trellis-migrate-env-var-alias, the real notion-on-pi bug).
-  const resolved = resolveSecretEnv([...(def.env ?? []), ...Object.values(envAliases)], secretsPolicy);
-  const namedEnv = Object.fromEntries((def.env ?? []).map((name) => [name, resolved[name] ?? ""]));
-  const aliasEnv = Object.fromEntries(Object.entries(envAliases).map(([targetKey, sourceName]) => [targetKey, resolved[sourceName] ?? ""]));
+  //
+  // Entries may be `mxenv://` references: the resolved map is keyed by
+  // DELIVERED name (the `KEY` segment for a reference, the entry itself
+  // for a bare name), and the spawned server receives values under
+  // delivered names — never the raw reference text as a variable name
+  // (mx-env-secret-source spec).
+  const resolved = await resolveSecretEnv([...(def.env ?? []), ...Object.values(envAliases)], secretsPolicy);
+  const deliveredOf = (entry: string): string => {
+    const p = parseEnvEntry(entry);
+    return p.kind === "invalid" ? entry : p.delivered;
+  };
+  const namedEnv = Object.fromEntries((def.env ?? []).map((entry) => {
+    const delivered = deliveredOf(entry);
+    return [delivered, resolved[delivered] ?? ""];
+  }));
+  const aliasEnv = Object.fromEntries(Object.entries(envAliases).map(([targetKey, sourceName]) => {
+    return [targetKey, resolved[deliveredOf(sourceName)] ?? ""];
+  }));
   const transport = new StdioClientTransport({
     command: def.command!,
     args: def.args,
@@ -115,10 +130,10 @@ export async function connectStdio(
   return connectWithCleanup(client, transport, timeoutMs, `connect timed out after ${timeoutMs}ms`);
 }
 
-export function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Record<string, string> | undefined {
+export async function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Record<string, string> | undefined> {
   if (!def.headers || Object.keys(def.headers).length === 0) return undefined;
   const names = Object.keys(def.headers).flatMap((key) => extractTemplateVarNames(def.headers![key]));
-  const resolved = resolveSecretEnv(names, secretsPolicy);
+  const resolved = await resolveSecretEnv(names, secretsPolicy);
   const result: Record<string, string> = {};
   for (const [key, template] of Object.entries(def.headers)) {
     result[key] = template.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name) => resolved[name] ?? "");
@@ -134,7 +149,7 @@ export async function connectHttp(
   authProvider?: AuthProvider,
 ): Promise<Client> {
   const client = new Client(clientInfo, { capabilities: {}, versionNegotiation: { mode: "auto", probe: { timeoutMs } } });
-  const headers = resolveHeaders(def, secretsPolicy);
+  const headers = await resolveHeaders(def, secretsPolicy);
   // authProvider is the SDK's per-request credential seam: `token()` runs
   // as each request's headers are assembled and its result overrides
   // `requestInit`'s Authorization — the alternative to burning a Bearer
@@ -160,7 +175,7 @@ export async function connectSse(
 ): Promise<Client> {
   // HTTP+SSE is a legacy transport; it cannot carry modern discovery.
   const client = new Client(clientInfo, { capabilities: {} });
-  const headers = resolveHeaders(def, secretsPolicy);
+  const headers = await resolveHeaders(def, secretsPolicy);
   const opts = {
     ...(headers ? { requestInit: { headers } } : {}),
     ...(authProvider ? { authProvider } : {}),

@@ -147,7 +147,7 @@ export async function authorizeMcpServer(opts: RunMcpAuthOptions): Promise<McpAu
   const client = oauthClientMetadata(def.auth);
   let clientSecret: string | undefined;
   if (client.clientSecretEnv) {
-    const { [client.clientSecretEnv]: value } = resolveSecretEnv([client.clientSecretEnv], canonical.secretsPolicy);
+    const { [client.clientSecretEnv]: value } = await resolveSecretEnv([client.clientSecretEnv], canonical.secretsPolicy);
     if (value === undefined) {
       throw new Error(
         `auth.client_secret_env is "${client.clientSecretEnv}", but no value for that variable was found in ${secretSourceLabel(canonical.secretsPolicy)} — set it there, or drop the field if this provider issues a public client`,

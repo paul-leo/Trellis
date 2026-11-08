@@ -58,7 +58,7 @@ export class CodexAdapter implements TrellisAdapter {
       kind: "skill",
     });
 
-    const mcpItems = this.planMcp(canonical);
+    const mcpItems = await this.planMcp(canonical);
 
     const configuredInstructionsPath = readInstructionsPath(join(this.homeDir, ".codex", "config.toml"));
     if (!configuredInstructionsPath) {
@@ -77,10 +77,10 @@ export class CodexAdapter implements TrellisAdapter {
     return [...skillItems, ...instructionsItems, ...mcpItems];
   }
 
-  private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
+  private async planMcp(canonical: CanonicalSource): Promise<AdapterPlanItem[]> {
     const configTomlPath = join(this.homeDir, ".codex", "config.toml");
     const content = existsSync(configTomlPath) ? readFileSync(configTomlPath, "utf-8") : "";
-    const { desired, conflicts } = resolveMcpPlan(this.id, globalLayerMcp(canonical), canonical.managedAgents, canonical.secretsPolicy);
+    const { desired, conflicts } = await resolveMcpPlan(this.id, globalLayerMcp(canonical), canonical.managedAgents, canonical.secretsPolicy);
 
     const items: AdapterPlanItem[] = [];
     for (const { name, def } of desired) {

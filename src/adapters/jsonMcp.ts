@@ -37,7 +37,7 @@ export function renderJsonServerEntry(def: McpServerDef): Record<string, unknown
 
 export type JsonMcpEntryRenderer = (def: McpServerDef, name: string) => Record<string, unknown>;
 
-export function planJsonMcp(opts: {
+export async function planJsonMcp(opts: {
   configPath: string;
   parsed: Record<string, unknown> | undefined;
   mcp: McpConfig;
@@ -50,10 +50,10 @@ export function planJsonMcp(opts: {
    * zero removal candidates. */
   ownership?: Record<string, unknown>;
   render?: JsonMcpEntryRenderer;
-}): AdapterPlanItem[] {
+}): Promise<AdapterPlanItem[]> {
   const { configPath, parsed, mcp, agentId, managedAgents, policy, ownership } = opts;
   const render = opts.render ?? ((def, _name) => renderJsonServerEntry(def));
-  const { desired, conflicts } = resolveMcpPlan(agentId, mcp, managedAgents, policy);
+  const { desired, conflicts } = await resolveMcpPlan(agentId, mcp, managedAgents, policy);
   const existingServers = (parsed?.mcpServers as Record<string, unknown> | undefined) ?? {};
 
   const items: AdapterPlanItem[] = [];

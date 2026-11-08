@@ -123,7 +123,7 @@ export class PiAdapter implements TrellisAdapter {
     });
 
     if (supportsNativeMcp(this.versionProbe())) {
-      return [...skillItems, ...instructionsItems, ...this.planNativeMcp(canonical)];
+      return [...skillItems, ...instructionsItems, ...await this.planNativeMcp(canonical)];
     }
 
     const { file: bridgeFile, symlinkName } = resolveBridgeFile();
@@ -151,13 +151,13 @@ export class PiAdapter implements TrellisAdapter {
    * apply, and a bare skills/instructions sync can neither remove the
    * bridge early nor resurrect it afterwards.
    */
-  private planNativeMcp(canonical: CanonicalSource): AdapterPlanItem[] {
+  private async planNativeMcp(canonical: CanonicalSource): Promise<AdapterPlanItem[]> {
     const agentDir = join(this.homeDir, ".pi", "agent");
     const configPath = join(agentDir, "mcp.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
     const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
 
-    const items = planJsonMcp({
+    const items = (await planJsonMcp({
       configPath,
       parsed,
       mcp: globalLayerMcp(canonical),
@@ -166,7 +166,7 @@ export class PiAdapter implements TrellisAdapter {
       policy: canonical.secretsPolicy,
       ownership,
       render: piRenderer,
-    }).map((item) => {
+    })).map((item) => {
       // pi speaks stdio and streamable HTTP only — an sse server gets an
       // honest conflict instead of an entry pi could never connect.
       const write = item.mcpWrite;
@@ -273,7 +273,7 @@ export class PiAdapter implements TrellisAdapter {
       // definition drift. The plan only ever names Trellis-owned entries
       // (the ownership ledger gates removals), so user-authored servers
       // can never surface here.
-      for (const item of this.planNativeMcp(canonical)) {
+      for (const item of await this.planNativeMcp(canonical)) {
         if (item.action === "create" && item.mcpWrite) {
           mismatches.push(`mcp.json entry "${item.mcpWrite.name}" is missing or differs from canonical — run trellis mcp sync`);
         } else if (item.action === "remove" && item.mcpRemove) {

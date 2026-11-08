@@ -152,7 +152,7 @@ export function recordWorkspaceRendered(workspaceRoot: string, agentId: AgentId,
   backup.writeFile(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
-export function planWorkspaceMcp(agentId: AgentId, canonical: CanonicalSource): AdapterPlanItem[] {
+export async function planWorkspaceMcp(agentId: AgentId, canonical: CanonicalSource): Promise<AdapterPlanItem[]> {
   const workspace = canonical.workspace;
   if (!workspace) return [];
   const configPath = workspaceMcpConfigPath(agentId, workspace.root);
@@ -163,7 +163,7 @@ export function planWorkspaceMcp(agentId: AgentId, canonical: CanonicalSource): 
 
   if (agentId === "codex") {
     const content = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
-    const { desired, conflicts } = resolveMcpPlan(agentId, mcp, canonical.managedAgents, canonical.secretsPolicy);
+    const { desired, conflicts } = await resolveMcpPlan(agentId, mcp, canonical.managedAgents, canonical.secretsPolicy);
     const items: AdapterPlanItem[] = [];
     for (const { name, def } of desired) {
       const current = currentServerSectionText(content, name);
@@ -193,14 +193,14 @@ export function planWorkspaceMcp(agentId: AgentId, canonical: CanonicalSource): 
 
   if (agentId === "zcode") {
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
-    const items = planZcodeMcp({ configPath, parsed, mcp, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership }).map(layer);
+    const items = (await planZcodeMcp({ configPath, parsed, mcp, managedAgents: canonical.managedAgents, policy: canonical.secretsPolicy, ownership })).map(layer);
     const servers = ((parsed?.mcp as Record<string, unknown> | undefined)?.servers ?? {}) as Record<string, unknown>;
     return guardUnmarkedOverwrite(items, (item) => servers[item.mcpWrite!.name] !== undefined && ownership[item.mcpWrite!.name] === undefined);
   }
 
   const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
   const render = agentId === "pi" ? piRenderer : undefined;
-  const planned = planJsonMcp({
+  const planned = (await planJsonMcp({
     configPath,
     parsed,
     mcp,
@@ -209,7 +209,7 @@ export function planWorkspaceMcp(agentId: AgentId, canonical: CanonicalSource): 
     policy: canonical.secretsPolicy,
     ownership,
     ...(render ? { render } : {}),
-  }).map(layer);
+  })).map(layer);
   const existing = (parsed?.mcpServers ?? {}) as Record<string, unknown>;
   const guarded = guardUnmarkedOverwrite(planned, (item) => existing[item.mcpWrite!.name] !== undefined && ownership[item.mcpWrite!.name] === undefined);
   if (agentId !== "pi") return guarded;

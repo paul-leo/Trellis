@@ -142,23 +142,23 @@ test("connectWithCleanup: a successful connect returns the client and leaves the
   assert.equal(transport.closed, false);
 });
 
-test("resolveHeaders: a ${VAR} template resolves through resolveSecretEnv, never passed on as literal text", () => {
+test("resolveHeaders: a ${VAR} template resolves through resolveSecretEnv, never passed on as literal text", async () => {
   const def: McpServerDef = { transport: "http", url: "https://example.test", headers: { Authorization: "Bearer ${TOKEN_NAME}" } };
-  const headers = resolveHeaders(def, envFilePolicy("TOKEN_NAME=real-secret-value\n"));
+  const headers = await resolveHeaders(def, envFilePolicy("TOKEN_NAME=real-secret-value\n"));
 
   assert.deepEqual(headers, { Authorization: "Bearer real-secret-value" });
 });
 
-test("resolveHeaders: an unresolvable name becomes empty, not the raw placeholder", () => {
+test("resolveHeaders: an unresolvable name becomes empty, not the raw placeholder", async () => {
   const def: McpServerDef = { transport: "http", url: "https://example.test", headers: { Authorization: "Bearer ${MISSING_NAME}" } };
-  const headers = resolveHeaders(def, envFilePolicy("OTHER=x\n"));
+  const headers = await resolveHeaders(def, envFilePolicy("OTHER=x\n"));
 
   assert.deepEqual(headers, { Authorization: "Bearer " });
 });
 
-test("resolveHeaders: no headers resolves to undefined, so no requestInit is built at all", () => {
-  assert.equal(resolveHeaders({ transport: "http", url: "https://example.test" }, emptyPolicy()), undefined);
-  assert.equal(resolveHeaders({ transport: "http", url: "https://example.test", headers: {} }, emptyPolicy()), undefined);
+test("resolveHeaders: no headers resolves to undefined, so no requestInit is built at all", async () => {
+  assert.equal(await resolveHeaders({ transport: "http", url: "https://example.test" }, emptyPolicy()), undefined);
+  assert.equal(await resolveHeaders({ transport: "http", url: "https://example.test", headers: {} }, emptyPolicy()), undefined);
 });
 
 test("connectServer: an absent transport field connects over stdio (the canonical schema's default)", async () => {

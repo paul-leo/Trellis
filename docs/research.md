@@ -221,7 +221,10 @@ real incidents during development (a GitLab PAT stored under the wrong
 variable name, and three divergent values of the same router token, one of
 which was silently invalid). Trellis's contribution here is `trellis secrets
 audit` — a linter that fails a build if any adapter output contains a raw
-credential — not a new secret store.
+credential — not a new secret store. The concrete reference form is
+`mxenv://<profile>/<KEY>` (mx-env-secret-source): written in `servers.yaml`
+`env`/`envAliases`, resolved from the encrypted mxenv store at consumption
+point, delivered under the `KEY` segment.
 
 A third real incident during migrate-in: a source config's `${VAR}`
 reference doesn't always name itself (`OPENAPI_MCP_HEADERS:

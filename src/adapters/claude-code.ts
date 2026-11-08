@@ -57,12 +57,12 @@ export class ClaudeCodeAdapter implements TrellisAdapter {
       kind: "instructions",
     });
 
-    const mcpItems = this.planMcp(canonical);
+    const mcpItems = await this.planMcp(canonical);
 
     return [...skillItems, ...instructionsItems, ...mcpItems];
   }
 
-  private planMcp(canonical: CanonicalSource): AdapterPlanItem[] {
+  private async planMcp(canonical: CanonicalSource): Promise<AdapterPlanItem[]> {
     const configPath = join(this.homeDir, ".claude.json");
     const parsed = existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>) : undefined;
     const ownership = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);

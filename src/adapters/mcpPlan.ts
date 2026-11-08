@@ -22,7 +22,7 @@ import { capabilityDeliveryForAgent } from "../core/types.js";
 import { isOAuthAuth, oauthOwner } from "../core/types.js";
 import type { AgentId, McpConfig, McpRoute, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
-import { resolveSecretEnv } from "../lib/secretEnv.js";
+import { parseEnvEntry, resolveSecretEnv } from "../lib/secretEnv.js";
 
 export const HUB_ENTRY_NAME = "trellis-hub";
 export const GATEWAY_ENTRY_NAME = "trellis";
@@ -182,14 +182,24 @@ export function findLiteralSecret(def: McpServerDef): LiteralSecretMatch | undef
  * the target key it would have been written under
  * (trellis-migrate-env-var-alias).
  */
-function findUnresolvedEnvName(def: McpServerDef, policy: SecretsPolicy): string | undefined {
+async function findUnresolvedEnvName(def: McpServerDef, policy: SecretsPolicy): Promise<string | undefined> {
   const names = [...(def.env ?? []), ...Object.values(def.envAliases ?? {})];
   if (names.length === 0) return undefined;
-  const resolved = resolveSecretEnv(names, policy);
-  return names.find((name) => !resolved[name]);
+  // A malformed `mxenv://` entry conflicts here too — it is rejected input,
+  // never a silently-resolved bare name (mx-env-secret-source D6). The
+  // returned text is the DECLARED entry; resolution checks use delivered
+  // names (the `KEY` segment for a reference).
+  const parsed = names.map(parseEnvEntry);
+  const invalid = parsed.find((p) => p.kind === "invalid");
+  if (invalid) return (invalid as { entry: string }).entry;
+  const resolved = await resolveSecretEnv(names, policy);
+  return names.find((name) => {
+    const p = parseEnvEntry(name);
+    return !resolved[p.kind === "invalid" ? name : p.delivered];
+  });
 }
 
-export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[], policy: SecretsPolicy): McpPlanResult {
+export async function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[], policy: SecretsPolicy): Promise<McpPlanResult> {
   const route = routeForAgent(agentId, mcp, managedAgents);
   const runtimeEnabled = capabilityDeliveryForAgent(agentId, mcp) !== "native";
   // Checked before `hub`: only one entry can be "the" MCP entry for an
@@ -205,7 +215,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
         conflicts: [{ name: entryName, message: collisionMessage(entryName, agentId), remediation: collisionRemediation(entryName) }],
       };
     }
-    const oauth = planDirectServers(agentId, mcp, managedAgents, policy, route, isAgentOwnedOAuth);
+    const oauth = await planDirectServers(agentId, mcp, managedAgents, policy, route, isAgentOwnedOAuth);
     // Every ordinary per-server check (enabled, scope, literal secrets,
     // unresolved env names, Codex's header shape) still runs at gateway
     // startup. OAuth servers are the deliberate exception: they are written
@@ -283,7 +293,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
     // Runtime mode owns the agent-facing MCP edge. It resolves the same
     // direct/gateway-compatible upstream route at startup, so native
     // per-server entries are not duplicated here.
-    const oauth = planDirectServers(agentId, mcp, managedAgents, policy, route, isAgentOwnedOAuth);
+    const oauth = await planDirectServers(agentId, mcp, managedAgents, policy, route, isAgentOwnedOAuth);
     return {
       desired: [{
         name: RUNTIME_ENTRY_NAME,
@@ -293,7 +303,7 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
     };
   }
 
-  const native = planDirectServers(agentId, mcp, managedAgents, policy, route);
+  const native = await planDirectServers(agentId, mcp, managedAgents, policy, route);
   const hosted = native.desired.filter(({ def }) => isOAuthMcpServer(def) && oauthOwner(def.auth) === "trellis");
   return {
     desired: native.desired.filter(({ def }) => !isOAuthMcpServer(def) || oauthOwner(def.auth) === "agent"),
@@ -301,14 +311,14 @@ export function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: 
   };
 }
 
-function planDirectServers(
+async function planDirectServers(
   agentId: AgentId,
   mcp: McpConfig,
   managedAgents: readonly AgentId[],
   policy: SecretsPolicy,
   route: McpRoute,
   filter?: (def: McpServerDef) => boolean,
-): McpPlanResult {
+): Promise<McpPlanResult> {
   const desired: DesiredMcpEntry[] = [];
   const conflicts: McpConflict[] = [];
 
@@ -368,13 +378,25 @@ function planDirectServers(
       continue;
     }
 
-    const unresolvedName = findUnresolvedEnvName(def, policy);
+    const unresolvedName = await findUnresolvedEnvName(def, policy);
     if (unresolvedName) {
-      const source = policy.envFile ?? "process environment";
+      const entry = parseEnvEntry(unresolvedName);
+      if (entry.kind === "invalid") {
+        conflicts.push({
+          name,
+          message: `refusing to write MCP server "${name}": its declared env entry "${unresolvedName}" is not a valid mxenv://<profile>/<KEY> reference (mx-env-secret-source)`,
+          remediation: `fix the entry in servers.yaml to the mxenv://<profile>/<KEY> form or a plain variable name, then re-run mcp sync`,
+        });
+        continue;
+      }
+      const source = entry.kind === "ref"
+        ? `the mxenv composition (profile "${entry.profile}")`
+        : (policy.envFile ?? "process environment");
+      const remediationTarget = entry.kind === "ref" ? entry.key : unresolvedName;
       conflicts.push({
         name,
         message: `refusing to write MCP server "${name}": its declared env var "${unresolvedName}" has no resolvable value in ${source} — writing it now would silently break this server's connection once the agent starts it (trellis-mcp-static-env-and-disabled-servers)`,
-        remediation: `set "${unresolvedName}" in ${source}, or fix the name in servers.yaml if it was a typo, then re-run mcp sync`,
+        remediation: `set "${remediationTarget}" in ${source}, or fix the name in servers.yaml if it was a typo, then re-run mcp sync`,
       });
       continue;
     }

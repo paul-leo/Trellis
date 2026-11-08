@@ -140,7 +140,7 @@ function unmarkedEntries(agentId: AgentId, configPath: string, recorded: Record<
   return { kind: "ok", names: names.filter((name) => recorded[name] === undefined) };
 }
 
-export function collectWorkspaceDoctorSection(canonical: CanonicalSource): WorkspaceDoctorSection | undefined {
+export async function collectWorkspaceDoctorSection(canonical: CanonicalSource): Promise<WorkspaceDoctorSection | undefined> {
   const workspace = canonical.workspace;
   if (!workspace) return undefined;
 
@@ -159,7 +159,7 @@ export function collectWorkspaceDoctorSection(canonical: CanonicalSource): Works
   );
 
   const refs = collectVarRefs(canonical);
-  const resolved = resolveSecretEnv([...new Set(refs.map((r) => r.name))], canonical.secretsPolicy);
+  const resolved = await resolveSecretEnv([...new Set(refs.map((r) => r.name))], canonical.secretsPolicy);
   const unresolvedVars = refs.filter((r) => resolved[r.name] === undefined);
 
   const manifest = loadWorkspaceRendered(workspace.root);
