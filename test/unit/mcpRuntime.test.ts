@@ -15,6 +15,7 @@ function fixtureHome(): string {
   mkdirSync(join(root, "mcp"), { recursive: true });
   writeFileSync(join(root, "agents.md"), "# instructions\n");
   writeFileSync(join(root, "managed.yaml"), "agents: [claude-code, codex]\n");
+  writeFileSync(join(root, "scope.yaml"), "skills:\n  shared: [claude-code, codex]\n  claude-only: [claude-code]\n");
   writeFileSync(join(root, "secrets.policy.yaml"), "allowed_vars: []\nreject_patterns: []\n");
   writeFileSync(join(root, "mcp", "servers.yaml"), "servers: {}\n");
   writeFileSync(join(root, "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: shared workflow\n---\n\n# Shared\n");
@@ -44,7 +45,7 @@ test("SkillProvider: lists progressive-disclosure tools and scoped resources", (
 test("SkillProvider: search and read respect agent scope", async () => {
   const home = fixtureHome();
   const root = join(home, ".trellis");
-  writeFileSync(join(root, "scope.yaml"), "skills:\n  claude-only: [claude-code]\n");
+  writeFileSync(join(root, "scope.yaml"), "skills:\n  shared: [claude-code, codex]\n  claude-only: [claude-code]\n");
   const provider = new SkillProvider();
 
   const codexSearch = await provider.callTool("trellis.skills.search", { query: "" }, context(home, "codex"));

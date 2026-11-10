@@ -35,7 +35,7 @@ test("loadCanonicalSource: reads skills and applies scope.yaml", () => {
   const source = loadCanonicalSource(home);
   const shared = source.skills.find((s) => s.name === "shared-skill");
   const priv = source.skills.find((s) => s.name === "private-skill");
-  assert.equal(shared?.scope, undefined);
+  assert.deepEqual(shared?.scope, [], "an unregistered skill is paused");
   assert.deepEqual(priv?.scope, ["claude-code"]);
 });
 

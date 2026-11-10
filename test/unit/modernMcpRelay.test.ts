@@ -100,6 +100,7 @@ test("modern discovery advertises scoped canonical skills and SDK emits modern w
   const root = join(home, ".trellis");
   mkdirSync(join(root, "skills", "review"), { recursive: true });
   writeFileSync(join(root, "managed.yaml"), "agents: [codex]\n");
+  writeFileSync(join(root, "scope.yaml"), "skills:\n  review: [codex]\n");
   writeFileSync(join(root, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review\n---\n");
   const registry = new BuiltinRegistry([new SkillProvider()], () => {});
   const handler = createMcpHandler(() => createRuntimeServer({ name: "trellis", version: "test" }, { homeDir: home, agentId: "codex" }, registry));

@@ -43,7 +43,7 @@ Aligned to the `.agents Protocol` draft, extended where the draft is silent:
 ├── mcp/servers.yaml          # single MCP source, values are var-name
 │                             # references only, never literals
 ├── memories/*.md             # shared memory entries (server-memory backed)
-├── scope.yaml                 # exceptions to "shared with all agents" —
+├── scope.yaml                 # skill compatibility registry; agent/memory scope
 │                             # see "Private / agent-specific capabilities"
 └── secrets.policy.yaml       # which var names are allowed, nothing else
 
@@ -132,12 +132,14 @@ one `trellis rollback` restores originals and removes generated
 
 Not everything belongs to all six agents. A skill built around Claude
 Code's Task-based subagent delegation has no equivalent to delegate to on
-Codex; an MCP server might only make sense for one agent's workflow. Every
-scopable item — skill, subagent profile, memory entry, MCP server —
-defaults to "shared with all managed agents," and can be restricted with an explicit
-`scope` (skills/agents/memories) or inline `agents:` (MCP servers, see
-below). Restriction is the exception you declare, not something you
-configure for the common case.
+Codex; an MCP server might only make sense for one agent's workflow.
+Every custom skill must register applicable agents in `scope.yaml`.
+Missing, empty or invalid skill scope pauses Trellis distribution and Runtime
+access; sync removes only Trellis-owned links. `skill scope --all` records
+the current managed set, so adding another agent never silently expands
+compatibility. Package-owned built-ins retain their package-defined policy.
+Subagent profiles, memory entries and MCP servers retain their existing
+all-managed default and explicit restrictions.
 
 **Skills, subagent profiles, and memory entries declare scope in
 `.trellis/scope.yaml`, never inside the artifact file itself.** This
@@ -149,6 +151,18 @@ declarations in a separate manifest means every artifact stays a clean,
 portable file exactly as its target agent's own spec expects; Trellis's
 own bookkeeping lives next to it, not inside it. See
 `schema/scope.example.yaml`.
+
+Compatibility is explicit: Claude-specific workflows list `claude-code`,
+Codex-specific workflows list `codex`, and portable workflows list each
+reviewed agent. Publisher provenance does not prove compatibility. Hermes
+skills belong to Hermes's own curator/review/archive lifecycle; Trellis
+never manages or writes its skill directory.
+
+Workspace skills use `.agents/scope.yaml` for Trellis-managed delivery and
+Runtime access. Agents that discover `.agents/skills` natively can still
+read that shared source directly; per-agent Trellis registration does not
+override a native agent's own discovery. Keep agent-specific skills in the
+global canonical store when native discovery must be isolated.
 
 **MCP servers are the one exception** — `agents:` is declared inline per
 server in `mcp/servers.yaml` (see `schema/servers.example.yaml`), because
@@ -628,6 +642,12 @@ acceptance criteria already describes this shape ("point at a scratch
 `$HOME`... run `trellis sync skills`... confirm zero findings"); this
 section exists to make it a project-wide rule that every later phase's
 acceptance criteria must follow, not a detail specific to P1.
+
+CLI fixtures must isolate the working directory as well as HOME. Running
+from the real checkout with only HOME changed can make ancestor discovery
+mistake the developer's `~/.agents/` for a workspace. Run the CLI by absolute
+path from the scratch directory; otherwise read-only parity checks can
+compare different layers and write tests can reach real project artifacts.
 
 This is also why P0 needing to resolve pi's actual skill-discovery path
 (§D5 in `openspec/changes/trellis-doctor-p0/design.md`) is investigated

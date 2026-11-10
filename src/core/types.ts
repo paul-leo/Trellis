@@ -61,11 +61,9 @@ export const ALL_AGENTS: readonly AgentId[] = [
 ];
 
 /**
- * Every scopable item (skill, subagent, memory entry, MCP server) defaults
- * to all managed agents when `scope` is omitted — sharing everywhere is the
- * common case Trellis exists for; restricting to specific agents is the
- * exception and must be declared explicitly. See docs/architecture.md
- * "Private / agent-specific capabilities".
+ * Omitted scope resolves to the managed set. Custom skills are registered
+ * explicitly by the canonical/workspace loaders: missing or invalid skill
+ * registration becomes `[]` (paused). Other capability defaults are unchanged.
  */
 export type Scope = AgentId[] | undefined;
 
@@ -96,7 +94,9 @@ export interface McpServerDef {
   /** http/sse only */
   url?: string;
   /**
-   * http/sse only. Values are `${VAR}` references, same discipline as
+   * http/sse only. Values are `${VAR}` or `${mxenv://profile/KEY}` templates,
+   * the latter requiring Trellis-hosted resolution (gateway/runtime/pi).
+   * Same discipline as
    * `env` — never a real value. Codex has no generic headers concept;
    * only the single shape `{ Authorization: "Bearer ${VAR}" }` is
    * expressible there (trellis-mcp-transport-auth design.md D4) — any
@@ -231,7 +231,8 @@ export interface SkillRef {
    * filename is case-sensitive on at least one target agent (Codex). */
   dir: string;
   /**
-   * Omit for "all agents" (the default). Deliberately NOT read from
+   * Explicit applicable agents; unregistered custom skills load as `[]`.
+   * Package-owned built-ins may supply their own default. NOT read from
    * SKILL.md's own frontmatter — Codex validates SKILL.md frontmatter
    * against an allow-list of known keys and rejects unknown ones (see
    * docs/research.md), so a Trellis-only field embedded there would break

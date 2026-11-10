@@ -13,6 +13,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { parseEnvEntry, resolveSecretEnv } from "../../src/lib/secretEnv.js";
 import type { SecretsPolicy } from "../../src/core/types.js";
+import { connectServer, resolveHeaders } from "../../src/lib/mcpConnect.js";
+import { declaredEnvNames, extractTemplateVarNames } from "../../src/lib/envVarNames.js";
+import { resolveMcpPlan } from "../../src/adapters/mcpPlan.js";
+import { resolveGatewayUpstreams } from "../../src/commands/mcpGateway.js";
+import { Server, createMcpHandler } from "@modelcontextprotocol/server";
 
 const POLICY: SecretsPolicy = { allowedVars: [], rejectPatterns: [] };
 
@@ -165,4 +170,105 @@ test("resolveSecretEnv: a missing reference key still fills from a bare entry of
   } finally {
     delete process.env.SOME_TOKEN;
   }
+});
+
+test("headers extract references, bare names and malformed schemes for validation", () => {
+  assert.deepEqual(extractTemplateVarNames("${PLAIN} ${mxenv://test/TOKEN} ${mx-env://test/BAD} ${mxevn://test/BAD}"),
+    ["PLAIN", "mxenv://test/TOKEN", "mx-env://test/BAD", "mxevn://test/BAD"]);
+  assert.deepEqual(declaredEnvNames({ transport: "http", headers: { Authorization: "Bearer ${mxenv://test/TOKEN}" } }), ["mxenv://test/TOKEN"]);
+});
+
+test("headers resolve references without ambient env, mix bare names, and preserve profile identity", async () => {
+  const home = scratchHome({
+    sources: {
+      first: { provider: "local", files: ["first.env"] },
+      second: { provider: "local", files: ["second.env"] },
+    },
+    profiles: { first: ["first"], second: ["second"] },
+  }, { "first.env": "TOKEN=first-fixture-value\n", "second.env": "TOKEN=second-fixture-value\n", "policy.env": "TOKEN=bare-fixture-value\n" });
+  await withHome(home, async () => {
+    assert.deepEqual(await resolveHeaders({ transport: "http", headers: {
+      Authorization: "Bearer ${mxenv://first/TOKEN}",
+      "X-Other": "${mxenv://second/TOKEN}/${TOKEN}/${MISSING}",
+    } }, { ...POLICY, envFile: join(home, "policy.env") }), {
+      Authorization: "Bearer first-fixture-value", "X-Other": "second-fixture-value/bare-fixture-value/",
+    });
+  });
+});
+
+test("missing header references never fall back to a same-named bare value", async () => {
+  const home = scratchHome(FIXTURE_CONFIG, { "secrets.env": "OTHER=fixture-value\n", "policy.env": "TOKEN=bare-fixture-value\n" });
+  await withHome(home, async () => {
+    const envPlan = await resolveMcpPlan("claude-code", { servers: { legacy: {
+      transport: "stdio", command: "node", env: ["mxenv://test/TOKEN", "TOKEN"],
+    } }, knownHostInjected: [] }, ["claude-code"], { ...POLICY, envFile: join(home, "policy.env") });
+    assert.equal(envPlan.desired.length, 1, "env/envAliases keep their existing fallback semantics");
+    await assert.rejects(() => resolveHeaders({ transport: "http", headers: { Authorization: "${mxenv://test/TOKEN}/${TOKEN}" } },
+      { ...POLICY, envFile: join(home, "policy.env") }), /unresolved header reference: mxenv:\/\/test\/TOKEN/);
+  });
+});
+
+test("header references fail explicitly for missing profile, malformed URI and misspelled schemes", async () => {
+  const home = scratchHome(FIXTURE_CONFIG, { "secrets.env": "TOKEN=fixture-value\n" });
+  await withHome(home, async () => {
+    for (const ref of ["mxenv://absent/TOKEN", "mxenv://broken", "mx-env://test/TOKEN", "mxevn://test/TOKEN"]) {
+      await assert.rejects(() => resolveHeaders({ transport: "http", headers: { Authorization: `Bearer \${${ref}}` } }, POLICY));
+    }
+    for (const template of ["Bearer ${mxenv://test/TOKEN", "mxenv://test/TOKEN"]) {
+      await assert.rejects(() => resolveHeaders({ transport: "http", headers: { Authorization: template } }, POLICY), /invalid reference template/);
+    }
+  });
+});
+
+test("gateway validates header references, isolates a broken server and keeps secrets out of plans", async () => {
+  const secret = "fixture-value-must-stay-in-memory";
+  const home = scratchHome(FIXTURE_CONFIG, { "secrets.env": `TOKEN=${secret}\n` });
+  await withHome(home, async () => {
+    const servers = {
+      valid: { transport: "http" as const, url: "https://example.test/mcp", headers: { Authorization: "Bearer ${mxenv://test/TOKEN}" } },
+      missing: { transport: "http" as const, url: "https://example.test/mcp", headers: { Authorization: "Bearer ${mxenv://test/MISSING}" } },
+      unknown: { transport: "http" as const, url: "https://example.test/mcp", headers: { Authorization: "Bearer ${mxenv://absent/TOKEN}" } },
+      typo: { transport: "http" as const, url: "https://example.test/mcp", headers: { Authorization: "Bearer ${mxevn://test/TOKEN}" } },
+    };
+    const canonical = { mcp: { servers, knownHostInjected: [] }, managedAgents: ["codex" as const], secretsPolicy: POLICY };
+    const result = await resolveGatewayUpstreams("codex", canonical);
+    assert.deepEqual(result.upstreams.map(({ name }) => name), ["valid"]);
+    assert.equal(result.conflicts.length, 3);
+    assert.equal(JSON.stringify(result).includes(secret), false);
+    const native = await resolveMcpPlan("claude-code", { servers: { valid: servers.valid }, knownHostInjected: [] }, ["claude-code"], POLICY);
+    assert.deepEqual(native.desired, []);
+    assert.match(native.conflicts[0].message, /require Trellis gateway\/runtime/);
+    assert.equal(JSON.stringify(native).includes(secret), false);
+  });
+});
+
+test("HTTP connect authenticates and calls tools with an mxenv header without shell injection", async (t) => {
+  const secret = "http-fixture-secret";
+  const home = scratchHome(FIXTURE_CONFIG, { "secrets.env": `HTTP_FIXTURE_TOKEN=${secret}\n` });
+  const handler = createMcpHandler(() => {
+    const server = new Server({ name: "header-fixture", version: "1" }, { capabilities: { tools: {} } });
+    server.setRequestHandler("tools/list", async () => ({ tools: [{ name: "check", inputSchema: { type: "object" } }] }));
+    server.setRequestHandler("tools/call", async () => ({ content: [{ type: "text", text: "authenticated" }] }));
+    return server;
+  });
+  let authenticatedRequests = 0;
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.headers.get("authorization") !== `Bearer ${secret}`) return new Response("unauthorized", { status: 401 });
+    authenticatedRequests++;
+    return handler.fetch(request);
+  });
+  try {
+    await withHome(home, async () => {
+      assert.equal(process.env.HTTP_FIXTURE_TOKEN, undefined);
+      const client = await connectServer({ transport: "http", url: "http://fixture.test/mcp", headers: { Authorization: "Bearer ${mxenv://test/HTTP_FIXTURE_TOKEN}" } },
+        POLICY, 5000, { name: "header-test", version: "1" });
+      try {
+        assert.equal((await client.listTools()).tools[0].name, "check");
+        const result = await client.callTool({ name: "check", arguments: {} });
+        assert.equal(result.content?.[0].text, "authenticated");
+        assert.ok(authenticatedRequests >= 3);
+      } finally { await client.close(); }
+    });
+  } finally { await handler.close(); }
 });

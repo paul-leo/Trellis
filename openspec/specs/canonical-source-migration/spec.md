@@ -98,17 +98,16 @@ scope for the run (no `--only`, or `--only instructions`).
 - **THEN** the plan contains no instructions item at all, and
   `~/.trellis/agents.md` is neither read for comparison nor written
 
-### Requirement: Migrated content is not scoped to the source agent
+### Requirement: Migrated skills are registered for the source agent
 
-The system SHALL NOT write any `scope.yaml` entry restricting migrated
-skills or instructions to the source agent — migrated content is shared
-across all present agents by default, the same as any other canonical
-content with no explicit scope.
+The system SHALL register a newly migrated skill in `scope.yaml` for its
+source agent only. Additional applicable agents require explicit review.
+Instructions and MCP scope behavior SHALL remain unchanged.
 
-#### Scenario: A migrated skill is unscoped
+#### Scenario: Migration proves compatibility only with its source
 - **WHEN** a skill is migrated from Codex into canonical source
-- **THEN** no `scope.yaml` entry is created for it, and it is available
-  to every present agent on the next `trellis sync`
+- **THEN** its `scope.yaml` entry lists `[codex]`, and it is not delivered
+  to other managed agents on the next `trellis sync`
 
 ### Requirement: `--dry-run` previews the migration plan without writing anything
 

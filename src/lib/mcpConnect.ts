@@ -15,8 +15,8 @@
 
 import { Client, StreamableHTTPClientTransport, SSEClientTransport, type AuthProvider } from "@modelcontextprotocol/client";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
-import { deliveredName, resolveSecretEnv } from "./secretEnv.js";
-import { extractTemplateVarNames } from "./envVarNames.js";
+import { deliveredName, isValidSecretVarName, parseEnvEntry, resolveSecretEntries, resolveSecretEnv } from "./secretEnv.js";
+import { extractTemplateVarNames, invalidHeaderTemplate, replaceTemplateVars } from "./envVarNames.js";
 import type { McpServerDef, SecretsPolicy } from "../core/types.js";
 
 /** What an MCP upstream is told this client is. Each consumer passes its
@@ -128,11 +128,24 @@ export async function connectStdio(
 
 export async function resolveHeaders(def: McpServerDef, secretsPolicy: SecretsPolicy): Promise<Record<string, string> | undefined> {
   if (!def.headers || Object.keys(def.headers).length === 0) return undefined;
+  const invalidHeader = invalidHeaderTemplate(def.headers);
+  if (invalidHeader !== undefined) throw new Error(`[trellis] invalid reference template in header ${invalidHeader} — use \${VAR} or \${mxenv://<profile>/<KEY>}`);
   const names = Object.keys(def.headers).flatMap((key) => extractTemplateVarNames(def.headers![key]));
-  const resolved = await resolveSecretEnv(names, secretsPolicy);
+  for (const name of names) {
+    const entry = parseEnvEntry(name);
+    if (entry.kind === "invalid" || (entry.kind === "name" && !isValidSecretVarName(name))) {
+      throw new Error(`[trellis] invalid header reference: ${name} — expected a variable name or mxenv://<profile>/<KEY>`);
+    }
+  }
+  const resolved = await resolveSecretEntries(names, secretsPolicy);
   const result: Record<string, string> = {};
   for (const [key, template] of Object.entries(def.headers)) {
-    result[key] = template.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name) => resolved[name] ?? "");
+    result[key] = replaceTemplateVars(template, (name) => {
+      if (parseEnvEntry(name).kind === "ref" && !resolved[name]) {
+        throw new Error(`[trellis] unresolved header reference: ${name}`);
+      }
+      return resolved[name] ?? "";
+    });
   }
   return result;
 }

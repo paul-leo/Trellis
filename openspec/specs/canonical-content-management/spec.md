@@ -17,11 +17,15 @@ and, for each, print its resolved scope — the managed agents it
 reaches, computed the same way `sync` already does (`resolveScope`
 against `managedAgents`), never a raw, unresolved `scope.yaml` entry.
 
-#### Scenario: An unscoped skill resolves to the full managed set
+#### Scenario: An unregistered custom skill is paused
 - **WHEN** `trellis skill list` runs and a skill has no `scope.yaml`
   entry
-- **THEN** its listed scope is exactly the current managed set, not
-  "all managed agents" unconditionally
+- **THEN** its listed scope is empty until applicable agents are registered
+
+#### Scenario: Agent-filtered lists include delivery status
+- **WHEN** `trellis skill list --agent codex --json` runs
+- **THEN** it lists only skills registered for managed Codex and reports each
+  skill's actual `linked`, `missing`, `conflict` or `runtime` delivery status
 
 #### Scenario: A skill scoped to agents outside the managed set resolves to the intersection
 - **WHEN** a skill's `scope.yaml` entry names an agent not currently in
@@ -36,6 +40,11 @@ The system SHALL copy `<path>`'s content into
 `SKILL.md` and canonical has no directory of that name yet. It SHALL
 refuse, with no writes, when `<path>` has no `SKILL.md` or has one only
 under the wrong case (`skill.md`).
+The CLI SHALL request applicable agents interactively with no preselection,
+or require `--agents <ids>`, `--all` or `--none` in noninteractive/JSON mode.
+The desktop add plan SHALL require the same explicit selection and SHALL
+confirm content and scope together before writing. Missing registration
+SHALL pause distribution; `--all` SHALL record the current managed set.
 
 #### Scenario: A valid source directory is copied in
 - **WHEN** `trellis skill add my-skill --from /path/to/dir` runs and
@@ -59,7 +68,8 @@ under the wrong case (`skill.md`).
 The system SHALL compare `<path>`'s content against
 `~/.trellis/skills/<name>/` (if it already exists) before writing,
 using the same byte-for-byte comparison `migrate` already uses.
-Identical content is a no-op. Different content is a conflict: reported,
+Identical content is a content no-op; an explicitly selected scope may still
+change and cascade-sync. Different content is a conflict: reported,
 not overwritten. There is no override flag — resolving a conflict is
 always a manual decision, the same posture every other conflict in
 this project already has.
@@ -68,7 +78,8 @@ this project already has.
 - **WHEN** `trellis skill add my-skill --from /path/to/dir` runs again
   and canonical's `my-skill` is already byte-identical to that
   directory
-- **THEN** the command reports "already present" and writes nothing
+- **THEN** the command reports "already present" and does not rewrite content;
+  it changes scope only if the explicit selection differs
 
 #### Scenario: Adding over a canonical skill with different content is a conflict
 - **WHEN** canonical already has a `my-skill` whose content differs

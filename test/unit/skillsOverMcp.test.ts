@@ -19,6 +19,7 @@ import { ResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { BuiltinRegistry, createRuntimeServer } from "../../src/lib/mcpRuntime.js";
 import { SkillProvider } from "../../src/lib/skillProvider.js";
 import { buildSkillEntry, parseSkillUri } from "../../src/lib/skillManifest.js";
+import { seedSkillScopes } from "../helpers/home.js";
 
 const sha = (bytes: Buffer | string): string => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 
@@ -34,6 +35,7 @@ function fixtureHome(): { home: string; skills: string } {
 }
 
 function addSkill(skills: string, dir: string, frontmatter: string, extra: Record<string, string | Buffer> = {}): string {
+  seedSkillScopes(join(skills, "..", ".."), [dir]);
   const full = join(skills, dir);
   mkdirSync(full, { recursive: true });
   writeFileSync(join(full, "SKILL.md"), `---\n${frontmatter}\n---\n\n# ${dir}\n`);
@@ -255,7 +257,7 @@ test("scope: a skill scoped away from the agent is invisible everywhere, includi
   const { home, skills } = fixtureHome();
   addSkill(skills, "review", "name: review\ndescription: review code");
   addSkill(skills, "private-one", "name: private-one\ndescription: claude only");
-  writeFileSync(join(home, ".trellis", "scope.yaml"), "skills:\n  private-one: [claude-code]\n");
+  writeFileSync(join(home, ".trellis", "scope.yaml"), "skills:\n  review: [claude-code, codex]\n  private-one: [claude-code]\n");
 
   const codex = await connect(home, "codex");
   try {

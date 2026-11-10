@@ -15,7 +15,7 @@ import { collectSyncReport, runSync } from "../../src/commands/sync.js";
 import { collectMcpSyncReport, runMcpSync } from "../../src/commands/mcp.js";
 import { planWorkspaceMcp, workspaceMcpConfigPath, workspacePrecedenceWarnings } from "../../src/lib/workspaceMcp.js";
 import { loadCanonicalSource } from "../../src/core/canonical.js";
-import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical, seedSkillScopes } from "../helpers/home.js";
 
 function scratchHome(): string {
   const home = sharedScratchHome("ws-deliv");
@@ -231,6 +231,7 @@ test("workspace MCP: zcode shadowing a global entry warns (reverse precedence)",
 
 function initWorkspaceWithSkill(root: string): string {
   mkdirSync(join(root, ".agents", "skills", "review"), { recursive: true });
+  writeFileSync(join(root, ".agents", "scope.yaml"), "skills:\n  review: [claude-code]\n  shared: [claude-code]\n");
   writeFileSync(join(root, ".agents", "skills", "review", "SKILL.md"), "---\nname: review\n---\nreview things\n");
   writeFileSync(join(root, ".agents", "config.json"), JSON.stringify({ version: 1, mcp: { servers: {} } }));
   return root;
@@ -301,6 +302,7 @@ test("workspace skills: global user-level skill dirs are untouched by workspace 
   // the GLOBAL definition (the user-level dir is shared by every project).
   mkdirSync(join(home, ".trellis", "skills", "shared"), { recursive: true });
   writeFileSync(join(home, ".trellis", "skills", "shared", "SKILL.md"), "---\nname: shared\n---\nglobal shared\n");
+  seedSkillScopes(home, ["shared"], ["claude-code"]);
   const ws = initWorkspaceWithSkill(mkdtempSync(join(tmpdir(), "trellis-ws-proj-")));
   mkdirSync(join(ws, ".agents", "skills", "shared"), { recursive: true });
   writeFileSync(join(ws, ".agents", "skills", "shared", "SKILL.md"), "---\nname: shared\n---\nworkspace shared\n");

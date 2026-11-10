@@ -19,10 +19,24 @@
  * philosophy).
  */
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentId } from "../../src/core/types.js";
+import { ALL_AGENTS } from "../../src/core/types.js";
+import { parse, stringify } from "yaml";
+
+/** Explicit compatibility fixture; never silently register a discovered
+ * directory. Tests for unregistered skills deliberately do not call this. */
+export function seedSkillScopes(home: string, names: readonly string[], agents: readonly AgentId[] = ALL_AGENTS): void {
+  const root = join(home, ".trellis");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, "scope.yaml");
+  const doc = existsSync(path) ? parse(readFileSync(path, "utf8")) ?? {} : {};
+  doc.skills ??= {};
+  for (const name of names) doc.skills[name] = [...agents];
+  writeFileSync(path, stringify(doc));
+}
 
 /** A fresh, empty scratch HOME. `prefix` names the owning test file so
  * leftover dirs in $TMPDIR are attributable (`trellis-<prefix>-XXXXXX`). */

@@ -17,6 +17,8 @@ import type { McpServerDefYaml } from "./mcpServerDef.js";
 import { loadWorkspaceLayer } from "../lib/workspace.js";
 import { mergeWorkspaceLayer } from "../lib/workspaceMerge.js";
 import type { BackupSession } from "../lib/backup.js";
+import { registeredSkillScope } from "../lib/skillScope.js";
+import { isBuiltinSkillName } from "../lib/builtinSkills.js";
 
 export { toServerDefYaml } from "./mcpServerDef.js";
 export type { McpServerDefYaml } from "./mcpServerDef.js";
@@ -196,6 +198,8 @@ export function validateSkillScopeYaml(path: string): ScopeYamlWriteResult {
   try {
     const doc = parseDocument(readFileSync(path, "utf-8"));
     if (doc.errors.length > 0) throw new Error(doc.errors.map((error) => error.message).join("; "));
+    const skills = doc.get("skills", true);
+    if (skills !== undefined && !isMap(skills)) throw new Error("skills must be a map of names to agent lists");
     return { ok: true };
   } catch (err) {
     return { ok: false, error: `could not parse ${path}: ${err instanceof Error ? err.message : String(err)}` };
@@ -204,8 +208,7 @@ export function validateSkillScopeYaml(path: string): ScopeYamlWriteResult {
 
 /**
  * Sets one Skill's canonical scope without rebuilding unrelated hand-authored
- * scope entries.  `undefined` removes this Skill's explicit entry and
- * therefore restores the normal all-managed default.
+ * scope entries. `undefined` removes registration, pausing distribution.
  */
 export function writeSkillScopeYaml(path: string, name: string, scope: Scope, backup?: BackupSession): ScopeYamlWriteResult {
   if (!existsSync(path) && scope === undefined) return { ok: true };
@@ -468,9 +471,6 @@ export function ensureShellEnvSource(rcPath: string, envFilePath: string, backup
   persistText(rcPath, `${existing}${separator}${block}`, backup);
 }
 
-/** `undefined` if the name has no entry in scope.yaml's map — "shared with
- * all managed agents by default. A recognized but empty list is left as
- * authored (an explicitly agent-less scope), not coerced to "all". */
 /** Missing file and `agents: []` both resolve to `[]` — zero managed
  * agents, never "everyone." An unrecognized id is dropped with a
  * diagnostic, same posture as an unrecognized scope.yaml agent id. */
@@ -496,8 +496,8 @@ function scopeFor(map: Record<string, AgentId[]> | undefined, name: string): Sco
 }
 
 function validAgentIds(scope: AgentId[] | undefined): scope is AgentId[] {
-  if (!scope) return true;
-  return scope.every((id) => (ALL_AGENTS as readonly string[]).includes(id));
+  if (scope === undefined) return true;
+  return Array.isArray(scope) && scope.every((id) => (ALL_AGENTS as readonly string[]).includes(id));
 }
 
 /**
@@ -560,7 +560,13 @@ export function loadCanonicalSource(arg: string | LoadCanonicalOptions = {}): Ca
 
   const skillDirs = listSkillDirs(join(root, "skills"));
   const knownSkillNames = new Set(skillDirs.map((s) => s.name));
-  const skills: SkillRef[] = skillDirs.map(({ name, dir }) => ({ name, dir, scope: scopeFor(scopeYaml.skills, name) }));
+  const skills: SkillRef[] = skillDirs.map(({ name, dir }) => {
+    const declared = scopeFor(scopeYaml.skills, name);
+    if (declared === undefined && !isBuiltinSkillName(name)) {
+      diagnostics.push(`scope.yaml: skill "${name}" has no registered agents — distribution paused; run trellis skill scope ${name} --agents <ids>`);
+    }
+    return { name, dir, scope: isBuiltinSkillName(name) && declared === undefined ? undefined : registeredSkillScope(declared) };
+  });
 
   const agentFiles = listMarkdownFiles(join(root, "agents"));
   const knownAgentProfileNames = new Set(agentFiles.map((a) => a.name));
@@ -588,7 +594,7 @@ export function loadCanonicalSource(arg: string | LoadCanonicalOptions = {}): Ca
       if (!known.has(name)) {
         diagnostics.push(`scope.yaml: "${section}.${name}" does not match any known ${section.slice(0, -1)} — ignored`);
       } else if (!validAgentIds(map?.[name])) {
-        diagnostics.push(`scope.yaml: "${section}.${name}" lists an unrecognized agent id — ignored`);
+        diagnostics.push(`scope.yaml: "${section}.${name}" lists an unrecognized agent id${section === "skills" ? " — distribution paused" : " — ignored"}`);
       }
     }
   }

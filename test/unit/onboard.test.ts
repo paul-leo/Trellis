@@ -722,6 +722,7 @@ test("verdict: a real sync conflict on a managed agent reaches result.verdict as
   // to sync's own conflict, rather than also exercising migrate.
   mkdirSync(join(home, ".trellis", "skills", "shared-skill"), { recursive: true });
   writeFileSync(join(home, ".trellis", "skills", "shared-skill", "SKILL.md"), "---\nname: shared-skill\ndescription: fixture\n---\n");
+  writeFileSync(join(home, ".trellis", "scope.yaml"), "skills:\n  shared-skill: [claude-code, codex]\n");
   // claude-code present but with none of its own content, so it is never
   // a migrate-source candidate (hasContent stays false) — migrate is
   // skipped entirely for this test.
@@ -1077,6 +1078,7 @@ test("dry-run offer: accepting performs a real run, re-planned against current s
   await collectInitReport(home);
   mkdirSync(join(home, ".trellis", "skills", "demo"), { recursive: true });
   writeFileSync(join(home, ".trellis", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: d\n---\n");
+  writeFileSync(join(home, ".trellis", "scope.yaml"), "skills:\n  demo: [claude-code]\n");
   markClaudeCodePresent(home);
 
   const { exitCode } = await runOnboard({

@@ -72,7 +72,7 @@ export function deliveredName(entry: string): string {
 }
 
 export function parseEnvEntry(entry: string): SecretEnvEntry {
-  if (entry.includes("mxenv://") || entry.includes("mx-env://")) {
+  if (entry.includes("://")) {
     try {
       const refs = findMxEnvReferences(entry);
       if (refs.length === 1 && `mxenv://${refs[0].profile}/${refs[0].key}` === entry) {
@@ -87,9 +87,6 @@ export function parseEnvEntry(entry: string): SecretEnvEntry {
 }
 
 /**
- * Result keyed by DELIVERED name: the `KEY` segment for a reference,
- * the entry itself for a bare name (mx-env-secret-source spec).
- *
  * `policy.envFile` set: it is the SOLE source for bare names — a name
  * absent from it resolves to `undefined`, `process.env` is never
  * consulted (a silent fallback would defeat the isolation this exists
@@ -103,26 +100,35 @@ export function parseEnvEntry(entry: string): SecretEnvEntry {
  * before this point (the bridge only ever sees pre-checked defs).
  * Compositions are cached per batch (one `ReferenceResolver` per call,
  * not per name).
- */
-export async function resolveSecretEnv(entries: string[], policy: SecretsPolicy): Promise<Record<string, string | undefined>> {
+ * Raw-entry keys preserve provenance when headers mix two profiles with
+ * the same KEY, or a reference and a bare name. Values stay in memory. */
+export async function resolveSecretEntries(entries: string[], policy: SecretsPolicy): Promise<Record<string, string | undefined>> {
   const parsed = entries.map(parseEnvEntry);
   const invalid = parsed.find((p): p is Extract<SecretEnvEntry, { kind: "invalid" }> => p.kind === "invalid");
   if (invalid) {
     throw new Error(`[trellis] invalid mxenv:// reference entry: ${invalid.entry} — expected mxenv://<profile>/<KEY>`);
   }
   const result: Record<string, string | undefined> = {};
-  // Delivered-name collisions (several entries delivering one name):
-  // references are authoritative — a composed value never loses to a bare
-  // name's ambient/file value (ambient must not shadow references); a
-  // DEFINED value never loses to undefined; within one class the first
-  // declaration wins; bare names only fill keys nothing has filled.
+  // Cache compositions once per batch; raw keys keep profiles distinct.
   const refs = parsed.filter((p): p is Extract<SecretEnvEntry, { kind: "ref" }> => p.kind === "ref");
   if (refs.length > 0) {
-    const resolver = new ReferenceResolver(loadConfigLayers({ cwd: homedir(), homeDir: homedir() }), {});
+    let resolver: ReferenceResolver;
+    try {
+      resolver = new ReferenceResolver(loadConfigLayers({ cwd: homedir(), homeDir: homedir() }), {});
+    } catch {
+      throw new SecretReferenceError(entries[parsed.indexOf(refs[0])]);
+    }
     for (const ref of refs) {
-      if (result[ref.delivered] !== undefined) continue;
-      const { value } = await resolver.valueOf(ref.profile, ref.key);
-      result[ref.delivered] = value;
+      const entry = `mxenv://${ref.profile}/${ref.key}`;
+      if (Object.hasOwn(result, entry)) continue;
+      try {
+        const { value } = await resolver.valueOf(ref.profile, ref.key);
+        result[entry] = value;
+      } catch {
+        // Provider errors may contain credential material. Report only the
+        // reference, never propagate provider output to logs or audit.
+        throw new SecretReferenceError(entry);
+      }
     }
   }
   const names = parsed.filter((p): p is Extract<SecretEnvEntry, { kind: "name" }> => p.kind === "name");
@@ -132,6 +138,26 @@ export async function resolveSecretEnv(entries: string[], policy: SecretsPolicy)
       if (result[name.delivered] !== undefined) continue;
       result[name.delivered] = fileMap ? fileMap[name.delivered] : process.env[name.delivered];
     }
+  }
+  return result;
+}
+
+export class SecretReferenceError extends Error {
+  constructor(public readonly entry: string) {
+    super(`[trellis] could not resolve mxenv reference ${entry} — check the profile, KEY and provider configuration`);
+  }
+}
+
+/** Compatibility view keyed by delivered name (KEY for a reference). */
+export async function resolveSecretEnv(entries: string[], policy: SecretsPolicy): Promise<Record<string, string | undefined>> {
+  const values = await resolveSecretEntries(entries, policy);
+  const result: Record<string, string | undefined> = {};
+  // Preserve the existing delivered-name collision rules for env/envAliases.
+  const ordered = [...entries.filter((entry) => parseEnvEntry(entry).kind === "ref"),
+    ...entries.filter((entry) => parseEnvEntry(entry).kind !== "ref")];
+  for (const entry of ordered) {
+    const name = deliveredName(entry);
+    if (result[name] === undefined) result[name] = values[entry];
   }
   return result;
 }

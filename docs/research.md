@@ -223,8 +223,21 @@ which was silently invalid). Trellis's contribution here is `trellis secrets
 audit` — a linter that fails a build if any adapter output contains a raw
 credential — not a new secret store. The concrete reference form is
 `mxenv://<profile>/<KEY>` (mx-env-secret-source): written in `servers.yaml`
-`env`/`envAliases`, resolved from the encrypted mxenv store at consumption
-point, delivered under the `KEY` segment.
+`env`/`envAliases`, or inline in a header template such as
+`Authorization: Bearer ${mxenv://legacy/SERVICE_TOKEN}`, resolved from the
+mxenv profile at consumption time. Env references are delivered under the
+`KEY` segment; header references are substituted in memory and retain their
+profile identity even when two profiles use the same key. Missing keys,
+unknown profiles and malformed header references fail explicitly, without
+printing provider output or substituting an empty credential. Bare `${VAR}`
+headers retain their existing env-file/process-env behavior.
+
+Header references require Trellis gateway/runtime delivery (or pi's bridge),
+which resolves them independently of the GUI or shell's inherited environment.
+Native clients do not understand `mxenv://`; direct native sync reports a
+conflict with instructions to enable gateway/runtime, rather than writing an
+unusable reference or persisting its resolved value. The canonical server
+still uses `transport: http`/`sse`; no third-party stdio shim is needed.
 
 A third real incident during migrate-in: a source config's `${VAR}`
 reference doesn't always name itself (`OPENAPI_MCP_HEADERS:

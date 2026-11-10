@@ -79,6 +79,7 @@ export interface AgentSyncReport {
 
 export interface SyncReport {
   reports: AgentSyncReport[];
+  diagnostics?: string[];
   /** Workspace root when a `.agents/` layer participated in this run. */
   workspaceRoot?: string;
 }
@@ -146,7 +147,7 @@ export async function collectSyncReport(opts: RunSyncOptions = {}): Promise<Sync
   }
 
   ownSession?.finalize();
-  return { reports, ...(canonical.workspace ? { workspaceRoot: canonical.workspace.root } : {}) };
+  return { reports, ...(canonical.diagnostics.length ? { diagnostics: canonical.diagnostics } : {}), ...(canonical.workspace ? { workspaceRoot: canonical.workspace.root } : {}) };
 }
 
 export async function runSync(opts: RunSyncOptions = {}): Promise<{ exitCode: number }> {
@@ -181,6 +182,7 @@ export async function runSync(opts: RunSyncOptions = {}): Promise<{ exitCode: nu
 export function printReport(report: SyncReport, dryRun: boolean, check: boolean = false): void {
   if (dryRun) console.log("[dry run]");
   if (check) console.log("[check]");
+  for (const diagnostic of report.diagnostics ?? []) console.log(`  ${diagnostic}`);
   if (report.workspaceRoot) {
     console.log(`Workspace layer: ${report.workspaceRoot} (.agents/)`);
   }

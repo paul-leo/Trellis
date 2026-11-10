@@ -24,7 +24,7 @@ const guiRoot = join(here, "..");
 const repoRoot = join(guiRoot, "..", "..");
 
 function cli(homeDir: string, args: string[]): string {
-  return execFileSync("npx", ["tsx", "src/cli.ts", ...args], { cwd: repoRoot, env: { ...process.env, HOME: homeDir }, encoding: "utf-8" });
+  return execFileSync(process.execPath, [join(repoRoot, "node_modules/tsx/dist/cli.mjs"), join(repoRoot, "src/cli.ts"), ...args], { cwd: homeDir, env: { ...process.env, HOME: homeDir }, encoding: "utf-8" });
 }
 
 async function startSidecar(homeDir: string): Promise<{ port: number; close: () => Promise<void> }> {
@@ -628,11 +628,11 @@ async function mountApp(homeDir: string) {
       click(button);
     },
     toggle: (agent: string) => {
-      const button = buttons().find((b) => b.getAttribute("aria-pressed") !== null && b.textContent === agent);
+      const button = buttons().find((b) => b.closest(".card")?.querySelector(".card-title") && b.getAttribute("aria-pressed") !== null && b.textContent === agent);
       if (!button) throw new Error(`no toggle for "${agent}"`);
       click(button);
     },
-    pressed: (agent: string) => buttons().find((b) => b.getAttribute("aria-pressed") !== null && b.textContent === agent)?.getAttribute("aria-pressed"),
+    pressed: (agent: string) => buttons().find((b) => b.closest(".card")?.querySelector(".card-title") && b.getAttribute("aria-pressed") !== null && b.textContent === agent)?.getAttribute("aria-pressed"),
     modalGone: () => until(() => !dom.window.document.querySelector(".modal-backdrop"), "the modal to close"),
     close: async () => {
       root.unmount();
@@ -649,10 +649,11 @@ test("App: a skill's agent scope is edited by toggling, staged until Save, confi
   const source = join(homeDir, "source-skill");
   mkdirSync(source, { recursive: true });
   writeFileSync(join(source, "SKILL.md"), "---\nname: review\ndescription: a skill for the scope editor smoke test\n---\n\n# Review\n");
-  cli(homeDir, ["skill", "add", "review", "--from", source, "--json"]);
+  cli(homeDir, ["skill", "add", "review", "--from", source, "--all", "--json"]);
   const { readFileSync, existsSync } = await import("node:fs");
   const scopePath = join(homeDir, ".trellis", "scope.yaml");
   const scopeText = (): string => (existsSync(scopePath) ? readFileSync(scopePath, "utf-8") : "");
+  const before = scopeText();
 
   const app = await mountApp(homeDir);
   try {
@@ -665,11 +666,11 @@ test("App: a skill's agent scope is edited by toggling, staged until Save, confi
 
     app.toggle("codex");
     await app.until(() => app.pressed("codex") === "false", "codex staged off");
-    assert.doesNotMatch(scopeText(), /review/, "toggling alone writes nothing");
+    assert.equal(scopeText(), before, "toggling alone writes nothing");
 
     app.clickText("Save scope");
     await app.bodyContains('"action": "updated"');
-    assert.doesNotMatch(scopeText(), /review/, "the plan step alone writes nothing either");
+    assert.equal(scopeText(), before, "the plan step alone writes nothing either");
 
     app.clickText("Apply");
     await app.modalGone();

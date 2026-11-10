@@ -108,7 +108,7 @@ export async function resolveGatewayUpstreams(
   // ownership-gated removal clears it. Serving that stale entry would hand
   // every server, and every secret resolved into it, to the one agent the
   // user just said to stop involving.
-  const { desired, conflicts } = await resolveMcpPlan(agentId, direct, canonical.managedAgents, canonical.secretsPolicy);
+  const { desired, conflicts } = await resolveMcpPlan(agentId, direct, canonical.managedAgents, canonical.secretsPolicy, { hosted: true });
   // Agent-owned OAuth servers bypass the gateway as direct entries, so no
   // connection state exists for them here — but Trellis owns the token
   // store, so `trellis.mcp.status` reports their credential health for

@@ -20,7 +20,7 @@ import { deepEqual } from "../lib/deepEqual.js";
 import { readClaudeCodeMcpDefs, readCodexMcpDefs, readKiroMcpDefs, readKimiCodeMcpDefs, readZcodeMcpDefs, resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
 import { parseDotenv, writeLocalSecretValue } from "../lib/secretEnv.js";
 import { findLiteralSecret } from "../adapters/mcpPlan.js";
-import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsertServerYaml, writeSecretsPolicyExtraction } from "../core/canonical.js";
+import { ensureGitignoreEntry, ensureShellEnvSource, loadCanonicalSource, upsertServerYaml, validateSkillScopeYaml, writeSecretsPolicyExtraction, writeSkillScopeYaml } from "../core/canonical.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId, AgentSnapshot, McpServerDef, SecretsPolicy } from "../core/types.js";
 import type { BackupSession } from "../lib/backup.js";
@@ -471,6 +471,10 @@ function copyDirectoryThroughBackup(sourceDir: string, destDir: string, backup: 
 
 export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir(), backup?: BackupSession): void {
   const canonicalRoot = join(homeDir, ".trellis");
+  if (plan.items.some((item) => item.kind === "skill" && item.action === "create")) {
+    const validation = validateSkillScopeYaml(join(canonicalRoot, "scope.yaml"));
+    if (!validation.ok) throw new Error(validation.error);
+  }
   for (const item of plan.items) {
     if (item.action !== "create" && item.action !== "reclassify" && item.action !== "extract-secret") continue;
     if (item.kind === "skill" && item.sourceDir) {
@@ -478,6 +482,10 @@ export function applyMigratePlan(plan: MigratePlan, homeDir: string = homedir(),
       mkdirSync(dest, { recursive: true });
       if (backup) copyDirectoryThroughBackup(item.sourceDir, dest, backup);
       else cpSync(item.sourceDir, dest, { recursive: true });
+      // Migration proves applicability to its source agent only. Sharing
+      // with other agents is a separate, explicit compatibility decision.
+      const scope = writeSkillScopeYaml(join(canonicalRoot, "scope.yaml"), item.name, [plan.agent], backup);
+      if (!scope.ok) throw new Error(scope.error);
     } else if (item.kind === "instructions" && item.sourceContent !== undefined) {
       mkdirSync(canonicalRoot, { recursive: true });
       if (backup) backup.writeFile(join(canonicalRoot, "agents.md"), item.sourceContent);

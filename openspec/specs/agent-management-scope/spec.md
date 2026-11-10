@@ -1,7 +1,8 @@
 # agent-management-scope Specification
 
 ## Purpose
-TBD - created by archiving change trellis-managed-agents. Update Purpose after archive.
+Define the agents Trellis is authorized to manage, intersect capability scopes
+with that boundary, and provide explicit management lifecycle commands.
 
 ## Requirements
 
@@ -34,9 +35,12 @@ managed-agents list (not every known agent). An item with an explicit
 `scope` SHALL resolve to the intersection of that scope and the
 managed-agents list, never the scope verbatim — the managed set is the
 outer boundary every other scoping decision is filtered through.
+Custom skill loaders SHALL supply an explicit scope; absent or invalid
+registration SHALL become `[]`. Package-owned built-ins may retain their
+package-defined default.
 
-#### Scenario: An unscoped skill reaches only managed agents
-- **WHEN** a skill has no `scope` entry in `scope.yaml`, and
+#### Scenario: A registered skill reaches only managed agents
+- **WHEN** a skill is registered for `[pi, codex]` in `scope.yaml`, and
   `managed.yaml` lists `[pi]`, while Codex and Kiro are also present
 - **THEN** `trellis sync` plans a create for pi only; Codex and Kiro
   receive no plan item for that skill at all

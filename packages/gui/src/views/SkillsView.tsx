@@ -18,6 +18,7 @@ export function SkillsView() {
   const [pending, setPending] = useState<PendingAction>();
   const [addName, setAddName] = useState("");
   const [addFrom, setAddFrom] = useState("");
+  const [addScope, setAddScope] = useState<string[]>([]);
 
   return (
     <section>
@@ -30,12 +31,13 @@ export function SkillsView() {
         <input placeholder={t("skills.fromPlaceholder")} value={addFrom} onChange={(e) => setAddFrom(e.currentTarget.value)} style={{ flex: 2 }} />
         <button
           disabled={!addName || !addFrom}
-          onClick={() => setPending({ operation: "skill-add", title: t("skills.addTitle", { name: addName }), body: { name: addName, fromPath: addFrom } })}
+          onClick={() => setPending({ operation: "skill-add", title: t("skills.addTitle", { name: addName }), body: { name: addName, fromPath: addFrom, selection: scopeSelection(addScope) } })}
         >
           {t("common.add")}
         </button>
         <button onClick={() => setPending({ operation: "sync", title: t("skills.syncTitle"), body: { target: "skills" } })}>{t("common.sync")}</button>
       </div>
+      <ScopeEditor managed={managed} current={addScope} onChange={setAddScope} />
 
       {loading && !data && <p className="empty-state">{t("common.loading")}</p>}
       {data?.length === 0 && <p className="empty-state">{t("skills.empty")}</p>}
@@ -65,6 +67,7 @@ export function SkillsView() {
           onApplied={() => {
             setAddName("");
             setAddFrom("");
+            setAddScope([]);
           }}
         />
       )}

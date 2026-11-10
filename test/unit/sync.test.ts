@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { collectSyncReport } from "../../src/commands/sync.js";
 import { backupsRoot } from "../../src/lib/backup.js";
-import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical } from "../helpers/home.js";
+import { scratchHome as sharedScratchHome, seedAgentPresence, seedCanonical, seedSkillScopes } from "../helpers/home.js";
 
 function scratchHome(): string {
   const home = sharedScratchHome("sync");
@@ -27,6 +27,7 @@ function scratchHome(): string {
 }
 
 function addCanonicalSkill(home: string, name: string): void {
+  seedSkillScopes(home, [name]);
   const dir = join(home, ".trellis", "skills", name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: fixture\n---\n`);

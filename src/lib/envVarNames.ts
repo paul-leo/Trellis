@@ -9,9 +9,24 @@
 
 import type { McpServerDef } from "../core/types.js";
 
-const TEMPLATE_VAR_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+// Keep malformed placeholders visible too: a misspelled reference scheme
+// must reach validation rather than silently survive as literal header text.
+const TEMPLATE_VAR_RE = /\$\{([^{}]*)\}/g;
 
-/** Every `${NAME}` occurrence in a string — a header value can in
+export function replaceTemplateVars(value: string, replace: (entry: string) => string): string {
+  return value.replace(TEMPLATE_VAR_RE, (_match, entry: string) => replace(entry));
+}
+
+/** Report only the header's name, never a potentially sensitive template. */
+export function invalidHeaderTemplate(headers: Record<string, string> | undefined): string | undefined {
+  return Object.entries(headers ?? {}).find(([, value]) => {
+    const literal = replaceTemplateVars(value, () => "");
+    return literal.includes("${") || /mx-?env:\/\//.test(literal);
+  })?.[0];
+}
+
+/** Every `${NAME}` or `${mxenv://profile/KEY}` occurrence in a string,
+ * including malformed placeholders for validation — a header value can in
  * principle reference more than one name (trellis-mcp-transport-auth
  * design.md D6), same extraction `env`'s single-name-per-value case
  * already needed, just generalized. */

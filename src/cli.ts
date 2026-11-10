@@ -121,7 +121,7 @@ Commands:
               --skill, -s <name>       required unless --list
               --branch <ref>           Git branch, tag, or ref; default is
                                        the source repository's default branch
-              --agent, -a <ids|*>      restrict delivery to managed Agent ids
+              --agent, -a <ids|*|none> choose applicable managed Agents
               --list                   show discovered Skills without import
               --global, --yes          accepted skills-CLI compatibility flags
               --dry-run                fetch and preview; write nothing
@@ -208,19 +208,22 @@ Commands:
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill list
-            List canonical skills with resolved scope
+            List canonical skills; unregistered skills are paused
+              --agent <id>  filter by agent and show actual delivery status
               --json    machine-readable output, no report text
   skill add <name> --from <path>
             Import a real skill directory into canonical (refuses on
               an existing name with different content, no overwrite)
               --workspace  copy into .agents/skills/ instead of canonical
+              --agents <ids> | --all | --none
+                           required without an interactive terminal
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill remove <name>
   skill scope <name> --agents <ids> | --all | --none
             Choose which managed agents receive a canonical skill, then
-            sync it. Same selector rules as mcp scope; a built-in skill's
-            scope is not editable
+            sync it. --all records today's managed set; newly managed
+            agents need explicit registration. Built-in scope is not editable
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill update-builtin
@@ -541,7 +544,7 @@ async function main(argv: string[]): Promise<void> {
     const dryRun = skillRest.includes("--dry-run");
 
     if (subcommand === "list") {
-      process.exitCode = runSkillList({ json }).exitCode;
+      process.exitCode = runSkillList({ json, agent: flagValue(skillRest, "--agent") }).exitCode;
       return;
     }
     if (subcommand === "add") {
@@ -552,7 +555,7 @@ async function main(argv: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      process.exitCode = (await runSkillAdd(name, from, { json, dryRun, workspace: skillRest.includes("--workspace") })).exitCode;
+      process.exitCode = (await runSkillAdd(name, from, { json, dryRun, workspace: skillRest.includes("--workspace"), selection: parseScopeArgs(skillRest) })).exitCode;
       return;
     }
     if (subcommand === "remove") {

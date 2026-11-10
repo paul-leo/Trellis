@@ -1,12 +1,14 @@
 # secret-env-resolution Specification
 
 ## Purpose
-TBD - created by archiving change trellis-secrets-env-management. Update Purpose after archive.
+Resolve MCP environment and header references consistently across runtime,
+planning and audits without persisting secrets or depending on shell inheritance.
 ## Requirements
 ### Requirement: A shared resolver is the single source of truth for a declared name's value
 
-The system SHALL provide one function, `resolveSecretEnv(names, policy)`,
-used by both the pi bridge and `trellis secrets audit`, so
+The system SHALL provide shared resolution through `resolveSecretEntries`
+and its delivered-name compatibility view `resolveSecretEnv`, used by the
+pi bridge, gateway/runtime, sync guard and `trellis secrets audit`, so
 that the two can never disagree about where a declared environment
 variable name's value comes from.
 
@@ -16,6 +18,30 @@ variable name's value comes from.
 - **THEN** both receive the identical value (or both receive
   `undefined`) — there is no separate resolution logic in either call
   site
+
+### Requirement: Header templates support source-bound mxenv references
+
+HTTP/SSE header templates SHALL accept `${mxenv://<profile>/<KEY>}` alongside
+bare `${VAR}` placeholders. References SHALL resolve through the same mxenv SDK
+configuration and ReferenceResolver as env/envAliases, without depending on
+the launching shell. Substitutions SHALL remain in memory, never argv, logs,
+audit output or persisted native configuration. Bare placeholders SHALL retain
+their existing env-file/process-env behavior, including empty substitution.
+
+#### Scenario: Two profiles declare the same key
+- **WHEN** headers reference `${mxenv://first/TOKEN}` and `${mxenv://second/TOKEN}`
+- **THEN** each receives its own profile's value without a delivered-name collision
+
+#### Scenario: Reference resolution fails
+- **WHEN** a header reference has an unknown profile/key, a misspelled scheme,
+  or malformed placeholder syntax
+- **THEN** resolution fails explicitly and sync reports a conflict for that
+  server without exposing provider error output or blocking unrelated servers
+
+#### Scenario: A native client cannot resolve mxenv
+- **WHEN** native direct delivery would persist an mxenv header reference
+- **THEN** the plan refuses it with gateway/runtime guidance; hosted delivery
+  and pi's bridge resolve the header themselves while preserving HTTP/SSE transport
 
 ### Requirement: `env_file` is optional and sole-source when set
 

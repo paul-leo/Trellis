@@ -18,7 +18,7 @@ test("sidecar: internal cross-workspace imports of agent-trellis's command modul
   // asks to prove: a real workspace-relative import reaching real,
   // unmodified agent-trellis internals (design.md Decision 1), not a
   // stubbed or re-implemented copy of the canonical loader.
-  execFileSync("npx", ["tsx", "src/cli.ts", "init"], { cwd: repoRoot, env: { ...process.env, HOME: homeDir }, stdio: "ignore" });
+  execFileSync(process.execPath, [join(repoRoot, "node_modules/tsx/dist/cli.mjs"), join(repoRoot, "src/cli.ts"), "init"], { cwd: homeDir, env: { ...process.env, HOME: homeDir }, stdio: "ignore" });
 
   const result = await proveInternalImportsWork(homeDir);
   assert.deepEqual(result, { doctorOk: true, syncOk: true });

@@ -15,7 +15,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = join(here, "..", "..", "..");
 
 function cli(homeDir: string, args: string[]): string {
-  return execFileSync("npx", ["tsx", "src/cli.ts", ...args], { cwd: repoRoot, env: { ...process.env, HOME: homeDir }, encoding: "utf-8" });
+  return execFileSync(process.execPath, [join(repoRoot, "node_modules/tsx/dist/cli.mjs"), join(repoRoot, "src/cli.ts"), ...args], { cwd: homeDir, env: { ...process.env, HOME: homeDir }, encoding: "utf-8" });
 }
 
 function post(port: number, path: string, body: unknown): Promise<{ status: number; body: unknown }> {

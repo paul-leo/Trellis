@@ -1,6 +1,8 @@
-# .trellis/scope.yaml — exceptions only. Anything NOT listed here is
-# shared with all managed agents — that's the default Trellis exists for.
-# Only write an entry when a capability should NOT go everywhere.
+# .trellis/scope.yaml — every custom skill must register applicable agents.
+# Missing/invalid skill entries are PAUSED. [] explicitly pauses a skill.
+# Lists name known compatible agents; managing another agent does not expand
+# an existing skill's list. `skill scope <name> --all` records today's set.
+# Subagent profiles and memories retain their all-managed default.
 #
 # Why this lives in its own file instead of inside each SKILL.md/agent.md:
 # Codex validates SKILL.md frontmatter against an allow-list of known keys
@@ -15,10 +17,20 @@
 # instead of here — see schema/servers.example.yaml.
 
 skills:
+  shared-workflow: [claude-code, codex, kiro, pi]
+  codex-workflow: [codex]
+  pending-review: []
   # This skill only makes sense for Claude Code's tool surface (e.g. it
   # references the Task tool for subagent delegation, which the other
   # three agents don't have an equivalent of).
   claude-subagent-dispatch: [claude-code]
+
+# Keep publisher provenance separate from compatibility: a Claude-only or
+# Codex-only upstream skill still needs the matching list above. Portable
+# skills list every reviewed target. Never add a Trellis-only `agents`
+# field to upstream SKILL.md files.
+# Hermes skills are autonomous (curator/review/archive); Trellis does not
+# deliver, overwrite, link, or manage ~/.hermes/skills.
 
 agents:
   # Subagent profiles are implicitly Claude-Code-only today — Codex has no

@@ -73,7 +73,7 @@ const en = {
   "mcp.disabled": "disabled",
 
   "skills.title": "Skills",
-  "skills.subtitle": "Canonical Skills and which managed agents currently have them.",
+  "skills.subtitle": "Register applicable agents for each skill. Unregistered skills stay paused.",
   "skills.fromPlaceholder": "source path (SKILL.md dir)",
   "skills.addTitle": 'Add skill "{name}"',
   "skills.syncTitle": "Sync skills to every managed agent",
@@ -257,7 +257,7 @@ const zh: Record<TranslationKey, string> = {
   "mcp.disabled": "已禁用",
 
   "skills.title": "技能",
-  "skills.subtitle": "规范源里的技能，以及当前有哪些受管智能体拥有它们。",
+  "skills.subtitle": "逐个登记技能适用的智能体，未登记的技能暂停分发。",
   "skills.fromPlaceholder": "源路径（SKILL.md 所在目录）",
   "skills.addTitle": "添加技能 “{name}”",
   "skills.syncTitle": "把技能同步到所有受管智能体",

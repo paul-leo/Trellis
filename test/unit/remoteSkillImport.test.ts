@@ -122,7 +122,7 @@ test("remote update replaces only an unedited canonical Skill and rollback resto
   const firstFetch = fetchRemoteRepository({ url: fixture.bare });
   try {
     useGithubProvenanceUrl(firstFetch);
-    const addPlan = githubProvenance(collectRemoteSkillAddPlan(firstFetch, "loop-me", { homeDir: home }));
+    const addPlan = githubProvenance(collectRemoteSkillAddPlan(firstFetch, "loop-me", { homeDir: home, agents: ["*"] }));
     await applyRemoteSkillAddPlan(addPlan, { homeDir: home });
   } finally {
     firstFetch.dispose();

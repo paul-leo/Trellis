@@ -44,11 +44,13 @@ or resolves outside the fetched repository through a symbolic link.
 
 ### Requirement: A remote import remains within the managed Agent boundary
 
-The system SHALL treat an omitted `--agent` selector as an unscoped canonical
-Skill, reaching the current managed set. `--agent <ids>` SHALL record the
+The system SHALL request an explicit applicable-agent selection when `--agent`
+is omitted in an interactive terminal, with no agents preselected. It SHALL
+refuse omitted selectors in noninteractive/JSON mode. `--agent <ids>` SHALL record the
 named managed Agent ids as the Skill scope; `--agent '*'` SHALL resolve to the
 current managed set. A requested id outside the managed set SHALL cause the
-command to refuse before writing.
+command to refuse before writing. `--agent none` SHALL import a paused skill.
+An existing scope SHALL NOT grow when another agent becomes managed.
 
 #### Scenario: A scoped remote Skill reaches only its selected managed Agent
 - **WHEN** `trellis add owner/repo --skill review --agent zcode` succeeds and

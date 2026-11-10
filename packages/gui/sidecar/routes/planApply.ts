@@ -34,6 +34,8 @@ import {
   collectSkillScopePlan,
 } from "../../../../src/commands/skill.js";
 import type { ScopeSelectorRaw } from "../../../../src/lib/scopeSelection.js";
+import { selectSkillScope } from "../../../../src/lib/skillScope.js";
+import { loadCanonicalSource } from "../../../../src/core/canonical.js";
 import { applyMcpImportWithSync, collectMcpImportPlan } from "../../../../src/commands/mcpImport.js";
 import { applyRollbackPlan, collectRollbackPlan, loadManifest, type RollbackReport } from "../../../../src/commands/rollback.js";
 import { collectOnboardPlan, type RunOnboardOptions } from "../../../../src/commands/onboard.js";
@@ -204,7 +206,11 @@ export function createPlanApplyRoutes(homeDir: string, planStore: PlanStore): Ro
       "skill-add",
       planStore,
       homeDir,
-      (home, body) => collectSkillAddPlan(body.name as string, body.fromPath as string, home),
+      (home, body) => {
+        const selected = selectSkillScope((body.selection ?? {}) as ScopeSelectorRaw, loadCanonicalSource(home).managedAgents);
+        if ("error" in selected) return { name: body.name as string, action: "invalid-source" as const, detail: selected.error };
+        return { ...collectSkillAddPlan(body.name as string, body.fromPath as string, home), scope: selected.scope };
+      },
       (plan, home) => applySkillAddWithSync(plan as Parameters<typeof applySkillAddWithSync>[0], { homeDir: home, dryRun: false }),
     ),
 

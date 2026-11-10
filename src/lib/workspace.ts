@@ -15,6 +15,7 @@ import type { McpServerDef, SecretsPolicy, SkillRef } from "../core/types.js";
 import { oauthClientMetadata } from "../core/types.js";
 import { fromServerDefYaml } from "../core/mcpServerDef.js";
 import type { McpServerDefYaml } from "../core/mcpServerDef.js";
+import { readSkillScopes, registeredSkillScope } from "./skillScope.js";
 
 export const WORKSPACE_DIR_NAME = ".agents";
 /** The only `config.json` schema version this implementation understands. */
@@ -137,6 +138,7 @@ export function loadWorkspaceLayer(workspaceDir: string, policy: SecretsPolicy):
   }
 
   const skillsRoot = join(layerRoot, "skills");
+  const scopes = readSkillScopes(join(layerRoot, "scope.yaml"));
   let skillEntries: string[] = [];
   try {
     skillEntries = readdirSync(skillsRoot);
@@ -146,7 +148,10 @@ export function loadWorkspaceLayer(workspaceDir: string, policy: SecretsPolicy):
   for (const name of skillEntries) {
     const dir = join(skillsRoot, name);
     try {
-      if (statSync(dir).isDirectory()) layer.skills.push({ name, dir });
+      if (statSync(dir).isDirectory()) {
+        layer.skills.push({ name, dir, scope: registeredSkillScope(scopes[name]) });
+        if (!Object.hasOwn(scopes, name)) diagnostics.push(`.agents/scope.yaml: skill "${name}" has no registered agents — Trellis distribution paused`);
+      }
     } catch {
       // unreadable/broken entry — skip, not a load failure
     }

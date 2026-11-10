@@ -18,6 +18,7 @@ import { emptyRemoteSkillLock, readRemoteSkillLock, type RemoteSkillLock, type R
 import { fetchRemoteRepository, normalizeGitHubRepository, type FetchedRemoteRepository, type SelectedRemoteSkill } from "../lib/remoteSkillSource.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
+import { requestSkillScope } from "../lib/skillScope.js";
 
 export type RemoteSkillAction = "create" | "already-present" | "conflict" | "invalid-source" | "invalid-options";
 
@@ -72,7 +73,8 @@ function scopeForRequest(homeDir: string, agents: readonly string[] | undefined)
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
-  if (!agents || agents.length === 0) return { scope: undefined };
+  if (!agents || agents.length === 0) return { error: 'choose applicable agents with --agent <ids> or --agent "*"' };
+  if (agents.length === 1 && agents[0] === "none") return { scope: [] };
   const values = agents.flatMap((value) => value.split(",").map((id) => id.trim()).filter(Boolean));
   if (values.length === 0) return { error: "--agent needs at least one Agent id" };
   if (values.includes("*")) {
@@ -189,6 +191,18 @@ export async function runRemoteSkillAdd(sourceInput: string | undefined, name: s
     if (opts.json) console.log(JSON.stringify(displayAddPlan(plan), null, 2));
     else console.error(plan.detail);
     return { exitCode: 1 };
+  }
+  if (!opts.agents) {
+    const home = opts.homeDir ?? homedir();
+    const managed = existsSync(join(home, ".trellis")) ? loadCanonicalSource(home).managedAgents : [];
+    const selected = await requestSkillScope({}, managed, !opts.json);
+    if ("error" in selected) {
+      const detail = `${selected.error}; remote import uses --agent <ids>, --agent "*" or --agent none`;
+      if (opts.json) console.log(JSON.stringify({ action: "invalid-options", detail }));
+      else console.error(detail);
+      return { exitCode: 1 };
+    }
+    opts = { ...opts, agents: selected.scope.length ? selected.scope : ["none"] };
   }
   let fetched: FetchedRemoteRepository;
   try {

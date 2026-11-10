@@ -9,6 +9,7 @@ import { runKimi } from "../../src/commands/kimi.js";
 import { KimiCodeAdapter } from "../../src/adapters/kimi-code.js";
 import { openBackupSession } from "../../src/lib/backup.js";
 import { loadCanonicalSource } from "../../src/core/canonical.js";
+import { seedSkillScopes } from "../helpers/home.js";
 
 function home(): string {
   return mkdtempSync(join(tmpdir(), "trellis-kimi-"));
@@ -17,6 +18,7 @@ function home(): string {
 async function canonicalHome(): Promise<string> {
   const value = home();
   await collectInitReport(value);
+  seedSkillScopes(value, ["shared"], ["kimi-code"]);
   mkdirSync(join(value, ".trellis", "skills", "shared"), { recursive: true });
   writeFileSync(join(value, ".trellis", "skills", "shared", "SKILL.md"), "---\nname: shared\ndescription: shared\n---\n");
   writeFileSync(join(value, ".trellis", "managed.yaml"), "agents: [kimi-code]\n");

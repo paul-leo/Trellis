@@ -12,8 +12,9 @@ properties as the rest of the canonical-source commands.
 The system SHALL provide `trellis skill scope <name>` and
 `trellis mcp scope <name>`, each requiring exactly one of `--agents <ids>`
 (comma-separated), `--all`, or `--none`, and each supporting `--dry-run` and
-`--json`. `--agents` SHALL set an explicit scope, `--all` SHALL remove the
-explicit scope so the item reaches every managed agent, and `--none` SHALL set an
+`--json`. `--agents` SHALL set an explicit scope. For skills, `--all` SHALL
+record the current managed set; for MCP it SHALL remove the explicit scope.
+`--none` SHALL set an
 explicit empty scope. Supplying none or more than one of the three, or an empty
 `--agents` value, SHALL be refused without writing.
 
@@ -56,18 +57,17 @@ SHALL leave canonical source unchanged.
 - **THEN** the command exits non-zero, states that `kiro` is not managed, lists
   the managed agents, and `servers.yaml` is unchanged
 
-### Requirement: Selecting every managed agent clears the explicit scope
+### Requirement: Skill scope remains explicit when every managed agent is selected
 
-The system SHALL treat an `--agents` selection equal to the full managed set as
-`--all`, removing the explicit scope instead of recording the list, and SHALL
-report which outcome occurred.
+The system SHALL preserve a skill's full managed-agent selection as an
+explicit list. MCP SHALL retain its existing normalization to an omitted scope.
 
-#### Scenario: A full selection does not freeze the list
+#### Scenario: A full skill selection freezes the reviewed list
 
 - **WHEN** the managed agents are `claude-code` and `codex` and the user runs
   `trellis skill scope review --agents codex,claude-code`
-- **THEN** no explicit scope remains for `review`, and a later newly managed
-  agent receives the skill
+- **THEN** `review` is registered for `[claude-code, codex]`, and a later
+  newly managed agent does not receive it without separate registration
 
 ### Requirement: A scope edit takes effect and is recoverable
 

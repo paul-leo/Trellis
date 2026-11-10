@@ -123,7 +123,7 @@ test("skill add --workspace: copies into .agents/skills/ and cascade-syncs .clau
   const src = mkdtempSync(join(tmpdir(), "trellis-ws-skill-"));
   writeFileSync(join(src, "SKILL.md"), "---\nname: review\n---\nreview things\n");
 
-  const { exitCode } = await runSkillAdd("review", src, { homeDir: home, workspace: true, workspaceDir: proj, json: true });
+  const { exitCode } = await runSkillAdd("review", src, { homeDir: home, workspace: true, workspaceDir: proj, json: true, selection: { all: true } });
   assert.equal(exitCode, 0);
   assert.match(readFileSync(join(proj, ".agents", "skills", "review", "SKILL.md"), "utf-8"), /review things/);
   // cascade sync delivered the Claude copy

@@ -1,7 +1,8 @@
 # canonical-source-loading Specification
 
 ## Purpose
-TBD - created by archiving change trellis-sync-p1. Update Purpose after archive.
+Load global and workspace capabilities with provenance and scope diagnostics,
+while keeping the canonical root and secret policy anchored to the user's home.
 
 ## Requirements
 
@@ -76,7 +77,8 @@ The system SHALL raise an error if `~/.trellis/` does not exist at all when
 `loadCanonicalSource()` is called. The system SHALL NOT error if
 `~/.trellis/` exists but contains zero skills, zero agent profiles, or no
 `scope.yaml` — each of these is valid and yields an empty list or default
-scope, not a failure.
+scope, not a failure. Custom skills without registration SHALL load with
+scope `[]` and a diagnostic; invalid registrations SHALL also pause distribution.
 
 #### Scenario: No canonical source at all is an error
 - **WHEN** `~/.trellis/` does not exist

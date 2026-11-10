@@ -38,7 +38,7 @@ function writeSourceSkill(dir: string, content = "# Demo\ncontent\n"): string {
   return dir;
 }
 
-test("skill list: an unscoped skill resolves to the full managed set", async () => {
+test("skill list: an unregistered skill stays paused", async () => {
   const home = scratchHome();
   await collectInitReport(home);
   writeFileSync(join(home, ".trellis", "managed.yaml"), "agents: [codex, pi]\n");
@@ -46,7 +46,7 @@ test("skill list: an unscoped skill resolves to the full managed set", async () 
   writeFileSync(join(home, ".trellis", "skills", "shared", "SKILL.md"), "# shared\n");
 
   const entries = collectSkillList(home);
-  assert.deepEqual(entries, [{ name: "shared", scope: ["codex", "pi"] }]);
+  assert.deepEqual(entries, [{ name: "shared", scope: [] }]);
 });
 
 test("skill list: a skill scoped outside the managed set resolves to the intersection", async () => {
@@ -118,7 +118,7 @@ test("skill add: --dry-run computes the plan but writes nothing", async () => {
   const home = scratchHome();
   const source = writeSourceSkill(join(home, "source-skill"));
 
-  const { exitCode } = await runSkillAdd("demo", source, { homeDir: home, dryRun: true });
+  const { exitCode } = await runSkillAdd("demo", source, { homeDir: home, dryRun: true, selection: { none: true } });
   assert.equal(exitCode, 0);
   assert.ok(!existsSync(join(home, ".trellis", "skills", "demo")), "dry-run must not write");
 });
@@ -174,6 +174,7 @@ test("skill remove: a subsequent sync removes the now-stale symlink on a previou
 
   const source = writeSourceSkill(join(home, "source-skill"));
   applySkillAddPlan(collectSkillAddPlan("demo", source, home), home);
+  await applySkillScopeWithSync(collectSkillScopePlan("demo", { agents: "claude-code" }, home), { homeDir: home });
 
   await collectSyncReport({ homeDir: home });
   const claudeSkillPath = join(home, ".claude", "skills", "demo");
@@ -215,7 +216,7 @@ test("skill scope: --agents records exactly that list, in a stable order", async
   assert.deepEqual(collectSkillList(home).find((e) => e.name === "review")?.scope, ["claude-code", "pi"]);
 });
 
-test("skill scope: --all removes the explicit entry and restores the default", async () => {
+test("skill scope: --all records the current managed set", async () => {
   const home = await homeWithSkill();
   await applySkillScopeWithSync(collectSkillScopePlan("review", { agents: "codex" }, home), { homeDir: home });
   assert.deepEqual(scopeOnDisk(home)?.review, ["codex"]);
@@ -225,11 +226,11 @@ test("skill scope: --all removes the explicit entry and restores the default", a
   assert.equal(plan.mode, "all");
   await applySkillScopeWithSync(plan, { homeDir: home });
 
-  assert.equal(scopeOnDisk(home)?.review, undefined);
+  assert.deepEqual(scopeOnDisk(home)?.review, ["claude-code", "codex", "pi"]);
   assert.deepEqual(collectSkillList(home).find((e) => e.name === "review")?.scope, ["claude-code", "codex", "pi"]);
 });
 
-test("skill scope: --none records an explicit empty scope, distinct from no scope", async () => {
+test("skill scope: --none records an explicit paused scope", async () => {
   const home = await homeWithSkill();
 
   const plan = collectSkillScopePlan("review", { none: true }, home);
@@ -240,18 +241,18 @@ test("skill scope: --none records an explicit empty scope, distinct from no scop
   assert.deepEqual(collectSkillList(home).find((e) => e.name === "review")?.scope, []);
 });
 
-test("skill scope: selecting every managed agent clears the explicit scope instead of freezing the list", async () => {
+test("skill scope: selecting every managed agent preserves a fixed list", async () => {
   const home = await homeWithSkill(["claude-code", "codex"]);
   await applySkillScopeWithSync(collectSkillScopePlan("review", { agents: "codex" }, home), { homeDir: home });
 
   const plan = collectSkillScopePlan("review", { agents: "codex,claude-code" }, home);
 
   assert.equal(plan.action, "updated");
-  assert.equal(plan.mode, "all");
-  assert.equal(plan.normalizedFromFull, true);
-  assert.equal(plan.scope, undefined);
+  assert.equal(plan.mode, "explicit");
+  assert.equal(plan.normalizedFromFull, false);
+  assert.deepEqual(plan.scope, ["claude-code", "codex"]);
   await applySkillScopeWithSync(plan, { homeDir: home });
-  assert.equal(scopeOnDisk(home)?.review, undefined, "a later newly managed agent must still receive the skill");
+  assert.deepEqual(scopeOnDisk(home)?.review, ["claude-code", "codex"], "a newly managed agent needs separate registration");
 });
 
 test("skill scope: a scope already in effect is reported as already-set and writes nothing", async () => {
@@ -321,6 +322,7 @@ test("skill scope: the write is covered by a backup session so rollback can undo
 
 test("skill scope: narrowing un-syncs the agent that lost it, widening brings it back (end-to-end)", async () => {
   const home = await homeWithSkill(["claude-code", "codex"]);
+  await applySkillScopeWithSync(collectSkillScopePlan("review", { all: true }, home), { homeDir: home });
   writeFileSync(join(home, ".claude.json"), "{}\n");
   mkdirSync(join(home, ".codex"), { recursive: true });
   writeFileSync(join(home, ".codex", "config.toml"), 'model = "x"\n');

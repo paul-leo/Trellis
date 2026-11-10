@@ -148,7 +148,7 @@ test("instructions: real, pre-existing agents.md content is a conflict, not over
   assert.equal(readFileSync(join(home, ".trellis", "agents.md"), "utf-8"), "# Hand-authored, already real\n");
 });
 
-test("a migrated skill is unscoped — no scope.yaml is created", async () => {
+test("a migrated skill is registered only for its source agent", async () => {
   const home = scratchHome();
   markClaudeCodePresent(home);
   await collectInitReport(home);
@@ -157,7 +157,7 @@ test("a migrated skill is unscoped — no scope.yaml is created", async () => {
   const plan = await collectMigratePlan("claude-code", home);
   applyMigratePlan(plan, home);
 
-  assert.equal(existsSync(join(home, ".trellis", "scope.yaml")), false);
+  assert.match(readFileSync(join(home, ".trellis", "scope.yaml"), "utf8"), /real-skill:\s*\n\s*- claude-code/);
 });
 
 test("--dry-run computes the plan without writing anything", async () => {

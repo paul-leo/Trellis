@@ -465,9 +465,10 @@ $ trellis migrate --from codex --only instructions
 | `skip-case-broken` | Found as `skill.md` instead of `SKILL.md` — fix the case on the source agent first. |
 | `skip-unsupported` | The source capability can't be safely represented (including native memory without a supported adapter); nothing was written for it. |
 
-Migrate never overwrites a genuine conflict, and never scopes a migrated
-skill (or MCP server) to just the source agent — once in canonical, it's
-visible to every agent by default (see `sync`, below). If migrate reports
+Migrate never overwrites a genuine conflict. A newly migrated skill is
+registered only for its source agent; review its compatibility before
+sharing it through `trellis skill scope <name> --agents <ids>`.
+MCP servers retain their existing scope behavior. If migrate reports
 a `conflict`, open the two files/entries it names and decide by hand
 which content should actually be canonical, then re-run.
 
@@ -663,10 +664,10 @@ remains the command for a local directory:
 npx trellis add mattpocock/skills --list
 
 # Fetch and inspect the exact plan without writing canonical or Agent files.
-npx trellis add mattpocock/skills --skill loop-me --dry-run
+npx trellis add mattpocock/skills --skill loop-me --agent codex --dry-run
 
 # Import to the user-level canonical store, then sync to every managed Agent.
-npx trellis add mattpocock/skills --skill loop-me --yes
+npx trellis add mattpocock/skills --skill loop-me --agent '*' --yes
 ```
 
 The source may be `owner/repository` or a credential-free HTTPS
@@ -678,10 +679,11 @@ dependencies, or write into `.agents/skills`, `~/.agents/skills`, or any
 Agent-specific Skill directory during import. Review the imported
 `SKILL.md` before relying on it in an Agent session.
 
-By default the imported Skill is unscoped, which means every Agent currently
-listed in `~/.trellis/managed.yaml` receives it on sync. Restrict delivery to
-managed Agents with `--agent`; comma-separated values and repeated flags are
-accepted. `--agent '*'` writes the current managed set as an explicit scope.
+Imports require an explicit choice of applicable agents. Interactive terminals
+offer a selection with no agents preselected; noninteractive/JSON calls must
+supply `--agent`. Comma-separated values and repeated flags are accepted.
+`--agent '*'` records the current managed set; `--agent none` imports a paused
+skill. A newly managed agent does not receive existing skills automatically.
 An Agent that is installed but unmanaged is refused before any canonical or
 native write. Add it to Trellis's managed boundary first:
 
@@ -784,6 +786,24 @@ the first place (see `mcp sync`'s own explanation of `env` vs.
 
 All four of `skill add`/`skill remove`/`mcp add`/`mcp remove` support
 `--dry-run` and `--json`, same convention as every other command.
+
+Local imports use the same compatibility rule:
+
+```sh
+trellis skill add review --from ./skills/review --agents claude-code,codex
+trellis skill add pending --from ./skills/pending --none
+trellis skill list --agent codex --json
+trellis skill scope review --all
+```
+
+Every custom skill needs a `skills.<name>: [agent ids]` entry in
+`~/.trellis/scope.yaml` (or `.agents/scope.yaml` for workspace delivery).
+Unregistered skills pause until reviewed; sync removes only their
+Trellis-owned links and leaves independent files untouched. `skill list
+--agent` shows scoped skills with `linked`, `missing`, `conflict` or `runtime`
+delivery status. Codex's global delivery root is `~/.agents/skills`.
+Use `trellis sync skills --dry-run` before converging an older installation.
+Hermes maintains its own skills; Trellis never writes its skill store.
 
 ## `trellis sync`
 

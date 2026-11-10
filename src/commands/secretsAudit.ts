@@ -31,7 +31,7 @@ import { KiroAdapter } from "../adapters/kiro.js";
 import { ZcodeAdapter } from "../adapters/zcode.js";
 import { declaredEnvNames, extractJsonEnvVarNames, extractTomlEnvVarNames, extractZcodeEnvVarNames } from "../lib/envVarNames.js";
 import { resolveZcodeProfile } from "../probes/zcode.js";
-import { parseEnvEntry, resolveSecretEnv  } from "../lib/secretEnv.js";
+import { parseEnvEntry, resolveSecretEntries, SecretReferenceError } from "../lib/secretEnv.js";
 
 export interface RunSecretsAuditOptions {
   json?: boolean;
@@ -110,16 +110,27 @@ async function findMissingEnvValues(servers: Record<string, McpServerDef>, polic
   if (resolvable.length === 0) return findings;
 
   // Findings name the DELIVERED name (the KEY segment for a reference).
-  const resolved = await resolveSecretEnv(resolvable, policy);
+  const pending = [...resolvable];
+  let resolved: Record<string, string | undefined> = {};
+  // One broken profile must be a finding, not abort the entire audit.
+  while (pending.length) {
+    try {
+      resolved = await resolveSecretEntries(pending, policy);
+      break;
+    } catch (error) {
+      if (!(error instanceof SecretReferenceError)) throw error;
+      pending.splice(pending.indexOf(error.entry), 1);
+    }
+  }
   for (const entry of resolvable) {
     const p = parseEnvEntry(entry);
     const delivered = p.kind === "invalid" ? entry : p.delivered;
-    if (!resolved[delivered]) {
+    if (!resolved[entry]) {
       findings.push({
         agent: "environment" as const,
         file: p.kind === "ref" ? `the mxenv composition (profile "${p.profile}")` : (policy.envFile ?? "process environment"),
         kind: "missing-env-value" as const,
-        detail: `"${delivered}" is declared by a canonical MCP server's env but has no resolvable value`,
+        detail: `"${delivered}" is declared by a canonical MCP server's env or headers but has no resolvable value`,
       });
     }
   }

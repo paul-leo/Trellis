@@ -1,7 +1,8 @@
 # skill-instructions-sync Specification
 
 ## Purpose
-TBD - created by archiving change trellis-sync-p1. Update Purpose after archive.
+Distribute registered skills and shared instructions through ownership-checked
+links while enforcing agent scope and preserving independent user files.
 
 ## Requirements
 
@@ -21,12 +22,11 @@ item that `apply()` later skips.
 - **THEN** only the Claude Code adapter's plan contains an item for that
   skill; Codex, Kiro, and pi's plans contain none
 
-#### Scenario: An unscoped skill reaches only the managed set, not every present agent
-- **WHEN** a skill has no `scope` entry, `managed.yaml` lists `[pi]`, and
+#### Scenario: An unregistered custom skill is paused
+- **WHEN** a custom skill has no `scope.yaml` entry, `managed.yaml` lists `[pi]`, and
   Codex and Kiro are also present on this machine
-- **THEN** `trellis sync` plans an item for pi only — Codex and Kiro,
-  though present, are not built as adapters at all for this run and
-  receive no report line
+- **THEN** no agent receives that skill, a diagnostic requests registration,
+  and only pre-existing Trellis-owned links are eligible for removal
 
 #### Scenario: An agent absent from the managed set gets no adapter, present or not
 - **WHEN** Codex is present on this machine but not in `managed.yaml`
@@ -78,7 +78,7 @@ session before performing it.
   prior target is added to the run's backup session
 
 #### Scenario: A newly-scoped-away skill is removed from the now-excluded agent
-- **WHEN** a skill previously unscoped (present on all agents) is given
+- **WHEN** a skill previously registered for every managed agent is given
   `scope: [claude-code]` in `scope.yaml`, and `trellis sync skills` runs
   again
 - **THEN** the symlink is removed from Codex, Kiro, and pi, and remains

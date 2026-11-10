@@ -15,7 +15,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decideDirImport } from "../lib/dirEquals.js";
 import { findSkillFile } from "../lib/skillFile.js";
-import { loadCanonicalSource, writeSkillScopeYaml } from "../core/canonical.js";
+import { loadCanonicalSource, validateSkillScopeYaml, writeSkillScopeYaml } from "../core/canonical.js";
 import { resolveScope } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 import { isBuiltinSkillName } from "../lib/builtinSkills.js";
@@ -23,9 +23,12 @@ import { openBackupSession, type BackupSession } from "../lib/backup.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
 import { remoteSkillProvenance } from "./remoteSkill.js";
-import { describeScope, resolveScopeSelection, sameScope, type ScopeSelectorRaw } from "../lib/scopeSelection.js";
+import { sameScope, type ScopeSelectorRaw } from "../lib/scopeSelection.js";
 import type { RemoteSkillLockEntry } from "../lib/remoteSkillLock.js";
 import { findWorkspaceRoot } from "../lib/workspace.js";
+import { readSkillScopes, requestSkillScope, selectSkillScope } from "../lib/skillScope.js";
+import { isSymlinkTo } from "../lib/fsIdentity.js";
+import { usesNativeCapabilityDelivery, ALL_AGENTS } from "../core/types.js";
 
 function builtinSkillTemplate(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -72,29 +75,48 @@ export function runSkillUpdateBuiltin(opts: { homeDir?: string; json?: boolean; 
 export interface SkillListEntry {
   name: string;
   scope: readonly AgentId[];
+  registered?: boolean;
+  delivery?: { state: "linked" | "missing" | "conflict" | "runtime"; path?: string };
   remote?: Pick<RemoteSkillLockEntry, "source" | "requestedRef" | "commit" | "subdirectory" | "digest">;
 }
 
-export function collectSkillList(homeDir: string = homedir()): SkillListEntry[] {
+export function collectSkillList(homeDir: string = homedir(), agent?: AgentId): SkillListEntry[] {
   const canonical = loadCanonicalSource(homeDir);
   const provenance = remoteSkillProvenance(homeDir);
-  return canonical.skills.filter((skill) => !isBuiltinSkillName(skill.name)).map((skill) => ({
+  const registry = readSkillScopes(join(homeDir, ".trellis", "scope.yaml"));
+  const roots: Record<AgentId, string> = {
+    "claude-code": join(homeDir, ".claude", "skills"), codex: join(homeDir, ".agents", "skills"),
+    kiro: join(homeDir, ".kiro", "skills"), pi: join(homeDir, ".pi", "agent", "skills"),
+    "kimi-code": join(homeDir, ".kimi-code", "skills"), zcode: "",
+  };
+  return canonical.skills.filter((skill) => agent ? resolveScope(skill.scope, canonical.managedAgents).includes(agent) : !isBuiltinSkillName(skill.name)).map((skill) => ({
     name: skill.name,
     scope: resolveScope(skill.scope, canonical.managedAgents),
+    ...(agent ? {
+      registered: Object.hasOwn(registry, skill.name) || isBuiltinSkillName(skill.name),
+      delivery: !usesNativeCapabilityDelivery(agent, canonical.mcp) || agent === "zcode"
+        ? { state: "runtime" as const }
+        : { state: isSymlinkTo(join(roots[agent], skill.name), skill.dir) ? "linked" as const
+          : existsSync(join(roots[agent], skill.name)) ? "conflict" as const : "missing" as const, path: join(roots[agent], skill.name) },
+    } : {}),
     ...(provenance[skill.name] ? { remote: provenance[skill.name] } : {}),
   }));
 }
 
-export function runSkillList(opts: { homeDir?: string; json?: boolean } = {}): { exitCode: number } {
-  const entries = collectSkillList(opts.homeDir ?? homedir());
+export function runSkillList(opts: { homeDir?: string; json?: boolean; agent?: string } = {}): { exitCode: number } {
+  if (opts.agent !== undefined && !(ALL_AGENTS as readonly string[]).includes(opts.agent)) {
+    console.error(`unknown agent: ${opts.agent}; choose ${ALL_AGENTS.join(", ")}`);
+    return { exitCode: 1 };
+  }
+  const entries = collectSkillList(opts.homeDir ?? homedir(), opts.agent as AgentId | undefined);
   if (opts.json) {
     console.log(JSON.stringify(entries, null, 2));
   } else if (entries.length === 0) {
     console.log("No skills in canonical source yet.");
   } else {
-    for (const { name, scope, remote } of entries) {
+    for (const { name, scope, remote, delivery } of entries) {
       const provenance = remote ? ` — remote: ${remote.source}@${remote.commit.slice(0, 12)}` : "";
-      console.log(`${name} — ${scope.length > 0 ? scope.join(", ") : "(no managed agent reaches it)"}${provenance}`);
+      console.log(`${name} — ${scope.length > 0 ? scope.join(", ") : "(paused: no applicable managed agent)"}${delivery ? ` [${delivery.state}]` : ""}${provenance}`);
     }
   }
   return { exitCode: 0 };
@@ -107,6 +129,7 @@ export interface SkillAddPlan {
   action: SkillAddAction;
   detail: string;
   sourceDir?: string;
+  scope?: AgentId[];
 }
 
 export function collectSkillAddPlan(name: string, fromPath: string, homeDir: string = homedir()): SkillAddPlan {
@@ -133,14 +156,21 @@ export function collectSkillAddPlan(name: string, fromPath: string, homeDir: str
 }
 
 export function applySkillAddPlan(plan: SkillAddPlan, homeDir: string = homedir(), backup?: BackupSession): void {
-  if (plan.action !== "create" || !plan.sourceDir) return;
+  if (plan.action !== "create" && !(plan.action === "already-present" && plan.scope !== undefined)) return;
+  if (plan.action === "create" && !plan.sourceDir) return;
+  const scopePath = join(homeDir, ".trellis", "scope.yaml");
+  const validation = validateSkillScopeYaml(scopePath);
+  if (!validation.ok) throw new Error(validation.error);
   const dest = join(homeDir, ".trellis", "skills", plan.name);
-  if (backup) {
-    backup.createDirFromSource(dest, plan.sourceDir);
-    return;
+  if (plan.action === "create") {
+    if (backup) backup.createDirFromSource(dest, plan.sourceDir!);
+    else {
+      mkdirSync(dest, { recursive: true });
+      cpSync(plan.sourceDir!, dest, { recursive: true });
+    }
   }
-  mkdirSync(dest, { recursive: true });
-  cpSync(plan.sourceDir, dest, { recursive: true });
+  const written = writeSkillScopeYaml(scopePath, plan.name, plan.scope ?? [], backup);
+  if (!written.ok) throw new Error(written.error);
 }
 
 /** The workspace twin of `collectSkillAddPlan` (trellis-workspace-scope
@@ -167,29 +197,36 @@ export function collectSkillAddWorkspacePlan(name: string, fromPath: string, wor
 }
 
 export function applySkillAddWorkspacePlan(plan: SkillAddPlan, workspaceRoot: string, backup?: BackupSession): void {
-  if (plan.action !== "create" || !plan.sourceDir) return;
+  if (plan.action !== "create" && !(plan.action === "already-present" && plan.scope !== undefined)) return;
+  if (plan.action === "create" && !plan.sourceDir) return;
+  const scopePath = join(workspaceRoot, ".agents", "scope.yaml");
+  const validation = validateSkillScopeYaml(scopePath);
+  if (!validation.ok) throw new Error(validation.error);
   const dest = join(workspaceRoot, ".agents", "skills", plan.name);
-  if (backup) {
-    backup.createDirFromSource(dest, plan.sourceDir);
-    return;
+  if (plan.action === "create") {
+    if (backup) backup.createDirFromSource(dest, plan.sourceDir!);
+    else {
+      mkdirSync(dest, { recursive: true });
+      cpSync(plan.sourceDir!, dest, { recursive: true });
+    }
   }
-  mkdirSync(dest, { recursive: true });
-  cpSync(plan.sourceDir, dest, { recursive: true });
+  const written = writeSkillScopeYaml(scopePath, plan.name, plan.scope ?? [], backup);
+  if (!written.ok) throw new Error(written.error);
 }
 
 /** Same own-backup-session + cascade-sync posture as
  * `applySkillAddWithSync`, scoped to the workspace layer. */
 export async function applySkillAddWorkspaceWithSync(plan: SkillAddPlan, workspaceRoot: string, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<SkillAddOutcome> {
   const homeDir = opts.homeDir ?? homedir();
-  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "create" ? openBackupSession(homeDir, "skill-add") : undefined;
+  const ownSession = !opts.dryRun && !opts.backupSession && (plan.action === "create" || plan.action === "already-present" && plan.scope !== undefined) ? openBackupSession(homeDir, "skill-add") : undefined;
   const session = opts.backupSession ?? ownSession;
-  if (!opts.dryRun && plan.action === "create") {
+  if (!opts.dryRun && (plan.action === "create" || plan.action === "already-present")) {
     applySkillAddWorkspacePlan(plan, workspaceRoot, session);
   }
   ownSession?.finalize();
   const failed = plan.action === "conflict" || plan.action === "invalid-source";
   let syncReport: SyncReport | undefined;
-  if (!failed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
+  if (!failed && (plan.action === "create" || plan.scope !== undefined) && existsSync(join(homeDir, ".trellis"))) {
     syncReport = await collectSyncReport({ target: "skills", homeDir, workspaceDir: workspaceRoot, dryRun: opts.dryRun });
   }
   return { plan, ...(syncReport ? { sync: syncReport } : {}) };
@@ -210,22 +247,29 @@ export interface SkillAddOutcome {
  */
 export async function applySkillAddWithSync(plan: SkillAddPlan, opts: { homeDir?: string; dryRun?: boolean; backupSession?: BackupSession } = {}): Promise<SkillAddOutcome> {
   const homeDir = opts.homeDir ?? homedir();
-  const ownSession = !opts.dryRun && !opts.backupSession && plan.action === "create" ? openBackupSession(homeDir, "skill-add") : undefined;
+  const ownSession = !opts.dryRun && !opts.backupSession && (plan.action === "create" || plan.action === "already-present" && plan.scope !== undefined) ? openBackupSession(homeDir, "skill-add") : undefined;
   const session = opts.backupSession ?? ownSession;
-  if (!opts.dryRun && plan.action === "create") {
+  if (!opts.dryRun && (plan.action === "create" || plan.action === "already-present")) {
     applySkillAddPlan(plan, homeDir, session);
   }
   ownSession?.finalize();
   const failed = plan.action === "conflict" || plan.action === "invalid-source";
   let syncReport: SyncReport | undefined;
-  if (!failed && plan.action === "create" && existsSync(join(homeDir, ".trellis"))) {
+  if (!failed && (plan.action === "create" || plan.scope !== undefined) && existsSync(join(homeDir, ".trellis"))) {
     syncReport = await collectSyncReport({ target: "skills", homeDir, dryRun: opts.dryRun });
   }
   return { plan, ...(syncReport ? { sync: syncReport } : {}) };
 }
 
-export async function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean; workspace?: boolean; workspaceDir?: string } = {}): Promise<{ exitCode: number }> {
+export async function runSkillAdd(name: string, fromPath: string, opts: { homeDir?: string; json?: boolean; dryRun?: boolean; workspace?: boolean; workspaceDir?: string; selection?: ScopeSelectorRaw } = {}): Promise<{ exitCode: number }> {
   const homeDir = opts.homeDir ?? homedir();
+  const managed = existsSync(join(homeDir, ".trellis")) ? loadCanonicalSource(homeDir).managedAgents : [];
+  const selected = await requestSkillScope(opts.selection ?? {}, managed, !opts.json);
+  if ("error" in selected) {
+    if (opts.json) console.log(JSON.stringify({ name, action: "invalid-source", detail: selected.error }));
+    else console.error(selected.error);
+    return { exitCode: 1 };
+  }
 
   if (opts.workspace) {
     const workspaceRoot = opts.workspaceDir ?? findWorkspaceRoot(process.cwd());
@@ -234,6 +278,7 @@ export async function runSkillAdd(name: string, fromPath: string, opts: { homeDi
       return { exitCode: 1 };
     }
     const plan = collectSkillAddWorkspacePlan(name, fromPath, workspaceRoot);
+    plan.scope = selected.scope;
     const { sync: syncReport } = await applySkillAddWorkspaceWithSync(plan, workspaceRoot, { homeDir, dryRun: opts.dryRun });
     const failed = plan.action === "conflict" || plan.action === "invalid-source";
     if (opts.json) {
@@ -248,6 +293,7 @@ export async function runSkillAdd(name: string, fromPath: string, opts: { homeDi
   }
 
   const plan = collectSkillAddPlan(name, fromPath, homeDir);
+  plan.scope = selected.scope;
   const { sync: syncReport } = await applySkillAddWithSync(plan, { homeDir, dryRun: opts.dryRun });
   const failed = plan.action === "conflict" || plan.action === "invalid-source";
   if (opts.json) {
@@ -330,13 +376,10 @@ export interface SkillScopePlan {
   name: string;
   action: SkillScopeAction;
   detail: string;
-  /** What will be recorded in `scope.yaml`; `undefined` clears the explicit
-   * scope so the skill reaches every managed agent. Set when the selection was
-   * valid, whatever the action. */
+  /** Applicable agents recorded in scope.yaml. Even --all is a fixed list. */
   scope?: AgentId[];
   mode?: "all" | "none" | "explicit";
-  /** True when a full selection was dropped instead of recorded
-   * (trellis-scope-editing-and-auth-status design.md D3). */
+  /** Retained for API compatibility; skill lists are never normalized away. */
   normalizedFromFull?: boolean;
   /** The agents that will actually receive the skill afterwards. */
   effective?: readonly AgentId[];
@@ -354,8 +397,9 @@ export function collectSkillScopePlan(name: string | undefined, raw: ScopeSelect
   }
 
   const canonical = loadCanonicalSource(homeDir);
-  const selection = resolveScopeSelection(raw, canonical.managedAgents);
-  if (!selection.ok) return { name, action: "invalid-input", detail: selection.detail };
+  const chosen = selectSkillScope(raw, canonical.managedAgents);
+  if ("error" in chosen) return { name, action: "invalid-input", detail: chosen.error };
+  const selection = { scope: chosen.scope, mode: raw.all ? "all" as const : raw.none ? "none" as const : "explicit" as const, normalizedFromFull: false };
 
   const skill = canonical.skills.find((candidate) => candidate.name === name);
   if (!skill) return { name, action: "not-found", detail: `no canonical skill named "${name}"` };
@@ -367,12 +411,11 @@ export function collectSkillScopePlan(name: string | undefined, raw: ScopeSelect
     normalizedFromFull: selection.normalizedFromFull,
     effective: resolveScope(selection.scope, canonical.managedAgents),
   };
-  const summary = describeScope(selection.scope, canonical.managedAgents);
-  const normalized = selection.normalizedFromFull ? " (every managed agent selected — recorded as the default, so a newly managed agent is included)" : "";
-  if (sameScope(skill.scope, selection.scope)) {
+  const summary = selection.scope.length ? selection.scope.join(", ") : "no agent (paused)";
+  if (sameScope(skill.scope, selection.scope) && Object.hasOwn(readSkillScopes(join(homeDir, ".trellis", "scope.yaml")), name)) {
     return { ...base, action: "already-set", detail: `scope is already ${summary}` };
   }
-  return { ...base, action: "updated", detail: `set scope to ${summary}${normalized}` };
+  return { ...base, action: "updated", detail: `set scope to ${summary}` };
 }
 
 export interface SkillScopeOutcome {

@@ -14,7 +14,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = join(here, "..", "..", "..", "..");
 
 function cli(homeDir: string, args: string[]): string {
-  return execFileSync("npx", ["tsx", "src/cli.ts", ...args], { cwd: repoRoot, env: { ...process.env, HOME: homeDir }, encoding: "utf-8" });
+  return execFileSync(process.execPath, [join(repoRoot, "node_modules/tsx/dist/cli.mjs"), join(repoRoot, "src/cli.ts"), ...args], { cwd: homeDir, env: { ...process.env, HOME: homeDir }, encoding: "utf-8" });
 }
 
 function serversYaml(homeDir: string): string {
@@ -36,6 +36,7 @@ function pendingSyncHome(): string {
   const skillDir = join(homeDir, ".trellis", "skills", "demo-skill");
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(join(skillDir, "SKILL.md"), "---\nname: demo-skill\ndescription: a demo skill for planApply tests\n---\n\n# Demo\n");
+  writeFileSync(join(homeDir, ".trellis", "scope.yaml"), "skills:\n  demo-skill: [claude-code]\n");
   return homeDir;
 }
 
@@ -123,7 +124,7 @@ test("plan/apply skill-add then skill-remove: real files on disk, with the casca
   const server = createSidecarServer(createPlanApplyRoutes(homeDir, new PlanStore()));
   const port = await listenOnEphemeralLoopbackPort(server);
   try {
-    const planned = await post(port, "/plan/skill-add", { name: "another-skill", fromPath: sourceDir });
+    const planned = await post(port, "/plan/skill-add", { name: "another-skill", fromPath: sourceDir, selection: { agents: "claude-code" } });
     assert.equal(planned.status, 200);
     const { planId, plan } = planned.body as { planId: string; plan: { action: string } };
     assert.equal(plan.action, "create");
@@ -338,6 +339,7 @@ test("plan/apply skill-scope: a real plan, a confirmed write, and a refusal that
   const homeDir = pendingSyncHome();
   cli(homeDir, ["manage", "add", "codex"]);
   const scopePath = join(homeDir, ".trellis", "scope.yaml");
+  const before = readFileSync(scopePath, "utf8");
   const server = createSidecarServer(createPlanApplyRoutes(homeDir, new PlanStore()));
   const port = await listenOnEphemeralLoopbackPort(server);
   try {
@@ -349,7 +351,7 @@ test("plan/apply skill-scope: a real plan, a confirmed write, and a refusal that
     assert.equal(refusedPlan.action, "invalid-input");
     assert.match(refusedPlan.detail, /"kiro" is not a managed agent/);
     await post(port, "/apply/skill-scope", { planId: (refused.body as { planId: string }).planId });
-    assert.equal(existsSync(scopePath) && /demo-skill/.test(readFileSync(scopePath, "utf-8")), false);
+    assert.equal(readFileSync(scopePath, "utf8"), before);
 
     const planned = await post(port, "/plan/skill-scope", { name: "demo-skill", selection: { agents: "codex" } });
     const { planId, plan } = planned.body as { planId: string; plan: { action: string; effective: string[] } };

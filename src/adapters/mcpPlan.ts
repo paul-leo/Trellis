@@ -22,7 +22,8 @@ import { capabilityDeliveryForAgent } from "../core/types.js";
 import { isOAuthAuth, oauthOwner } from "../core/types.js";
 import type { AgentId, McpConfig, McpRoute, McpServerDef, SecretsPolicy } from "../core/types.js";
 import { codexBearerTokenEnvVar } from "../lib/tomlSection.js";
-import { parseEnvEntry, resolveSecretEnv } from "../lib/secretEnv.js";
+import { deliveredName, isValidSecretVarName, parseEnvEntry, resolveSecretEntries, resolveSecretEnv, SecretReferenceError } from "../lib/secretEnv.js";
+import { extractTemplateVarNames, invalidHeaderTemplate } from "../lib/envVarNames.js";
 
 export const HUB_ENTRY_NAME = "trellis-hub";
 export const GATEWAY_ENTRY_NAME = "trellis";
@@ -183,23 +184,33 @@ export function findLiteralSecret(def: McpServerDef): LiteralSecretMatch | undef
  * (trellis-migrate-env-var-alias).
  */
 async function findUnresolvedEnvName(def: McpServerDef, policy: SecretsPolicy): Promise<string | undefined> {
-  const names = [...(def.env ?? []), ...Object.values(def.envAliases ?? {})];
+  const headerRefs = Object.values(def.headers ?? {}).flatMap(extractTemplateVarNames)
+    .filter((entry) => !isValidSecretVarName(entry));
+  const envNames = [...(def.env ?? []), ...Object.values(def.envAliases ?? {})];
+  const names = [...envNames, ...headerRefs];
   if (names.length === 0) return undefined;
   // A malformed `mxenv://` entry conflicts here too — it is rejected input,
   // never a silently-resolved bare name (mx-env-secret-source D6). The
   // returned text is the DECLARED entry; resolution checks use delivered
   // names (the `KEY` segment for a reference).
   const parsed = names.map(parseEnvEntry);
-  const invalid = parsed.find((p) => p.kind === "invalid");
-  if (invalid) return (invalid as { entry: string }).entry;
-  const resolved = await resolveSecretEnv(names, policy);
-  return names.find((name) => {
-    const p = parseEnvEntry(name);
-    return !resolved[p.kind === "invalid" ? name : p.delivered];
-  });
+  const invalid = names.find((entry, i) => parsed[i].kind === "invalid" || (headerRefs.includes(entry) && parsed[i].kind === "name"));
+  if (invalid !== undefined) return invalid;
+  try {
+    // Retain env/envAliases' existing delivered-name collision behavior.
+    // Header references instead remain source-bound, with no bare-name fallback.
+    const env = await resolveSecretEnv(envNames, policy);
+    const missingEnv = envNames.find((entry) => !env[deliveredName(entry)]);
+    if (missingEnv !== undefined) return missingEnv;
+    const headers = await resolveSecretEntries(headerRefs, policy);
+    return headerRefs.find((entry) => !headers[entry]);
+  } catch (error) {
+    if (error instanceof SecretReferenceError) return error.entry;
+    throw error;
+  }
 }
 
-export async function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[], policy: SecretsPolicy): Promise<McpPlanResult> {
+export async function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAgents: readonly AgentId[], policy: SecretsPolicy, options: { hosted?: boolean } = {}): Promise<McpPlanResult> {
   const route = routeForAgent(agentId, mcp, managedAgents);
   const runtimeEnabled = capabilityDeliveryForAgent(agentId, mcp) !== "native";
   // Checked before `hub`: only one entry can be "the" MCP entry for an
@@ -303,7 +314,7 @@ export async function resolveMcpPlan(agentId: AgentId, mcp: McpConfig, managedAg
     };
   }
 
-  const native = await planDirectServers(agentId, mcp, managedAgents, policy, route);
+  const native = await planDirectServers(agentId, mcp, managedAgents, policy, route, undefined, options.hosted || agentId === "pi");
   const hosted = native.desired.filter(({ def }) => isOAuthMcpServer(def) && oauthOwner(def.auth) === "trellis");
   return {
     desired: native.desired.filter(({ def }) => !isOAuthMcpServer(def) || oauthOwner(def.auth) === "agent"),
@@ -318,6 +329,7 @@ async function planDirectServers(
   policy: SecretsPolicy,
   route: McpRoute,
   filter?: (def: McpServerDef) => boolean,
+  hosted = false,
 ): Promise<McpPlanResult> {
   const desired: DesiredMcpEntry[] = [];
   const conflicts: McpConflict[] = [];
@@ -364,12 +376,18 @@ async function planDirectServers(
       continue;
     }
 
+    const invalidHeader = invalidHeaderTemplate(def.headers);
+    if (invalidHeader !== undefined) {
+      conflicts.push({ name, message: `refusing to write MCP server "${name}": invalid reference template in header ${invalidHeader}`, remediation: "use ${VAR} or ${mxenv://<profile>/<KEY>} in headers" });
+      continue;
+    }
+
     // Codex has no generic headers concept — only the single
     // Authorization-bearer-token shape is expressible there
     // (trellis-mcp-transport-auth design.md D4). Any other shape is
     // refused for Codex specifically; every other in-scope agent for
     // the same server is unaffected (this loop runs once per agentId).
-    if (agentId === "codex" && def.headers && Object.keys(def.headers).length > 0 && !codexBearerTokenEnvVar(def)) {
+    if (!hosted && agentId === "codex" && def.headers && Object.keys(def.headers).length > 0 && !codexBearerTokenEnvVar(def)) {
       conflicts.push({
         name,
         message: `refusing to write MCP server "${name}" for codex: its "headers" field isn't the single { Authorization: "Bearer \${VAR}" } shape Codex's own config format can express — Codex has no generic headers concept, only \`bearer_token_env_var\`. Still written normally for every other in-scope agent.`,
@@ -379,9 +397,9 @@ async function planDirectServers(
     }
 
     const unresolvedName = await findUnresolvedEnvName(def, policy);
-    if (unresolvedName) {
+    if (unresolvedName !== undefined) {
       const entry = parseEnvEntry(unresolvedName);
-      if (entry.kind === "invalid") {
+      if (entry.kind === "invalid" || !isValidSecretVarName(unresolvedName) && entry.kind === "name") {
         conflicts.push({
           name,
           message: `refusing to write MCP server "${name}": its declared env entry "${unresolvedName}" is not a valid mxenv://<profile>/<KEY> reference (mx-env-secret-source)`,
@@ -401,6 +419,14 @@ async function planDirectServers(
       continue;
     }
 
+    if (!hosted && Object.values(def.headers ?? {}).flatMap(extractTemplateVarNames).some((entry) => parseEnvEntry(entry).kind === "ref")) {
+      conflicts.push({
+        name,
+        message: `refusing to write MCP server "${name}": mxenv header references require Trellis gateway/runtime delivery; native clients cannot resolve them`,
+        remediation: `enable gateway/runtime delivery for ${agentId}, keeping transport and headers in servers.yaml`,
+      });
+      continue;
+    }
     desired.push({ name, def });
   }
 

@@ -38,6 +38,11 @@ The system SHALL load the project layer from `<workspace>/.agents/`: `config.jso
 ### Requirement: Layer merge semantics with provenance
 When a workspace layer is present, the system SHALL merge it over the global layer: an MCP server or skill whose ID appears in both layers resolves to the workspace entry; a workspace entry with `enabled: false` SHALL act as a tombstone that disables the same-ID global entry without rendering anything; instructions SHALL NOT be content-merged (each layer is delivered to its own level's paths, per workspace-delivery). The merged result SHALL carry per-entry provenance (`global` or `workspace`) and a list of shadowed or tombstoned global entries.
 
+Workspace skills SHALL register applicable agents in `.agents/scope.yaml`;
+missing or invalid registration SHALL pause Trellis-managed delivery and
+Runtime access. Native agents' independent discovery of `.agents/skills`
+is outside this delivery filter and SHALL be documented as such.
+
 #### Scenario: Same-ID server resolves to workspace
 - **WHEN** global `servers.yaml` and workspace `config.json` both declare a server named `figma` with different URLs
 - **THEN** the merged view's `figma` is the workspace entry, with provenance `workspace`, and the global entry appears in the shadowed list
