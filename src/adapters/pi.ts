@@ -14,7 +14,8 @@
  *   `piMcp.ts`. Gateway route → the single `trellis` runtime entry;
  *   agent-owned OAuth servers → bare `{url}` entries the user authorizes
  *   with `pi mcp login`.
- * - Older pis (or an unprobeable version) keep the legacy delivery: a
+ * - Older pis, or unknown versions without established owned native state,
+ *   keep the legacy delivery: a
  *   single symlinked bridge extension (`dist/pi-bridge/bundle.js`,
  *   trellis-pi-mcp-bridge-p4). The version gate never moves a machine
  *   FROM the bridge TO native until the mcp.json write succeeds — the
@@ -22,12 +23,15 @@
  *   config write, and is withheld entirely when any write conflicts
  *   (design.md D3: the two deliveries may never be active at once, every
  *   tool would register twice).
+ * - If version probing fails after native delivery was established, preserve
+ *   matching owned mcp.json entries instead of resurrecting the bridge.
  */
 
 import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import type { AdapterPlanItem, AdapterProbeResult, AdapterVerifyResult, TrellisAdapter } from "../core/adapter.js";
 import { isInScope } from "../core/adapter.js";
 import { usesNativeCapabilityDelivery } from "../core/types.js";
@@ -92,8 +96,23 @@ export class PiAdapter implements TrellisAdapter {
     private readonly homeDir: string = homedir(),
     /** Test seam: the version gate must not depend on whatever pi happens
      * to be installed on the machine running the tests. */
-    private readonly versionProbe: () => string | undefined = probePiVersion,
+    private readonly versionProbe: () => string | undefined = () => probePiVersion(homeDir),
   ) {}
+
+  private usesNativeMcp(): boolean {
+    const version = this.versionProbe();
+    if (version && /^\d+\.\d+(?:\.\d+)?/.test(version.trim())) return supportsNativeMcp(version);
+    // A temporary probe failure must not add a second MCP client beside
+    // an established native delivery. Require a matching ownership entry;
+    // an arbitrary user-authored mcp.json is not evidence of our migration.
+    try {
+      const parsed = JSON.parse(readFileSync(join(this.homeDir, ".pi", "agent", "mcp.json"), "utf8"));
+      const owned = ownedByAgent(loadMcpOwnership(this.homeDir), this.id);
+      return Object.entries(owned).some(([name, value]) => isDeepStrictEqual(parsed.mcpServers?.[name], value));
+    } catch {
+      return false;
+    }
+  }
 
   async probe(): Promise<AdapterProbeResult> {
     const snapshot = await piProbe.probe(this.homeDir);
@@ -122,7 +141,7 @@ export class PiAdapter implements TrellisAdapter {
       kind: "instructions",
     });
 
-    if (supportsNativeMcp(this.versionProbe())) {
+    if (this.usesNativeMcp()) {
       return [...skillItems, ...instructionsItems, ...await this.planNativeMcp(canonical)];
     }
 
@@ -268,7 +287,7 @@ export class PiAdapter implements TrellisAdapter {
       }
     }
 
-    if (supportsNativeMcp(this.versionProbe())) {
+    if (this.usesNativeMcp()) {
       // Native mode drift: anything the plan still wants to change is by
       // definition drift. The plan only ever names Trellis-owned entries
       // (the ownership ledger gates removals), so user-authored servers

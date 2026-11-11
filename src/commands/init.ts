@@ -21,6 +21,7 @@ import * as zcodeProbe from "../probes/zcode.js";
 import { ALL_AGENTS } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
 import { scaffoldWorkspace } from "../lib/workspaceConfig.js";
+import { BUILTIN_SKILL_NAMES, readBuiltinSkillFiles } from "../lib/builtinSkills.js";
 
 export interface RunInitOptions {
   json?: boolean;
@@ -161,11 +162,13 @@ export async function collectInitReport(homeDir: string = homedir(), options: { 
     ensureFile(join(root, "secrets.policy.yaml"), secretsPolicyYamlTemplate(), write),
     ensureFile(join(root, "managed.yaml"), managedYamlTemplate(), write),
   ];
-  const here = dirname(fileURLToPath(import.meta.url));
-  const builtinSkillPath = join(root, "skills", "trellis-runtime", "SKILL.md");
-  const builtinSkillTemplate = readFileSync(join(here, "..", "..", "schema", "builtin-skills", "trellis-runtime", "SKILL.md"), "utf8");
-  if (write) mkdirSync(dirname(builtinSkillPath), { recursive: true });
-  files.push(ensureFile(builtinSkillPath, builtinSkillTemplate, write));
+  for (const name of BUILTIN_SKILL_NAMES) {
+    for (const resource of readBuiltinSkillFiles(name)) {
+      const path = join(root, "skills", name, resource.relativePath);
+      if (write) mkdirSync(dirname(path), { recursive: true });
+      files.push(ensureFile(path, resource.content, write));
+    }
+  }
 
   const probes: { agent: AgentId; run: () => Promise<{ present: boolean }> }[] = [
     { agent: "claude-code", run: () => claudeCodeProbe.probe(homeDir) },

@@ -37,7 +37,7 @@ test("RuntimeControlProvider: status reports Agent, delivery, counts, and saniti
   const payload = JSON.parse(text(result));
   assert.equal(payload.agent.id, "kimi-code");
   assert.equal(payload.agent.managed, true);
-  assert.equal(payload.providers.skills.canonicalCount, 1, "init's package-owned runtime Skill is present");
+  assert.equal(payload.providers.skills.canonicalCount, 2, "init installs both package-owned guides; memory guide delivery remains conditional");
   assert.equal(payload.providers.memory.canonicalCount, 1);
   assert.equal(payload.upstream[0].status, "auth-required");
   assert.match(payload.upstream[0].remediation, /trellis mcp auth figma/);

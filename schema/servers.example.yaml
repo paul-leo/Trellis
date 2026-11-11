@@ -44,8 +44,11 @@
 
 servers:
   # Default shared-memory backend (docs/research.md "Shared memory") —
-  # @modelcontextprotocol/server-memory: zero-dependency, local JSON
-  # knowledge graph, MIT-licensed. `trellis onboard --memory on` writes
+  # @modelcontextprotocol/server-memory: local JSONL knowledge graph.
+  # The default pins server 2.1.0 and launches it with Node 24.22.2 via
+  # npx, independently of the Node version running Trellis. First launch
+  # needs registry access to cache these packages; no global Node change.
+  # `trellis onboard --memory on` writes
   # exactly this shape for you (src/commands/memory.ts's
   # DEFAULT_MEMORY_SERVER_DEF) — uncommenting it by hand below is only
   # for understanding what that flag does, not required to use it.
@@ -70,13 +73,12 @@ servers:
   # static_env.MEMORY_FILE_PATH: without this, the server's own unset-env
   # default resolves relative to wherever `npx` happened to cache the
   # package — not a stable location. Setting it explicitly to a path
-  # under ~/.trellis/ is also what lets `trellis memory sync`
-  # (trellis-memory-sync) find and write the same file the running
-  # server itself reads at startup.
+  # under ~/.trellis/ keeps data outside disposable package caches.
+  # Online mutations use MCP; memory export creates separate snapshots.
   # memory:
   #   transport: stdio
   #   command: npx
-  #   args: ["-y", "@modelcontextprotocol/server-memory"]
+  #   args: ["--yes", "--package=node@24.22.2", "--package=@modelcontextprotocol/server-memory@2.1.0", "--", "mcp-server-memory"]
   #   static_env:
   #     MEMORY_FILE_PATH: "~/.trellis/memories/graph.jsonl"
 

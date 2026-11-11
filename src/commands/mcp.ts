@@ -14,8 +14,8 @@
  */
 
 import { homedir } from "node:os";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { loadCanonicalSource, upsertServerYaml, removeServerYaml, type ServersYamlWriteResult } from "../core/canonical.js";
 import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
 import { ALL_AGENTS, isOAuthAuth, oauthClientMetadata, oauthOwner, resolveScope } from "../core/types.js";
@@ -35,6 +35,8 @@ import { applyWorkspaceMcp, planWorkspaceMcp, workspacePrecedenceWarnings } from
 import { readWorkspaceConfigJson, removeWorkspaceServer, upsertWorkspaceServer } from "../lib/workspaceConfig.js";
 import { toServerDefYaml } from "../core/mcpServerDef.js";
 import { flagValue, unknownFlags } from "../lib/cliArgs.js";
+import { readBuiltinSkillFiles, TRELLIS_MEMORY_SKILL_NAME } from "../lib/builtinSkills.js";
+import { memoryBackendAgents } from "../lib/memoryDelivery.js";
 
 export interface RunMcpSyncOptions {
   json?: boolean;
@@ -71,6 +73,7 @@ export interface AgentMcpSyncReport {
 export interface McpSyncReport {
   reports: AgentMcpSyncReport[];
   workspaceRoot?: string;
+  memorySkill?: { name: string; action: "create"; path: string };
 }
 
 const ADAPTER_FACTORY: Record<AgentId, (homeDir: string) => TrellisAdapter> = {
@@ -91,7 +94,7 @@ function buildAdapters(homeDir: string, managedAgents: readonly AgentId[]): Trel
 export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promise<McpSyncReport> {
   const homeDir = opts.homeDir ?? homedir();
   const workspaceDir = opts.globalOnly ? null : (opts.workspaceDir !== undefined ? opts.workspaceDir : findWorkspaceRoot(process.cwd()));
-  const loaded = loadCanonicalSource({ homeDir, workspaceDir });
+  const loaded = loadCanonicalSource({ homeDir, workspaceDir, mcpOverride: opts.mcp, managedAgentsOverride: opts.managedAgents });
   const canonical = {
     ...loaded,
     ...(opts.managedAgents ? { managedAgents: opts.managedAgents } : {}),
@@ -101,26 +104,50 @@ export async function collectMcpSyncReport(opts: RunMcpSyncOptions = {}): Promis
   const writeMode = !opts.dryRun && !opts.check;
   const ownSession = writeMode && !opts.backupSession ? openBackupSession(homeDir, "mcp-sync") : undefined;
   const backup = opts.backupSession ?? ownSession;
-
-  for (const adapter of buildAdapters(homeDir, canonical.managedAgents)) {
-    const probeResult = await adapter.probe();
-    if (!probeResult.present) {
-      reports.push({ agent: adapter.id, present: false, items: [] });
-      continue;
+  try {
+    // Existing installations may predate the bundled guide. Enabling memory
+    // through mcp add/scope/sync must provision it without a separate init.
+    const guideScope = memoryBackendAgents(canonical.mcp, canonical.managedAgents);
+    let memorySkill: McpSyncReport["memorySkill"];
+    const guideDir = join(homeDir, ".trellis", "skills", TRELLIS_MEMORY_SKILL_NAME);
+    const missingGuideFiles = guideScope.length > 0 ? readBuiltinSkillFiles(TRELLIS_MEMORY_SKILL_NAME).filter((file) => !existsSync(join(guideDir, file.relativePath))) : [];
+    if (missingGuideFiles.length > 0) {
+      memorySkill = {name: TRELLIS_MEMORY_SKILL_NAME, action: "create", path: join(guideDir, missingGuideFiles[0].relativePath)};
+      if (writeMode) {
+        for (const file of missingGuideFiles) {
+          const target = join(guideDir, file.relativePath);
+          mkdirSync(dirname(target), {recursive: true});
+          backup!.writeFile(target, file.content);
+        }
+      }
+      if (!canonical.skills.some((skill) => skill.name === TRELLIS_MEMORY_SKILL_NAME)) {
+        canonical.skills = [...canonical.skills, {name: TRELLIS_MEMORY_SKILL_NAME, dir: guideDir, scope: guideScope}];
+      }
     }
 
-    const globalItems = (await adapter.plan(canonical)).filter((item) => item.kind === "mcp");
-    const wsItems = await planWorkspaceMcp(adapter.id, canonical);
-    if (writeMode) {
-      await adapter.apply(globalItems, backup!);
-      applyWorkspaceMcp(adapter.id, canonical, wsItems, backup!);
+    for (const adapter of buildAdapters(homeDir, canonical.managedAgents)) {
+      const probeResult = await adapter.probe();
+      if (!probeResult.present) {
+        reports.push({ agent: adapter.id, present: false, items: [] });
+        continue;
+      }
+
+      // Enabling/removing the backend also delivers/removes its guide, while
+      // leaving every unrelated skill to the ordinary skill-sync command.
+      const globalItems = (await adapter.plan(canonical)).filter((item) => item.kind === "mcp"
+        || (item.kind === "skill" && basename(item.target) === TRELLIS_MEMORY_SKILL_NAME));
+      const wsItems = await planWorkspaceMcp(adapter.id, canonical);
+      if (writeMode) {
+        await adapter.apply(globalItems, backup!);
+        applyWorkspaceMcp(adapter.id, canonical, wsItems, backup!);
+      }
+      const warnings = workspacePrecedenceWarnings(adapter.id, canonical);
+      reports.push({ agent: adapter.id, present: true, items: [...globalItems, ...wsItems], ...(warnings.length > 0 ? { warnings } : {}) });
     }
-    const warnings = workspacePrecedenceWarnings(adapter.id, canonical);
-    reports.push({ agent: adapter.id, present: true, items: [...globalItems, ...wsItems], ...(warnings.length > 0 ? { warnings } : {}) });
+    return { reports, ...(memorySkill ? {memorySkill} : {}), ...(canonical.workspace ? { workspaceRoot: canonical.workspace.root } : {}) };
+  } finally {
+    ownSession?.finalize();
   }
-
-  ownSession?.finalize();
-  return { reports, ...(canonical.workspace ? { workspaceRoot: canonical.workspace.root } : {}) };
 }
 
 export async function runMcpSync(opts: RunMcpSyncOptions = {}): Promise<{ exitCode: number }> {
@@ -140,7 +167,7 @@ export async function runMcpSync(opts: RunMcpSyncOptions = {}): Promise<{ exitCo
 
   const hasConflict = report.reports.some((r) => r.items.some((i) => i.action === "conflict"));
   if (opts.check) {
-    const hasPending = report.reports.some((r) => r.items.some((i) => i.action !== "conflict"));
+    const hasPending = Boolean(report.memorySkill) || report.reports.some((r) => r.items.some((i) => i.action !== "conflict"));
     return { exitCode: hasPending || hasConflict ? 1 : 0 };
   }
   return { exitCode: hasConflict ? 1 : 0 };
@@ -152,6 +179,7 @@ export async function runMcpSync(opts: RunMcpSyncOptions = {}): Promise<{ exitCo
 export function printReport(report: McpSyncReport, dryRun: boolean, check: boolean = false): void {
   if (dryRun) console.log("[dry run]");
   if (check) console.log("[check]");
+  if (report.memorySkill) console.log(`  [create] ${report.memorySkill.name} guide — ${report.memorySkill.path}`);
   if (report.workspaceRoot) {
     console.log(`Workspace layer: ${report.workspaceRoot} (.agents/)`);
   }

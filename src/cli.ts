@@ -25,7 +25,8 @@ import { runRollback } from "./commands/rollback.js";
 import { runEvolveCommand } from "./commands/evolve.js";
 import { runSkillList, runSkillAdd, runSkillRemove, runSkillScope, runSkillUpdateBuiltin } from "./commands/skill.js";
 import { runRemoteSkillAdd, runRemoteSkillList, runRemoteSkillUpdate } from "./commands/remoteSkill.js";
-import { collectMemoryList, runMemoryExtraction, runMemorySync } from "./commands/memory.js";
+import { collectMemoryList, runMemorySync } from "./commands/memory.js";
+import { runMemoryExport } from "./commands/memoryExport.js";
 import { parseManageArgs, runManage } from "./commands/manage.js";
 import { runKimi } from "./commands/kimi.js";
 import { TRELLIS_VERSION } from "./lib/cliMetadata.js";
@@ -227,7 +228,7 @@ Commands:
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   skill update-builtin
-            Refresh the package-owned trellis-runtime Skill in canonical
+            Refresh the package-owned trellis-runtime and trellis-memory Skills in canonical
             source; existing native symlinks see the update
             --dry-run    preview without writing
             --json       machine-readable output, no report text
@@ -235,7 +236,12 @@ Commands:
               now-stale symlink on every managed agent)
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
-  memory sync
+  memory export
+            Export the graph as private JSONL/Markdown snapshots under
+              ~/.trellis/archive/memory/snapshots/.
+              --dry-run    preview without writing
+              --json       machine-readable summary, no memory contents
+  memory sync --offline
             Ingest canonical memories/*.md into the shared-memory MCP
               server's own on-disk knowledge-graph file (requires a
               "memory" server with static_env.MEMORY_FILE_PATH set in
@@ -245,11 +251,7 @@ Commands:
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   memory extract
-            The reverse direction: read the same graph file's real,
-              non-Trellis entities (agent-accumulated content, never
-              Trellis's own) and write each as a new canonical
-              memories/*.md file — readable markdown, not meant to
-              round-trip byte-for-byte back through memory sync.
+            Compatibility alias for memory export; writes archive snapshots.
               --dry-run    preview the plan, write nothing
               --json       machine-readable output, no report text
   manage list
@@ -600,14 +602,19 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     if (subcommand === "sync") {
+      if (!dryRun && !memoryRest.includes("--offline")) {
+        console.error("Legacy Markdown sync requires --offline with all graph writers stopped. Use memory MCP tools for online writes, or trellis memory export for archives.");
+        process.exitCode = 1;
+        return;
+      }
       process.exitCode = runMemorySync({ json, dryRun }).exitCode;
       return;
     }
-    if (subcommand === "extract") {
-      process.exitCode = runMemoryExtraction({ json, dryRun }).exitCode;
+    if (subcommand === "export" || subcommand === "extract") {
+      process.exitCode = runMemoryExport({ json, dryRun }).exitCode;
       return;
     }
-    console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory list|sync|extract\n`);
+    console.error(`Unknown memory subcommand: ${subcommand ?? "(none)"}\nUsage: trellis memory list|export|sync --offline|extract\n`);
     process.exitCode = 1;
     return;
   }

@@ -1,8 +1,7 @@
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { isInScope } from "../core/adapter.js";
-import type { AgentId, CanonicalSource, McpRouteMode } from "../core/types.js";
-import { isGatewayAgent } from "../adapters/mcpPlan.js";
+import type { AgentId, CanonicalSource } from "../core/types.js";
+import { memoryBackendAgents } from "./memoryDelivery.js";
 import type { UpstreamStatus } from "./gatewayBackend.js";
 
 export interface MemoryReadiness {
@@ -18,24 +17,6 @@ export interface MemoryReadiness {
   extractionCommand: "trellis memory extract";
   nativeImportSupported: false;
   upstream?: Pick<UpstreamStatus, "status" | "detail" | "remediation">;
-}
-
-function routeFor(agent: AgentId, canonical: CanonicalSource): McpRouteMode {
-  const explicit = canonical.mcp.routes?.[agent];
-  if (explicit) return explicit.mode;
-  if (isGatewayAgent(agent, canonical.mcp, canonical.managedAgents)) return "gateway";
-  if (canonical.mcp.hub) return "hub";
-  return "direct";
-}
-
-function memoryDeliveredTo(agent: AgentId, canonical: CanonicalSource): boolean {
-  const server = canonical.mcp.servers.memory;
-  if (!server || server.enabled === false || !isInScope(agent, server.agents, canonical.managedAgents)) return false;
-  const route = canonical.mcp.routes?.[agent];
-  const mode = routeFor(agent, canonical);
-  if (mode === "hub") return false;
-  if (mode === "gateway" && route?.servers && !route.servers.includes("memory")) return false;
-  return true;
 }
 
 function displayPath(raw: string, homeDir: string): string {
@@ -87,7 +68,7 @@ export function inspectMemoryReadiness(
   };
   const memoryUpstream = upstream.find((status) => status.name === "memory");
   const deliveredAgents = backendConfigured
-    ? canonical.managedAgents.filter((agent) => memoryDeliveredTo(agent, canonical))
+    ? memoryBackendAgents(canonical.mcp, canonical.managedAgents)
     : [];
   return {
     backendConfigured,

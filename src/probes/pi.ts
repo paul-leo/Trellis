@@ -20,12 +20,22 @@ import { join } from "node:path";
 import { pathRef, scanSkillRoot } from "../lib/probeCommon.js";
 import type { AgentSnapshot } from "../core/types.js";
 
-export function probePiVersion(): string | undefined {
+export function probePiVersion(homeDir: string = homedir(), run: typeof execFileSync = execFileSync): string | undefined {
   try {
-    return execFileSync("pi", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
-  } catch {
-    return undefined;
+    return run("pi", ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
   }
+  // Volta can omit its shim directory from a Node child's PATH even when
+  // `pi` works in the login shell. Try this user's known launcher paths,
+  // without changing PATH or overriding a different working installation.
+  for (const executable of [join(homeDir, ".volta", "bin", "pi"), join(homeDir, ".local", "bin", "pi")]) {
+    if (!existsSync(executable)) continue;
+    try {
+      return run(executable, ["--version"], { encoding: "utf-8", timeout: 5_000 }).trim();
+    } catch { /* Try the next user-owned launcher, otherwise report unknown. */ }
+  }
+  return undefined;
 }
 
 /** Priority order pi itself checks (`loadContextFileFromDir`), first match wins. */
@@ -42,7 +52,7 @@ export async function probe(homeDir: string = homedir()): Promise<AgentSnapshot>
   }
 
   // config can exist without the binary on PATH — unusual, still probeable
-  const version = probePiVersion();
+  const version = probePiVersion(homeDir);
 
   const skillRoot = scanSkillRoot(skillsPath);
 

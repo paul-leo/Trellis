@@ -144,7 +144,7 @@ test("zero agents present: install hints for all supported agents, exit 0, no wr
   assert.equal(exitCode, 0);
 
   // init's own bootstrap already happened; nothing beyond it changed.
-  assert.deepEqual(readdirSync(join(home, ".trellis", "skills")), ["trellis-runtime"]);
+  assert.deepEqual(readdirSync(join(home, ".trellis", "skills")), ["trellis-memory", "trellis-runtime"]);
   assert.match(readManaged(home), /agents: \[\]/);
 });
 
@@ -662,7 +662,7 @@ test("memory sync: no 'memory' server configured is reported but does not flip o
   assert.equal(exitCode, 0);
 });
 
-test("memory sync: a configured server with real canonical content gets its graph written on a real run, untouched on --dry-run", async () => {
+test("memory sync: onboarding stages Markdown for review and never writes the online graph", async () => {
   const home = scratchHome();
   markClaudeCodePresent(home);
   await collectInitReport(home);
@@ -676,8 +676,8 @@ test("memory sync: a configured server with real canonical content gets its grap
 
   const result = await collectOnboardPlan({ homeDir: home, manage: "none" });
   assert.equal(result.memorySyncResult?.configured, true);
-  assert.ok(existsSync(graphPath));
-  assert.match(readFileSync(graphPath, "utf-8"), /notes/);
+  assert.equal(result.memorySyncResult?.configured && result.memorySyncResult.deferred, true);
+  assert.equal(existsSync(graphPath), false, "online graph writes belong to Memory MCP");
 });
 
 test("memory sync: a real conflict (colliding non-trellis entity) makes onboard exit non-zero", async () => {

@@ -9,7 +9,7 @@
 import { homedir } from "node:os";
 import { loadCanonicalSource } from "../core/canonical.js";
 import type { AdapterPlanItem, TrellisAdapter } from "../core/adapter.js";
-import type { AgentId } from "../core/types.js";
+import type { AgentId, McpConfig } from "../core/types.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
 import { CodexAdapter } from "../adapters/codex.js";
 import { KiroAdapter } from "../adapters/kiro.js";
@@ -31,6 +31,8 @@ const ADAPTER_FACTORY: Record<AgentId, (homeDir: string) => TrellisAdapter> = {
 };
 
 export interface RunSyncOptions {
+  /** Effective MCP view for onboarding previews, including built-in guides. */
+  mcp?: McpConfig;
   /** Omit to sync both. */
   target?: "skills" | "instructions";
   json?: boolean;
@@ -97,7 +99,7 @@ export async function collectSyncReport(opts: RunSyncOptions = {}): Promise<Sync
   // and revocable via --global-only; outside any workspace (or when it
   // resolves null) the load is byte-identical to before.
   const workspaceDir = opts.globalOnly ? null : (opts.workspaceDir !== undefined ? opts.workspaceDir : findWorkspaceRoot(process.cwd()));
-  const loaded = loadCanonicalSource({ homeDir, workspaceDir });
+  const loaded = loadCanonicalSource({ homeDir, workspaceDir, mcpOverride: opts.mcp, managedAgentsOverride: opts.managedAgents });
   // A single override point, not two: every downstream read of "who's
   // managed" — the adapter list built here AND each adapter's own
   // in-scope filtering via `canonical.managedAgents` — must agree, or a

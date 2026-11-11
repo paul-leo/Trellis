@@ -12,13 +12,12 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { decideDirImport } from "../lib/dirEquals.js";
 import { findSkillFile } from "../lib/skillFile.js";
 import { loadCanonicalSource, validateSkillScopeYaml, writeSkillScopeYaml } from "../core/canonical.js";
 import { resolveScope } from "../core/types.js";
 import type { AgentId } from "../core/types.js";
-import { isBuiltinSkillName } from "../lib/builtinSkills.js";
+import { BUILTIN_SKILL_NAMES, isBuiltinSkillName, readBuiltinSkillFiles, TRELLIS_RUNTIME_SKILL_NAME, type BuiltinSkillName } from "../lib/builtinSkills.js";
 import { openBackupSession, type BackupSession } from "../lib/backup.js";
 import { collectSyncReport, printReport as printSyncReport } from "./sync.js";
 import type { SyncReport } from "./sync.js";
@@ -30,45 +29,46 @@ import { readSkillScopes, requestSkillScope, selectSkillScope } from "../lib/ski
 import { isSymlinkTo } from "../lib/fsIdentity.js";
 import { usesNativeCapabilityDelivery, ALL_AGENTS } from "../core/types.js";
 
-function builtinSkillTemplate(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return readFileSync(join(here, "..", "..", "schema", "builtin-skills", "trellis-runtime", "SKILL.md"), "utf8");
-}
-
 export type BuiltinSkillUpdateAction = "create" | "update" | "already-current";
 
 export interface BuiltinSkillUpdatePlan {
-  name: "trellis-runtime";
+  name: BuiltinSkillName;
   action: BuiltinSkillUpdateAction;
   detail: string;
   path: string;
 }
 
-export function collectBuiltinSkillUpdatePlan(homeDir: string = homedir()): BuiltinSkillUpdatePlan {
-  const path = join(homeDir, ".trellis", "skills", "trellis-runtime", "SKILL.md");
-  if (!existsSync(path)) return { name: "trellis-runtime", action: "create", detail: "will install the package-owned Runtime Skill", path };
-  if (readFileSync(path, "utf8") === builtinSkillTemplate()) return { name: "trellis-runtime", action: "already-current", detail: "package-owned Runtime Skill is already current", path };
-  return { name: "trellis-runtime", action: "update", detail: "will refresh the package-owned Runtime Skill; existing Agent symlinks will see the update", path };
+export function collectBuiltinSkillUpdatePlan(homeDir: string = homedir(), name: BuiltinSkillName = TRELLIS_RUNTIME_SKILL_NAME): BuiltinSkillUpdatePlan {
+  const path = join(homeDir, ".trellis", "skills", name, "SKILL.md");
+  if (!existsSync(path)) return { name, action: "create", detail: `will install the package-owned ${name} Skill`, path };
+  if (readBuiltinSkillFiles(name).every((file) => {
+    const target = join(homeDir, ".trellis", "skills", name, file.relativePath);
+    return existsSync(target) && readFileSync(target, "utf8") === file.content;
+  })) return { name, action: "already-current", detail: `package-owned ${name} Skill is already current`, path };
+  return { name, action: "update", detail: `will refresh the package-owned ${name} Skill; existing Agent symlinks will see the update`, path };
 }
 
 export function applyBuiltinSkillUpdatePlan(plan: BuiltinSkillUpdatePlan, backup?: BackupSession): void {
   if (plan.action === "already-current") return;
-  const content = builtinSkillTemplate();
-  mkdirSync(dirname(plan.path), { recursive: true });
-  if (backup) backup.writeFile(plan.path, content);
-  else writeFileSync(plan.path, content);
+  for (const file of readBuiltinSkillFiles(plan.name)) {
+    const target = join(dirname(plan.path), file.relativePath);
+    mkdirSync(dirname(target), { recursive: true });
+    if (backup) backup.writeFile(target, file.content);
+    else writeFileSync(target, file.content);
+  }
 }
 
 export function runSkillUpdateBuiltin(opts: { homeDir?: string; json?: boolean; dryRun?: boolean } = {}): { exitCode: number } {
   const homeDir = opts.homeDir ?? homedir();
-  const plan = collectBuiltinSkillUpdatePlan(homeDir);
-  if (!opts.dryRun && plan.action !== "already-current") {
+  const plans = BUILTIN_SKILL_NAMES.map((name) => collectBuiltinSkillUpdatePlan(homeDir, name));
+  if (!opts.dryRun && plans.some((plan) => plan.action !== "already-current")) {
     const backup = openBackupSession(homeDir, "skill-update-builtin");
-    applyBuiltinSkillUpdatePlan(plan, backup);
+    for (const plan of plans) applyBuiltinSkillUpdatePlan(plan, backup);
     backup.finalize();
   }
-  if (opts.json) console.log(JSON.stringify(plan, null, 2));
-  else console.log(`${opts.dryRun ? "[dry run] " : ""}skill update-builtin\n  [${plan.action}] ${plan.detail}`);
+  // Preserve the original top-level Runtime plan for existing JSON consumers.
+  if (opts.json) console.log(JSON.stringify({ ...plans[0], skills: plans }, null, 2));
+  else console.log(`${opts.dryRun ? "[dry run] " : ""}skill update-builtin\n${plans.map((plan) => `  [${plan.action}] ${plan.detail}`).join("\n")}`);
   return { exitCode: 0 };
 }
 

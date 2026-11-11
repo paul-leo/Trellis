@@ -238,6 +238,33 @@ test("legacy branch: pi < 1.1.0 plans the bridge extension and never touches mcp
   assert.equal(existsSync(join(home, ".pi", "agent", "mcp.json")), false);
 });
 
+test("a failed version probe preserves established owned native delivery and retires a duplicate bridge", async () => {
+  const home = scratchHome();
+  const canonical = loadCanonicalSource(home);
+  const native = new PiAdapter(home, NATIVE);
+  const bootstrap = openBackupSession(home, "test-pi-established-native");
+  await native.apply((await native.plan(canonical)).filter(item => item.kind === "mcp"), bootstrap);
+  bootstrap.finalize();
+  const bridge = seedBridgeSymlink(home);
+  const unavailable = new PiAdapter(home, () => undefined);
+  const plan = await unavailable.plan(canonical);
+  assert.equal(plan.filter(item => item.kind === "extension").length, 0);
+  assert.ok(plan.some(item => item.kind === "mcp" && item.action === "remove" && item.target === bridge));
+  const backup = openBackupSession(home, "test-pi-keep-native");
+  await unavailable.apply(plan.filter(item => item.kind === "mcp"), backup);
+  backup.finalize();
+  assert.equal(lstatSync(bridge, {throwIfNoEntry: false}), undefined);
+  assert.deepEqual((await unavailable.plan(canonical)).filter(item => item.kind === "mcp" || item.kind === "extension"), []);
+});
+
+test("an unowned user mcp.json does not silently opt an unknown pi into native mode", async () => {
+  const home = scratchHome();
+  writeFileSync(join(home, ".pi/agent/mcp.json"), JSON.stringify({mcpServers: {user: {command: "node", args: ["user-server.js"]}}}));
+  const plan = await new PiAdapter(home, () => undefined).plan(loadCanonicalSource(home));
+  assert.ok(plan.some(item => item.kind === "extension" && item.action === "create"));
+  assert.equal(plan.filter(item => item.kind === "mcp").length, 0);
+});
+
 test("ownership: a Trellis-written entry that left canonical is removed, user entries never are", async () => {
   const home = scratchHome();
   const canonical = loadCanonicalSource(home);

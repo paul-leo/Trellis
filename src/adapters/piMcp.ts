@@ -16,16 +16,16 @@ import type { McpServerDef } from "../core/types.js";
 import { isOAuthAuth } from "../core/types.js";
 import { resolvedEnvTextMap } from "../lib/mcpMigrateRead.js";
 
-/** The pi release that introduced the native MCP client (`pi mcp`,
- * `~/.pi/agent/mcp.json`). */
+/** Trellis's verified native-client baseline (`pi mcp`,
+ * `~/.pi/agent/mcp.json`), not a claim about pi's first MCP release. */
 export const PI_NATIVE_MCP_SINCE = "1.1.0";
 
 /**
  * Version gate (design.md D2): native delivery only when the probed
  * version is known to understand mcp.json. Anything unparseable —
- * including "binary not on PATH" (undefined) — falls back to the bridge,
- * never the other way round: writing config a pi cannot read is worse
- * than keeping a working bridge.
+ * including "binary not on PATH" (undefined) — is false here. The adapter
+ * separately preserves established, owned native delivery when probing
+ * fails; it must not add a duplicate bridge beside that native client.
  */
 export function supportsNativeMcp(version: string | undefined): boolean {
   if (version === undefined) return false;

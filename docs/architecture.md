@@ -235,8 +235,9 @@ populates `~/.pi/agent/skills` on its own. (This corrects an earlier,
 pre-P0 assumption that pi needed "no adapter" for skills/instructions;
 that was written before pi's actual global discovery directory was
 confirmed, when it wasn't yet known whether canonical skills would ever
-reach it without one.) MCP on pi ≥ 1.1.0 is native: the adapter merges
-entries into `~/.pi/agent/mcp.json` — a `trellis mcp-gateway --agent pi`
+reach it without one.) MCP on pi ≥ 1.1.0 follows Trellis's verified native
+delivery path: the adapter merges entries into `~/.pi/agent/mcp.json` —
+a `trellis mcp-gateway --agent pi`
 stdio entry under gateway mode (or `mcp-runtime` under runtime delivery),
 a single hub-URL entry under hub mode, direct entries otherwise — with
 agent-owned OAuth servers written as bare `{url}` entries that
@@ -245,6 +246,13 @@ renders as `oauth.clientName` for providers that gate dynamic client
 registration by name, e.g. Figma). On pi < 1.1.0 the legacy bridge
 extension (`src/pi-bridge/`, symlinked into `~/.pi/agent/extensions/`) is
 still planned instead; it is deprecated and scheduled for removal.
+
+Version probes try the working PATH command first, then known user launcher
+paths only on ENOENT (including Volta's shim). An unknown version does not
+downgrade an established, matching Trellis-owned native MCP configuration to
+an extension. This prevents duplicate clients when a Node child has a narrower
+PATH than the login shell. The baseline above describes Trellis's verified
+compatibility matrix, not the first pi release to implement MCP.
 
 The legacy bridge symlink follows the currently executing Trellis
 installation.
@@ -474,11 +482,12 @@ Agent
 Trellis MCP Runtime
   ├─ BuiltinRegistry
   │   ├─ SkillProvider   (read/search canonical skills)
-  │   ├─ RuntimeMemoryProvider
-  │   │   └─ CanonicalMemoryProvider (read-only canonical Markdown)
+  │   ├─ RuntimeMemoryProvider (legacy only without shared backend)
+  │   │   └─ CanonicalMemoryProvider (read-only Markdown)
   │   └─ StatusProvider  (read-only diagnostics)
   └─ UpstreamProvider
-      └─ existing GatewayBackend / future RemoteBackend
+      ├─ memory backend (primary shared graph)
+      └─ other selected MCP capabilities
 ```
 
 The runtime is a protocol edge; providers are the capability boundary. A
@@ -490,16 +499,20 @@ and cleanup logic stay in one place.
 Native skills remain the default delivery. Runtime MCP delivery is configured
 per agent under `mcp.runtime.delivery` and supports `native`, `mcp`, or
 `both`. The built-in providers are intentionally read-only and scope-filtered:
-SkillProvider reads canonical skills, while RuntimeMemoryProvider adapts a
-CanonicalMemoryProvider that reads canonical Markdown memories through
-`trellis.memory.search`, `trellis.memory.read`, and
-`trellis://memories/<name>.md`. Neither executes scripts or mutates canonical
-state. When the documented `memory` MCP backend is enabled, Agent-created
-entities and observations are written through that upstream MCP server; the
-Runtime provider does not duplicate its graph protocol. `trellis memory
-extract` is the explicit, conflict-safe graph-to-canonical path. A future
-local-graph/OpenViking source can implement the same MemoryProvider contract,
-and native/private Agent stores are never scraped implicitly.
+SkillProvider reads canonical skills. When the `memory` backend is enabled,
+its graph is the shared knowledge store and the `trellis-memory` Skill is the
+main recall/save guide. Canonical Markdown tools and resources are withdrawn,
+including rejection of cached direct calls; no parallel canonical query path
+is advertised. Without a shared backend, legacy canonical reads remain
+compatible. Custom read-only MemoryProvider implementations are unaffected.
+
+`trellis memory export` writes private JSONL/Markdown snapshots under
+`~/.trellis/archive/memory/snapshots/` without changing the graph or populating
+live canonical Markdown. `memory extract` is a CLI compatibility alias for
+export. The older extraction SDK helpers remain legacy maintenance APIs.
+Legacy file sync requires an explicit CLI `--offline`; online mutations use
+the Memory MCP backend and its locking. Onboarding reviews/stages Markdown
+migration but does not write the online graph from a file snapshot.
 
 `trellis.runtime.status` reports Memory readiness separately: backend
 configuration, graph existence/readiness, canonical count, write authority,
@@ -508,12 +521,20 @@ canonical directory from being mistaken for a missing or unusable backend.
 
 Onboarding keeps two Memory decisions independent:
 
-- `--memory-migrate on|off` imports supported native Markdown memory into
-  canonical `memories/*.md`.
+- `--memory-migrate on|off` stages supported native Markdown for explicit
+  review. Selected durable facts are saved through MCP; staging is not an
+  automatic write to the online shared graph.
 - `--memory on|off` enables the shared Memory MCP backend and graph.
 
-The first adapter is Claude Code's exact current-workspace project-memory
-directory. Kimi Code and pi session stores, and Kiro databases, are reported as
+New default memory definitions pin `server-memory@2.1.0` and a Node 24.22.2
+launcher through npx. This keeps the optional backend's runtime requirement
+independent of Trellis's own supported Node versions. The first launch needs
+registry access to cache those packages. Existing custom backend definitions
+are preserved.
+
+Native Markdown adapters cover Claude Code's exact current-workspace project
+memory and Codex's bounded local Markdown. Kimi Code and pi session stores,
+and Kiro databases, are reported as
 unsupported until a format-specific adapter is reviewed; Trellis does not
 interpret sessions or caches as memory.
 
@@ -535,6 +556,25 @@ Trellis owns. The Kimi CLI itself remains responsible for login and OAuth.
 package, not a user-specific copy. `trellis init` bootstraps it into the
 canonical source at `~/.trellis/skills/trellis-runtime/SKILL.md`; subsequent
 changes are made once there and distributed through the normal adapter path.
+
+`trellis-memory` is the companion guide for the local shared-memory backend.
+Its effective scope is the intersection of the managed set, the enabled
+`memory` server's scope, and each Agent's route. Hub routes do not imply that
+the local backend is available. The guide is delivered through native links
+or the Runtime SkillProvider according to the Agent's delivery mode. Enabling,
+disabling or narrowing memory through `mcp sync` also reconciles this guide;
+unrelated Skills remain the responsibility of ordinary Skill sync. Existing
+installations missing the guide receive its canonical template in the same
+backed-up MCP sync run. Dry runs preview this without writing.
+
+`trellis skill update-builtin` refreshes both package-owned guides. The memory
+guide covers graph discovery, bounded search, exact-name reads, saving and
+correction with read-back verification. Markdown snapshots are archives, and
+the bundled exact-workspace legacy reader supports explicit migration only.
+The guide does not depend on a separately distributed Claude memory bridge.
+Built-in Skill lifecycle copies and refreshes supporting resources as well
+as SKILL.md. It does not enable
+automatic extraction or change the graph backend's access-control model.
 
 The Skill has two contracts:
 

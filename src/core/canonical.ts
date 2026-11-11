@@ -18,7 +18,8 @@ import { loadWorkspaceLayer } from "../lib/workspace.js";
 import { mergeWorkspaceLayer } from "../lib/workspaceMerge.js";
 import type { BackupSession } from "../lib/backup.js";
 import { registeredSkillScope } from "../lib/skillScope.js";
-import { isBuiltinSkillName } from "../lib/builtinSkills.js";
+import { isBuiltinSkillName, TRELLIS_MEMORY_SKILL_NAME } from "../lib/builtinSkills.js";
+import { memoryBackendAgents } from "../lib/memoryDelivery.js";
 
 export { toServerDefYaml } from "./mcpServerDef.js";
 export type { McpServerDefYaml } from "./mcpServerDef.js";
@@ -538,6 +539,9 @@ function assertAuthMetadataClean(mcp: McpConfig, policy: SecretsPolicy): void {
 export interface LoadCanonicalOptions {
   homeDir?: string;
   workspaceDir?: string | null;
+  /** Transaction previews scope guides against the effective tool delivery. */
+  mcpOverride?: McpConfig;
+  managedAgentsOverride?: readonly AgentId[];
 }
 
 /** Load the global canonical source from the supplied home directory. */
@@ -555,8 +559,9 @@ export function loadCanonicalSource(arg: string | LoadCanonicalOptions = {}): Ca
   }
 
   const diagnostics: string[] = [];
-  const managedAgents = loadManagedYaml(join(root, "managed.yaml"), diagnostics);
+  const managedAgents = options.managedAgentsOverride ?? loadManagedYaml(join(root, "managed.yaml"), diagnostics);
   const scopeYaml = loadScopeYaml(join(root, "scope.yaml"));
+  const mcp = options.mcpOverride ?? loadServersYaml(join(root, "mcp", "servers.yaml"));
 
   const skillDirs = listSkillDirs(join(root, "skills"));
   const knownSkillNames = new Set(skillDirs.map((s) => s.name));
@@ -565,7 +570,11 @@ export function loadCanonicalSource(arg: string | LoadCanonicalOptions = {}): Ca
     if (declared === undefined && !isBuiltinSkillName(name)) {
       diagnostics.push(`scope.yaml: skill "${name}" has no registered agents — distribution paused; run trellis skill scope ${name} --agents <ids>`);
     }
-    return { name, dir, scope: isBuiltinSkillName(name) && declared === undefined ? undefined : registeredSkillScope(declared) };
+    let scope = isBuiltinSkillName(name) && declared === undefined ? undefined : registeredSkillScope(declared);
+    if (name === TRELLIS_MEMORY_SKILL_NAME) {
+      scope = memoryBackendAgents(mcp, managedAgents).filter((agent) => scope === undefined || scope.includes(agent));
+    }
+    return { name, dir, scope };
   });
 
   const agentFiles = listMarkdownFiles(join(root, "agents"));
@@ -599,7 +608,6 @@ export function loadCanonicalSource(arg: string | LoadCanonicalOptions = {}): Ca
     }
   }
 
-  const mcp = loadServersYaml(join(root, "mcp", "servers.yaml"));
   const secretsPolicy = loadSecretsPolicyYaml(join(root, "secrets.policy.yaml"), homeDir);
   assertAuthMetadataClean(mcp, secretsPolicy);
 

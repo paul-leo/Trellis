@@ -134,11 +134,18 @@ export class RuntimeMemoryProvider implements TrellisProvider {
 
   constructor(private readonly source: MemoryProvider = new CanonicalMemoryProvider()) {}
 
-  listTools(): Tool[] {
+  private graphIsPrimary(context: RuntimeContext): boolean {
+    const server = loadCanonicalSource(context.homeDir).mcp.servers.memory;
+    return this.source.id === "canonical" && Boolean(server && server.enabled !== false);
+  }
+
+  listTools(context?: RuntimeContext): Tool[] {
+    if (context && this.graphIsPrimary(context)) return [];
     return [SEARCH_TOOL, READ_TOOL];
   }
 
   async callTool(name: string, args: unknown, context: RuntimeContext): Promise<CallToolResult> {
+    if (this.graphIsPrimary(context)) return errorResult("Canonical Markdown is archival when shared memory is enabled; use the memory backend tools and trellis-memory Skill.");
     const input = (args ?? {}) as Record<string, unknown>;
     if (name === SEARCH_TOOL.name) return this.search(context, input);
     if (name === READ_TOOL.name) return this.readTool(context, input);
@@ -146,6 +153,7 @@ export class RuntimeMemoryProvider implements TrellisProvider {
   }
 
   async listResources(context: RuntimeContext): Promise<Resource[]> {
+    if (this.graphIsPrimary(context)) return [];
     const refs = await this.inScopeRefs(context);
     return refs.map((ref) => ({
       uri: memoryUri(ref.name),
@@ -156,6 +164,7 @@ export class RuntimeMemoryProvider implements TrellisProvider {
   }
 
   async readResource(uri: URL, context: RuntimeContext): Promise<ReadResourceResult> {
+    if (this.graphIsPrimary(context)) throw new Error("canonical memory resources are archival; use the shared memory backend");
     const name = memoryNameFromUri(uri);
     const document = await this.readDocument(name, context);
     if (!document) throw new Error(`memory "${name}" is not available to ${context.agentId}`);

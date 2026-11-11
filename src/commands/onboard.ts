@@ -43,7 +43,7 @@ import { collectMcpSyncReport, printReport as printMcpSyncReport } from "./mcp.j
 import type { McpSyncReport } from "./mcp.js";
 import { collectSecretsAuditReport, printReport as printSecretsAuditReport } from "./secretsAudit.js";
 import type { SecretsAuditReport } from "./secretsAudit.js";
-import { applyMemorySync, collectMemorySyncResult, printMemorySyncResult, DEFAULT_MEMORY_SERVER_DEF, MEMORY_SERVER_NAME } from "./memory.js";
+import { collectMemorySyncResult, printMemorySyncResult, DEFAULT_MEMORY_SERVER_DEF, MEMORY_SERVER_NAME } from "./memory.js";
 import type { MemorySyncResult } from "./memory.js";
 import { collectDoctorReport, printReport as printDoctorReport, resolveKnownHostInjected } from "./doctor.js";
 import type { DoctorReport } from "./doctor.js";
@@ -1116,7 +1116,7 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   // collectSyncReport nor collectMcpSyncReport finalizes it; this caller
   // finalizes once after every verification stage has completed.
   logProgress(opts, "sync");
-  const syncReport = await collectSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession });
+  const syncReport = await collectSyncReport({ homeDir, dryRun: opts.dryRun, managedAgents, backupSession, mcp: effectiveMcpWithRoutes });
   // The self-verification re-plan (design.md D2b): immediately after a
   // real apply, re-run the exact same plan computation, dry-run, against
   // what was just written. A remaining "create"/"conflict" item means
@@ -1136,9 +1136,10 @@ export async function collectOnboardPlan(opts: RunOnboardOptions = {}): Promise<
   logProgress(opts, "memory sync");
   const selectedMemoryNames = capabilitySelection ? resolveSelectedNames(capabilitySelection.memories, loadCanonicalSource(homeDir).memories.map((memory) => memory.name)) : undefined;
   const memorySyncResult = collectMemorySyncResult(homeDir, selectedMemoryNames, effectiveMcpWithRoutes);
-  if (!opts.dryRun) {
-    applyMemorySync(memorySyncResult, backupSession);
-  }
+  // Onboarding can stage native Markdown and review conflicts, but online
+  // graph mutations belong to Memory MCP. A snapshot/file overwrite here
+  // bypasses its cross-process lock and can lose another Agent's write.
+  if (memorySyncResult.configured) memorySyncResult.deferred = true;
 
   // Read-only, no dryRun concept — same report either way, run last since
   // it audits the config mcp sync just wrote (or, on --dry-run, whatever

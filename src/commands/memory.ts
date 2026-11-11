@@ -59,7 +59,7 @@ export const MEMORY_SERVER_NAME = "memory";
 export const DEFAULT_MEMORY_SERVER_DEF: McpServerDef = {
   transport: "stdio",
   command: "npx",
-  args: ["-y", "@modelcontextprotocol/server-memory"],
+  args: ["--yes", "--package=node@24.22.2", "--package=@modelcontextprotocol/server-memory@2.1.0", "--", "mcp-server-memory"],
   staticEnv: { MEMORY_FILE_PATH: "~/.trellis/memories/graph.jsonl" },
 };
 
@@ -70,7 +70,7 @@ export interface RunMemorySyncOptions {
   selectedMemoryNames?: readonly string[];
 }
 
-export type MemorySyncResult = { configured: true; graphPath: string; plan: MemorySyncPlan } | { configured: false; reason: string };
+export type MemorySyncResult = { configured: true; graphPath: string; plan: MemorySyncPlan; deferred?: boolean } | { configured: false; reason: string };
 
 type MemoryServerLookup = { configured: true; graphPath: string } | { configured: false; reason: string };
 
@@ -132,6 +132,10 @@ export function printMemorySyncResult(result: MemorySyncResult, dryRun: boolean)
     return;
   }
   console.log(`${dryRun ? "[dry run] " : ""}memory sync — ${result.graphPath}`);
+  if (result.deferred) {
+    console.log("  Markdown migration is a review plan only; save selected facts through Memory MCP. Use trellis memory export for archival snapshots.");
+    return;
+  }
   if (result.plan.items.length === 0) {
     console.log("  nothing in canonical memories/ yet");
   }
